@@ -1,0 +1,9 @@
+.DS_Store
+*.png
+dist/
+node_modules/
+.npm/
+main.npm.js
+*.log
+config.json
+jobs.json

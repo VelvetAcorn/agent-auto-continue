@@ -1,0 +1,41 @@
+{
+  "name": "t3code-auto-continue",
+  "version": "2.0.0",
+  "description": "Menu-bar helper that schedules a 'Continue' turn for T3 Code threads",
+  "main": "main.js",
+  "author": "T3 Code users",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --mac zip",
+    "build:dmg": "electron-builder --mac dmg",
+    "build:all": "electron-builder",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "node-schedule": "^2.1.1"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "io.t3code.auto-continue",
+    "icon": "assets/icon.png",
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": ["dmg", "zip"]
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "ui.html",
+      "settings.html",
+      "dashboard.html",
+      "styles.css",
+      "assets/icon.png",
+      "lib/**/*.js",
+      "package.json"
+    ]
+  }
+}

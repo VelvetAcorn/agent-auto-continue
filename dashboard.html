@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>T3 Code Auto-Continue</title>
+    <link rel="stylesheet" href="styles.css">
+    <style>
+      main { display: flex; flex-direction: column; height: calc(100vh - 48px); }
+      .topline { align-items: center; display: flex; gap: 12px; justify-content: space-between; }
+      .topline h1 { margin: 0; }
+      .status { align-items: center; display: flex; font-size: 13px; gap: 7px; margin: 14px 0; }
+      .dot { background: #868e96; border-radius: 50%; height: 8px; width: 8px; }
+      .dot.ok { background: #12b886; } .dot.error { background: #e03131; }
+      #filter { margin: 0 0 10px; }
+      #threads { border: 1px solid color-mix(in srgb, CanvasText 18%, transparent); border-radius: 8px; flex: 1; overflow: auto; }
+      .thread-row { align-items: center; border-bottom: 1px solid color-mix(in srgb, CanvasText 10%, transparent); display: flex; gap: 12px; padding: 10px; }
+      .thread-row:last-child { border-bottom: 0; }
+      .thread-details { flex: 1; min-width: 0; }
+      .thread-title { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .thread-project { color: color-mix(in srgb, CanvasText 60%, transparent); font-size: 11px; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .thread-row button { flex: 0 0 auto; font-size: 12px; padding: 6px 8px; }
+      .empty { color: color-mix(in srgb, CanvasText 65%, transparent); font-size: 13px; padding: 20px; text-align: center; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <p class="eyebrow">T3 CODE AUTO-CONTINUE</p>
+      <div class="topline"><h1>Schedule a message</h1><button id="refresh" class="secondary">Refresh</button></div>
+      <div class="status"><span id="dot" class="dot"></span><span id="status">Connecting to T3 Code…</span></div>
+      <input id="filter" type="search" placeholder="Filter threads" aria-label="Filter threads">
+      <section id="threads" aria-live="polite"><p class="empty">Loading threads…</p></section>
+      <p id="failed" class="error"></p>
+      <div class="actions"><button id="settings" class="secondary">Settings</button><span id="jobs" class="hint"></span></div>
+    </main>
+    <script>
+      (() => {
+        const list = document.getElementById('threads');
+        const status = document.getElementById('status');
+        const dot = document.getElementById('dot');
+        const filter = document.getElementById('filter');
+        const jobs = document.getElementById('jobs');
+        let threads = [];
+
+        function render() {
+          const query = filter.value.trim().toLocaleLowerCase();
+          const matching = threads.filter((thread) => !query || `${thread.title} ${thread.projectId}`.toLocaleLowerCase().includes(query));
+          list.replaceChildren();
+          if (!matching.length) {
+            const empty = document.createElement('p');
+            empty.className = 'empty'; empty.textContent = query ? 'No threads match that filter.' : 'No active threads found.';
+            list.append(empty); return;
+          }
+          for (const thread of matching) {
+            const row = document.createElement('div'); row.className = 'thread-row';
+            const details = document.createElement('div'); details.className = 'thread-details';
+            const title = document.createElement('div'); title.className = 'thread-title'; title.textContent = thread.title;
+            const project = document.createElement('div'); project.className = 'thread-project'; project.textContent = thread.projectId || 'No project';
+            const schedule = document.createElement('button'); schedule.textContent = 'Schedule…';
+            schedule.addEventListener('click', async () => {
+              schedule.disabled = true;
+              try { await window.autoContinue.scheduleThread(thread.id); }
+              catch (error) { status.textContent = error.message || 'Could not open the scheduler.'; dot.className = 'dot error'; }
+              finally { schedule.disabled = false; }
+            });
+            details.append(title, project); row.append(details, schedule); list.append(row);
+          }
+        }
+        async function refresh() {
+          document.getElementById('refresh').disabled = true;
+          status.textContent = 'Refreshing threads…'; dot.className = 'dot';
+          const state = await window.autoContinue.getThreads();
+          threads = state.threads;
+          jobs.textContent = `${state.pendingJobs} scheduled message${state.pendingJobs === 1 ? '' : 's'}`;
+          document.getElementById('failed').textContent = state.failedJobs.length
+            ? `${state.failedJobs.length} failed ${state.failedJobs.length === 1 ? 'delivery' : 'deliveries'}: ${state.failedJobs[0].note}`
+            : '';
+          if (state.online) { status.textContent = `${threads.length} active thread${threads.length === 1 ? '' : 's'} available`; dot.className = 'dot ok'; }
+          else { status.textContent = state.error || 'Could not connect to T3 Code.'; dot.className = 'dot error'; }
+          render(); document.getElementById('refresh').disabled = false;
+        }
+        filter.addEventListener('input', render);
+        document.getElementById('refresh').addEventListener('click', refresh);
+        document.getElementById('settings').addEventListener('click', () => window.autoContinue.openSettings());
+        refresh();
+      })();
+    </script>
+  </body>
+</html>

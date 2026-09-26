@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Schedule a message</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main>
+      <p class="eyebrow">T3 CODE AUTO-CONTINUE</p>
+      <h1>Schedule a message</h1>
+      <p id="thread" class="thread">Loading thread…</p>
+      <form id="form">
+        <label for="when">Send at</label>
+        <input id="when" name="when" type="datetime-local" required>
+        <p id="buffer" class="hint"></p>
+        <div class="shortcuts" aria-label="Quick times">
+          <button type="button" data-minutes="5">+5 min</button>
+          <button type="button" data-minutes="30">+30 min</button>
+          <button type="button" data-minutes="60">+1 hour</button>
+          <button type="button" data-minutes="1440">Tomorrow</button>
+        </div>
+        <label for="message">Message</label>
+        <textarea id="message" name="message" rows="3" maxlength="4000">Continue</textarea>
+        <p class="hint">A scheduled message is canceled if the thread is archived or has newer user activity.</p>
+        <p id="error" class="error" role="alert"></p>
+        <div class="actions">
+          <button type="button" class="secondary" id="cancel">Cancel</button>
+          <button type="submit" id="submit">Schedule</button>
+        </div>
+      </form>
+    </main>
+    <script>
+      (() => {
+        const form = document.getElementById('form');
+        const when = document.getElementById('when');
+        const message = document.getElementById('message');
+        const error = document.getElementById('error');
+        const submit = document.getElementById('submit');
+        let threadId = '';
+
+        function localInputValue(date) {
+          const offset = date.getTimezoneOffset() * 60_000;
+          return new Date(date.valueOf() - offset).toISOString().slice(0, 16);
+        }
+        function setRelative(minutes) {
+          when.value = localInputValue(new Date(Date.now() + minutes * 60_000));
+        }
+        document.querySelectorAll('[data-minutes]').forEach((button) => button.addEventListener('click', () => setRelative(Number(button.dataset.minutes))));
+        document.getElementById('cancel').addEventListener('click', () => window.close());
+
+        window.autoContinue.onScheduleInit((data) => {
+          threadId = data.threadId;
+          document.getElementById('thread').textContent = data.threadLabel;
+          document.getElementById('buffer').textContent = `The app sends ${data.bufferSeconds} second${data.bufferSeconds === 1 ? '' : 's'} after this time.`;
+          setRelative(5);
+        });
+
+        form.addEventListener('submit', async (event) => {
+          event.preventDefault();
+          error.textContent = '';
+          submit.disabled = true;
+          try {
+            await window.autoContinue.createSchedule({ threadId, whenISO: new Date(when.value).toISOString(), message: message.value });
+            window.close();
+          } catch (reason) {
+            error.textContent = reason.message || 'Could not schedule this message.';
+            submit.disabled = false;
+          }
+        });
+      })();
+    </script>
+  </body>
+</html>
