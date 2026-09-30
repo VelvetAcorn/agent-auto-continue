@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const { execFileSync } = require('node:child_process');
 const electron = require('electron');
 const { app, BrowserWindow } = electron;
 // Chromium storage is isolated too; even theme/localStorage cannot touch user state.
@@ -53,7 +54,9 @@ const appProxy = new Proxy(app, { get(target, property) {
   if (property === 'getPath') return name => name === 'userData' ? '/fixture' : target.getPath(name);
   const value = target[property]; return typeof value === 'function' ? value.bind(target) : value;
 } });
-class FixtureWindow extends BrowserWindow {
+// Electron's BrowserWindow.getAllWindows() filters by constructor name, so the fixture keeps it;
+// otherwise main-process broadcasts (jobs:changed, keep-awake:changed) never reach the renderer.
+const FixtureWindow = class BrowserWindow extends electron.BrowserWindow {
   constructor(options) {
     super({ ...options, show: false });
     windows.push(this);
@@ -63,13 +66,14 @@ class FixtureWindow extends BrowserWindow {
   }
   show() { /* Keep executable tests out of the user's foreground. */ }
   focus() { /* Keep executable tests out of the user's foreground. */ }
-}
+};
 const injectedElectron = {
   ...electron, app: appProxy, BrowserWindow: FixtureWindow,
   Tray: class { setToolTip() {} on() {} setContextMenu(value) { menu = value; } },
   Menu: { buildFromTemplate: value => value }, Notification: { isSupported: () => false },
   shell: { openExternal: async url => { externalUrls.push(url); } },
-  powerMonitor: { on() {} }
+  // Real power save blockers; power events stay inert so the fixture never reacts to the host's sleep.
+  powerMonitor: { on() {}, isOnBatteryPower: () => electron.powerMonitor.isOnBatteryPower() }
 };
 function loadProductionMain() {
   vm.runInNewContext(fs.readFileSync(path.join(root, 'main.js'), 'utf8'), {
@@ -81,6 +85,11 @@ function loadProductionMain() {
       return name.startsWith('./lib/') ? require(path.join(root, name)) : require(name);
     }, __dirname: root, process: { env: { T3_TOKEN: 'fixture-only' }, pid: process.pid }, console, Buffer
   }, { filename: 'main.js' });
+}
+// The assertions this process holds, as macOS reports them.
+function ownAssertions() {
+  return execFileSync('/usr/bin/pmset', ['-g', 'assertions'], { encoding: 'utf8' }).split('\n')
+    .filter(line => line.includes(`pid ${process.pid}(`)).map(line => line.trim().replace(/\[0x[0-9a-f]+\] /, '').replace(/ \d\d:\d\d:\d\d /, ' '));
 }
 async function waitFor(check, label) {
   const deadline = Date.now() + 10_000;
@@ -106,6 +115,7 @@ async function run() {
   assert.equal(windows.length, 1);
   // DOM journey assertions are maintained below with the production selectors.
   await rendererJourney(js);
+  await keepAwakeJourney(js);
   offline = true;
   const history = await js('window.autoContinue.listJobs({view:"history"})');
   assert.ok(history.total >= 1, 'History survives offline API');
@@ -123,7 +133,7 @@ async function run() {
   assert.equal(dispatches, 0, 'The fixture must never send a message');
   assert.deepEqual(failures, []);
   assert.ok(menu.find(item => item.label === 'Open scheduler'));
-  console.log('Electron production workflow smoke passed: one window, real preload/IPC/renderer, local history, sanitized offline error, zero sends.');
+  console.log('Electron production workflow smoke passed: one window, real preload/IPC/renderer, local history, sanitized offline error, keep-awake assertions released, zero sends.');
 }
 async function rendererJourney(js) {
   const click = async selector => {
@@ -234,5 +244,54 @@ async function rendererJourney(js) {
   await click('[data-action="new"]');
   assert.match(await js(`document.querySelector('#schedule-preview').textContent`), /12-second/);
   assert.equal(windows.length, 1, 'Every journey stayed in the same window');
+}
+async function keepAwakeJourney(js) {
+  const click = async selector => {
+    await waitFor(() => js(`Boolean(document.querySelector(${JSON.stringify(selector)}))`), `control ${selector}`);
+    await js(`document.querySelector(${JSON.stringify(selector)}).click()`);
+  };
+  const submit = async () => {
+    await js(`document.querySelector('#keep-awake-form').requestSubmit()`);
+    await waitFor(() => js(`Boolean(document.querySelector('#keep-awake-form')) && !document.querySelector('#keep-awake-form button[type="submit"]').disabled`), 'keep-awake settings saved');
+  };
+  const held = expected => waitFor(() => JSON.stringify(ownAssertions().map(line => line.split(' ')[2])) === JSON.stringify(expected), `assertions ${JSON.stringify(expected)}; saw ${JSON.stringify(ownAssertions())}`);
+  await js(`window.scrollTo(0,0)`);
+  await click('[data-nav="settings"]');
+  await waitFor(() => js(`Boolean(document.querySelector('#keep-awake-form'))`), 'keep-awake settings card');
+  assert.match(await js(`document.querySelector('#ka-status').textContent`), /Off/);
+  await held([]);
+  await click('#ka-enabled');
+  await submit();
+  await waitFor(() => js(`window.autoContinue.getKeepAwake().then(state => state.enabled && state.state === 'off')`), 'enabled with nothing to track');
+  await held([]);
+  const job = await js(`window.autoContinue.createSchedule({ threadId: 'thread-active', message: 'Keep-awake fixture', whenISO: new Date(Date.now() + 7200000).toISOString(), timeZone: 'UTC' })`);
+  await waitFor(() => js(`window.autoContinue.getKeepAwake().then(state => state.state === 'armed')`), 'armed for the pending schedule');
+  await held(['NoIdleSleepAssertion']);
+  const evidence = { armed: ownAssertions() };
+  await waitFor(() => js(`document.querySelector('#notices .notice.awake')?.textContent.includes('Keeping your Mac awake')`), 'keep-awake notice');
+  assert.match(await js(`document.querySelector('#ka-status').textContent`), /Waiting for 1 scheduled task/);
+  assert.ok(menu.find(item => item.label === 'Keeping Mac awake · 1 task'), 'Tray shows the keep-awake state');
+  await click('[data-nav="upcoming"]');
+  await click('#notices .notice.awake summary');
+  await capture('keep-awake-notice');
+  await click('[data-nav="settings"]');
+  await click('#ka-display');
+  await submit();
+  await held(['NoDisplaySleepAssertion']);
+  await js(`document.querySelector('#keep-awake-form').closest('.card').scrollIntoView({block:'center'})`);
+  await capture('keep-awake-settings');
+  evidence.display = ownAssertions();
+  await click('#notices [data-action="keep-awake-stop"]');
+  await held([]);
+  await waitFor(() => js(`document.querySelector('#notices .notice.awake')?.textContent.includes('Your Mac can sleep')`), 'stopped notice');
+  await capture('keep-awake-stopped');
+  await click('#notices [data-action="keep-awake-resume"]');
+  await held(['NoDisplaySleepAssertion']);
+  await click('#ka-enabled');
+  await submit();
+  await held([]);
+  assert.equal(await js(`Boolean(document.querySelector('#notices .notice.awake'))`), false);
+  await js(`window.autoContinue.cancelJob(${JSON.stringify(job.id)})`);
+  if (evidenceDirectory) fs.writeFileSync(path.join(evidenceDirectory, 'keep-awake-assertions.json'), JSON.stringify(evidence, null, 2));
 }
 run().then(() => app.exit(0), error => { console.error(error.stack); app.exit(1); });

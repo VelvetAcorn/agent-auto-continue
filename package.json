@@ -11,7 +11,7 @@
     "build:dmg": "electron-builder --mac dmg",
     "build:all": "electron-builder",
     "test": "node --test",
-    "test:electron": "electron tools/electron-smoke.cjs"
+    "test:electron": "env -u ELECTRON_RUN_AS_NODE electron tools/electron-smoke.cjs && node tools/keep-awake-e2e.cjs"
   },
   "dependencies": {
     "node-schedule": "^2.1.1"

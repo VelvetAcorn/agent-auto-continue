@@ -1,6 +1,7 @@
 'use strict';
 
-const { app, BrowserWindow, Menu, Notification, Tray, ipcMain, nativeImage, powerMonitor, shell } = require('electron');
+const { app, BrowserWindow, Menu, Notification, Tray, ipcMain, nativeImage, powerMonitor, powerSaveBlocker, shell } = require('electron');
+const { execFile } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -9,10 +10,12 @@ const { normaliseConfig, validateSettingsInput } = require('./lib/model');
 const { createApiClient, toErrorInfo } = require('./lib/api-client');
 const { JobService } = require('./lib/job-service');
 const { normaliseThreads } = require('./lib/threads');
+const { KeepAwakeController, WorkSourceRegistry, parseBatteryStatus, validateKeepAwakeInput } = require('./lib/keep-awake');
+const { createT3WorkSource } = require('./lib/t3-work-source');
 
 const APP_NAME = 'T3 Code Auto-Continue';
 const DEFAULT_CONFIG = { t3Token: '', httpPort: 3773, bufferSeconds: 5 };
-let config = { ...DEFAULT_CONFIG };
+let config = normaliseConfig(DEFAULT_CONFIG);
 let service;
 let storageError;
 let tray;
@@ -20,6 +23,10 @@ let dashboardWindow;
 let dashboardReady = false;
 let pendingNavigation;
 let menuRevision = 0;
+let workSources;
+let t3WorkSource;
+let keepAwake;
+let trayKeepAwakeKey = '';
 
 const ownsInstance = app.requestSingleInstanceLock();
 if (!ownsInstance) app.quit();
@@ -52,6 +59,7 @@ function loadState() {
     scheduleTimer: (when, callback) => schedule.scheduleJob(when, callback),
     onChange: () => {
       for (const window of BrowserWindow.getAllWindows()) window.webContents.send('jobs:changed');
+      t3WorkSource?.changed();
       void rebuildMenu();
     },
     notify: (title, body) => notify(title, body)
@@ -87,11 +95,62 @@ function notify(title, body) {
   notification.show();
 }
 
-function makeTrayIcon() {
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18"><path fill="black" d="M2 2h14v3H2zM4 7h10v3H4zM6 12h6v3H6z"/></svg>`;
+function makeTrayIcon(awake = false) {
+  // While keep-awake holds an assertion, the top bar shortens and a dot marks the menu-bar icon.
+  const shapes = awake ? '<path fill="black" d="M2 2h9v3H2zM4 7h10v3H4zM6 12h6v3H6z"/><circle fill="black" cx="14.5" cy="3.5" r="2.5"/>' : '<path fill="black" d="M2 2h14v3H2zM4 7h10v3H4zM6 12h6v3H6z"/>';
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">${shapes}</svg>`;
   const image = nativeImage.createFromDataURL(`data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`);
   image.setTemplateImage(true);
   return image;
+}
+
+const electronPower = {
+  startBlocker: (type) => powerSaveBlocker.start(type),
+  stopBlocker: (id) => powerSaveBlocker.stop(id),
+  isBlockerStarted: (id) => powerSaveBlocker.isStarted(id),
+  isOnBattery: () => powerMonitor.isOnBatteryPower(),
+  readBatteryPercent: () => new Promise((resolve, reject) => {
+    execFile('/usr/bin/pmset', ['-g', 'batt'], { timeout: 5_000 }, (error, stdout) => error ? reject(error) : resolve(parseBatteryStatus(stdout).percent));
+  })
+};
+
+function keepAwakeTrayItems(snapshot) {
+  if (!snapshot?.enabled) return [];
+  const count = snapshot.tasks.length;
+  const label = snapshot.holding ? `Keeping Mac awake · ${count} ${count === 1 ? 'task' : 'tasks'}` :
+    snapshot.state === 'paused' ? 'Keep-awake paused on battery' : snapshot.state === 'ended' ? 'Keep-awake stopped' : 'Keep-awake on · nothing to track';
+  const items = [{ label, enabled: false }];
+  if (snapshot.holding) items.push({ label: 'Let Mac sleep now', click: () => keepAwake?.stop() });
+  else if (snapshot.state === 'ended' && snapshot.ended?.reason !== 'battery-floor') items.push({ label: 'Keep Mac awake again', click: () => keepAwake?.resume() });
+  return items;
+}
+
+function publishKeepAwake(snapshot) {
+  for (const window of BrowserWindow.getAllWindows()) window.webContents.send('keep-awake:changed', snapshot);
+  if (!tray) return;
+  const key = JSON.stringify([snapshot.enabled, snapshot.state, snapshot.holding, snapshot.tasks.length, snapshot.ended?.reason]);
+  if (key === trayKeepAwakeKey) return;
+  trayKeepAwakeKey = key;
+  tray.setImage?.(makeTrayIcon(Boolean(snapshot.holding)));
+  tray.setToolTip(snapshot.holding ? `${APP_NAME} · Keeping Mac awake` : APP_NAME);
+  void rebuildMenu();
+}
+
+function startKeepAwake() {
+  workSources = new WorkSourceRegistry();
+  t3WorkSource = createT3WorkSource({
+    service: { get jobs() { return service?.jobs || []; } }, api,
+    getOptions: () => ({ includeRunningAgents: config.keepAwake.includeRunningAgents, horizonMs: config.keepAwake.maxHours * 3_600_000 })
+  });
+  // Harness adapters register further sources here. The job service's activeWork() view (issue #2)
+  // plugs in with `workSources.register(createActiveWorkSource({ service }))` from lib/active-work-source.js.
+  workSources.register(t3WorkSource);
+  keepAwake = new KeepAwakeController({ power: electronPower, registry: workSources, settings: config.keepAwake, onChange: publishKeepAwake, notify }).start();
+}
+
+function requireKeepAwake() {
+  if (!keepAwake) throw new Error('Keep-awake is still starting. Try again in a moment.');
+  return keepAwake;
 }
 
 function openScheduleWindow(threadId, threadLabel) {
@@ -179,6 +238,7 @@ async function rebuildMenu() {
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: APP_NAME, enabled: false },
     { label: connectionLabel, enabled: false },
+    ...keepAwakeTrayItems(keepAwake?.snapshot()),
     { type: 'separator' },
     { label: 'Open scheduler', click: () => openDashboard({ view: 'upcoming' }) },
     { label: 'History', click: () => openDashboard({ view: 'history' }) },
@@ -246,6 +306,17 @@ ipcMain.handle('dashboard:open-settings', () => {
   openSettings();
   return { ok: true };
 });
+ipcMain.handle('keep-awake:get', () => requireKeepAwake().snapshot());
+ipcMain.handle('keep-awake:configure', (_event, incoming) => {
+  ensureStorage();
+  const controller = requireKeepAwake();
+  const next = normaliseConfig({ ...config, keepAwake: validateKeepAwakeInput(incoming) });
+  saveConfig(next);
+  config = next;
+  return controller.configure(config.keepAwake);
+});
+ipcMain.handle('keep-awake:stop', () => requireKeepAwake().stop());
+ipcMain.handle('keep-awake:resume', () => requireKeepAwake().resume());
 
 app.on('second-instance', () => openDashboard());
 
@@ -262,11 +333,19 @@ app.whenReady().then(() => {
   tray.setToolTip(APP_NAME);
   tray.on('click', () => tray.popUpContextMenu());
   if (!storageError) service.schedulePending();
-  void rebuildMenu();
+  // The first keep-awake publish also builds the tray menu.
+  startKeepAwake();
   openDashboard();
   if (!token()) openSettings();
-  powerMonitor.on('resume', () => !storageError && void service.resume().catch(() => notify('Schedule could not be updated', 'Check local disk space and restart the app.')));
+  powerMonitor.on('suspend', () => keepAwake.handleSuspend());
+  powerMonitor.on('resume', () => {
+    if (!storageError) void service.resume().catch(() => notify('Schedule could not be updated', 'Check local disk space and restart the app.'));
+    void keepAwake.handleResume();
+  });
+  for (const event of ['on-ac', 'on-battery']) powerMonitor.on(event, () => keepAwake.handlePowerSourceChange());
   app.on('activate', () => { openDashboard(); void rebuildMenu(); });
 });
 
 app.on('window-all-closed', () => { /* Keep the scheduler running in the tray. */ });
+// macOS also releases the assertion if the process crashes or is killed.
+app.on('will-quit', () => keepAwake?.dispose());

@@ -13,7 +13,7 @@
     settings: null, storageError: null, jobsError: '', actionError: '', unacknowledged: 0, selected: null, draftKey: 'new', drafts: new Map(),
     picking: false, loading: true, busy: false, confirmCancel: false, calendarMonth: '', calendarOpen: false,
     theme: preference('scheduler-theme', 'system'), reduceMotion: preference('scheduler-motion', 'system') === 'reduce',
-    settingsDraft: null
+    settingsDraft: null, keepAwake: null, keepAwakeDraft: null
   };
   let jobRequest = 0, threadRequest = 0, timer, toastTimer, lastRefresh = 0, stopped = false, failuresKnown = false;
   const knownProblems = new Set();
@@ -52,7 +52,32 @@
   }
   function notice() {
     const storage = state.storageError ? `<div class="notice" role="alert"><div><strong>Local schedule storage needs attention</strong><p>${escape(state.storageError.message)}</p></div></div>` : '';
-    return storage + (state.online === false ? `<div class="notice"><div><strong>T3 Code is unavailable</strong><p>${escape(state.connectionError?.message || 'Open T3 Code and check your connection settings. Your local queue and history remain available.')}</p>${technical(state.connectionError)}</div><button type="button" data-action="check">Check connection</button><button type="button" class="ghost" data-nav="settings">Settings</button></div>` : '');
+    return storage + keepAwakeNotice() + (state.online === false ? `<div class="notice"><div><strong>T3 Code is unavailable</strong><p>${escape(state.connectionError?.message || 'Open T3 Code and check your connection settings. Your local queue and history remain available.')}</p>${technical(state.connectionError)}</div><button type="button" data-action="check">Check connection</button><button type="button" class="ghost" data-nav="settings">Settings</button></div>` : '');
+  }
+  function keepAwakeNotice() {
+    const k = state.keepAwake;
+    if (!k?.enabled || !['armed','active','releasing','paused','ended'].includes(k.state)) return '';
+    const holding = Boolean(k.holding);
+    const title = holding ? (k.state === 'releasing' ? 'Letting your Mac sleep soon' : `Keeping your Mac awake${k.holding === 'display' ? ' with the display on' : ''}`) : k.state === 'paused' ? 'Keep-awake paused' : 'Your Mac can sleep';
+    const limit = holding && k.deadline && k.state !== 'releasing' ? ` Stops by ${escape(display(k.deadline))} at the latest.` : '';
+    const tasks = k.tasks.map(task => `<li><span>${escape(task.label)}</span> · ${escape(task.detail || task.state)}${task.until ? ` · ${task.state === 'waiting' ? 'starts' : 'until'} ${escape(display(task.until))}` : ''}</li>`).join('');
+    const slept = k.lastSleep?.whileHolding && k.since && k.lastSleep.from >= k.since ? `<p>macOS slept anyway from ${escape(display(k.lastSleep.from))} to ${escape(display(k.lastSleep.to))}. Missed schedules catch up after waking.</p>` : '';
+    const unlocked = holding && k.requiresUnlockedScreen ? '<p>A scheduled task drives an app’s interface, so the display stays on. Keep the screen unlocked until it finishes.</p>' : '';
+    const button = holding ? '<button type="button" data-action="keep-awake-stop">Let Mac sleep</button>' : k.state === 'ended' && k.ended?.reason !== 'battery-floor' && k.tasks.length ? '<button type="button" data-action="keep-awake-resume">Keep awake again</button>' : '';
+    return `<div class="notice awake${holding ? ' holding' : ''}" role="status"><div><strong>${title}</strong><p>${escape(k.reason)}${limit}</p>${unlocked}${slept}${tasks ? `<details><summary>${k.tasks.length} ${k.tasks.length === 1 ? 'task' : 'tasks'} ${holding ? (k.tasks.length === 1 ? 'needs' : 'need') + ' it' : 'still tracked'}</summary><ul class="awake-tasks">${tasks}</ul></details>` : ''}</div>${button}</div>`;
+  }
+  function keepAwakeSettings() {
+    const k = state.keepAwake;
+    if (!k) return '<section class="card"><span class="overline">Keep awake</span><p>Loading keep-awake settings…</p></section>';
+    if (!state.keepAwakeDraft) state.keepAwakeDraft = { ...k.settings };
+    const d = state.keepAwakeDraft;
+    const box = (id, key, label) => `<div class="setting-row"><label for="${id}">${label}</label><input id="${id}" type="checkbox" ${d[key] ? 'checked' : ''}></div>`;
+    return `<section class="card"><span class="overline">Keep awake</span><h2>Stay awake for tracked work</h2><form id="keep-awake-form">${box('ka-enabled','enabled','Keep this Mac awake while scheduled work waits or runs')}${box('ka-display','keepDisplayOn','Keep the display on too')}${box('ka-agents','includeRunningAgents','Also stay awake while any T3 Code agent turn runs')}<label class="field">On battery<select id="ka-power">${[['any','Keep awake on battery too'],['ac-only','Only when connected to power']].map(([value,label]) => `<option value="${value}" ${d.powerSource === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label><div class="two"><label class="field">Stop at battery · %<input id="ka-floor" type="number" min="0" max="95" required value="${escape(d.batteryFloorPercent)}" ${d.powerSource === 'ac-only' ? 'disabled' : ''}><small>0 keeps going until macOS sleeps for low battery.</small></label><label class="field">Time limit · hours<input id="ka-hours" type="number" min="1" max="72" required value="${escape(d.maxHours)}"><small>Each session ends after this, even if work remains.</small></label></div><p class="help" id="ka-status">${escape(keepAwakeStatus())}</p><details class="help"><summary>Lid, lock screen and sleep</summary><p>Locking the screen or letting the display sleep does not stop scheduled work. Closing a laptop lid sleeps the Mac unless it is in closed-display mode, with power, an external display and a keyboard or mouse connected. Choosing Sleep or a critically low battery also sleeps the Mac; missed schedules catch up after waking.</p></details><p class="error" id="keep-awake-error" role="alert"></p><div class="actions"><button type="submit" class="primary">Save keep-awake settings</button></div></form></section>`;
+  }
+  function keepAwakeStatus() {
+    const k = state.keepAwake;
+    if (!k) return '';
+    return `Status: ${k.enabled ? k.reason : 'Off. Your Mac sleeps on its usual schedule.'}`;
   }
   function technical(info) {
     if (!info?.details && !info?.code) return '';
@@ -141,7 +166,7 @@
     if (!state.settings) return '<p>Loading settings…</p>';
     if (!state.settingsDraft) state.settingsDraft = { t3Token: '', httpPort: state.settings.httpPort, bufferSeconds: state.settings.bufferSeconds };
     const d=state.settingsDraft;
-    return `<div class="settings"><section class="card"><span class="overline">Connection</span><h2>Your local T3 Code</h2><form id="settings-form"><label class="field">T3 bearer token<input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="Leave blank to keep the saved token" value="${escape(d.t3Token)}"><small>${state.settings.usingEnvironmentToken ? 'Using T3_TOKEN from the environment for this launch.' : state.settings.hasStoredToken ? 'A token is stored locally. Leave blank to keep it.' : 'No token has been saved yet.'}</small></label><div class="two"><label class="field">Local HTTP port<input id="port" type="number" min="1" max="65535" required value="${d.httpPort}"></label><label class="field">Safety buffer · seconds<input id="buffer" type="number" min="0" max="300" required value="${d.bufferSeconds}"></label></div><p class="help">Connects only to 127.0.0.1. Buffer changes apply to new schedules.</p><p class="error" id="settings-error" role="alert"></p><div class="actions"><button type="submit" class="primary">Save settings</button><button type="button" data-action="check">Check connection</button></div></form></section><section class="card"><span class="overline">Make it yours</span><div class="setting-row"><label for="theme">Appearance</label><select id="theme">${[['system','Follow system'],['light','Light'],['dark','Bone Outline']].map(([value,label]) => `<option value="${value}" ${state.theme === value ? 'selected' : ''}>${label}</option>`).join('')}</select></div><div class="setting-row"><label for="motion">Reduce motion</label><input id="motion" type="checkbox" ${state.reduceMotion ? 'checked' : ''}></div><p class="help">Your system’s reduced-motion preference is always respected.</p></section><section class="card support">${star()}<div><span class="overline">Support this app</span><h2>Buy me a coffee</h2><button type="button" data-action="support" aria-describedby="support-note">Support on Ko-fi</button><p id="support-note" class="help">Opens ko-fi.com/velvetacorn in your browser.</p></div></section></div>`;
+    return `<div class="settings"><section class="card"><span class="overline">Connection</span><h2>Your local T3 Code</h2><form id="settings-form"><label class="field">T3 bearer token<input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="Leave blank to keep the saved token" value="${escape(d.t3Token)}"><small>${state.settings.usingEnvironmentToken ? 'Using T3_TOKEN from the environment for this launch.' : state.settings.hasStoredToken ? 'A token is stored locally. Leave blank to keep it.' : 'No token has been saved yet.'}</small></label><div class="two"><label class="field">Local HTTP port<input id="port" type="number" min="1" max="65535" required value="${d.httpPort}"></label><label class="field">Safety buffer · seconds<input id="buffer" type="number" min="0" max="300" required value="${d.bufferSeconds}"></label></div><p class="help">Connects only to 127.0.0.1. Buffer changes apply to new schedules.</p><p class="error" id="settings-error" role="alert"></p><div class="actions"><button type="submit" class="primary">Save settings</button><button type="button" data-action="check">Check connection</button></div></form></section>${keepAwakeSettings()}<section class="card"><span class="overline">Make it yours</span><div class="setting-row"><label for="theme">Appearance</label><select id="theme">${[['system','Follow system'],['light','Light'],['dark','Bone Outline']].map(([value,label]) => `<option value="${value}" ${state.theme === value ? 'selected' : ''}>${label}</option>`).join('')}</select></div><div class="setting-row"><label for="motion">Reduce motion</label><input id="motion" type="checkbox" ${state.reduceMotion ? 'checked' : ''}></div><p class="help">Your system’s reduced-motion preference is always respected.</p></section><section class="card support">${star()}<div><span class="overline">Support this app</span><h2>Buy me a coffee</h2><button type="button" data-action="support" aria-describedby="support-note">Support on Ko-fi</button><p id="support-note" class="help">Opens ko-fi.com/velvetacorn in your browser.</p></div></section></div>`;
   }
   function navigate(view, restore = false) {
     saveListContext();
@@ -200,12 +225,17 @@
     };
     ['token','port','buffer'].forEach(id=>{if($('#'+id))$('#'+id).oninput=event=>{state.settingsDraft[id==='token'?'t3Token':id==='port'?'httpPort':'bufferSeconds']=id==='token'?event.target.value:Number(event.target.value);};});
     if($('#settings-form'))$('#settings-form').onsubmit=event=>{event.preventDefault();void perform(()=>api.saveSettings({...state.settingsDraft}),{errorTarget:'#settings-error',success:async()=>{state.settings=await api.getSettings();state.settingsDraft=null;toast('Settings saved.');void refreshThreads();}});};
+    const keepAwakeFields={'ka-enabled':['enabled','checked'],'ka-display':['keepDisplayOn','checked'],'ka-agents':['includeRunningAgents','checked'],'ka-power':['powerSource','value'],'ka-floor':['batteryFloorPercent','value'],'ka-hours':['maxHours','value']};
+    Object.entries(keepAwakeFields).forEach(([id,[key,property]])=>{if($('#'+id))$('#'+id)[property==='checked'||id==='ka-power'?'onchange':'oninput']=event=>{state.keepAwakeDraft[key]=property==='checked'?event.target.checked:id==='ka-power'?event.target.value:Number(event.target.value);if(id==='ka-power')$('#ka-floor').disabled=event.target.value==='ac-only';if($('#keep-awake-error'))$('#keep-awake-error').textContent='';};});
+    if($('#keep-awake-form'))$('#keep-awake-form').onsubmit=event=>{event.preventDefault();void perform(()=>api.configureKeepAwake({...state.keepAwakeDraft}),{errorTarget:'#keep-awake-error',success:snapshot=>{state.keepAwake=snapshot;state.keepAwakeDraft=null;toast(snapshot.enabled?'Keep-awake is on.':'Keep-awake is off.');}});};
     if($('#theme'))$('#theme').onchange=event=>{state.theme=event.target.value;savePreferences();render('#theme');};
     if($('#motion'))$('#motion').onchange=event=>{state.reduceMotion=event.target.checked;savePreferences();render('#motion');};
   }
   function savePreferences(){try{localStorage.setItem('scheduler-theme',state.theme);localStorage.setItem('scheduler-motion',state.reduceMotion?'reduce':'system');}catch{/* Cosmetic preferences can remain session-only. */}}
   function action(name) {
     if(name==='support'){void perform(()=>api.openSupport());return;}
+    if(name==='keep-awake-stop'){void perform(()=>api.stopKeepAwake(),{success:snapshot=>{state.keepAwake=snapshot;toast('Your Mac can sleep now.');}});return;}
+    if(name==='keep-awake-resume'){void perform(()=>api.resumeKeepAwake(),{success:snapshot=>{state.keepAwake=snapshot;toast('Keeping your Mac awake again.');}});return;}
     if(name==='new')return openComposer();
     if(name==='theme'){state.theme=document.body.classList.contains('dark')?'light':'dark';savePreferences();render();return;}
     if(name==='back'){if(state.picking){state.picking=false;state.view='composer';state.search='';render('h1');}else navigate(state.returnView,true);return;}
@@ -243,7 +273,7 @@
     }catch(error){if(request===jobRequest)state.jobsError=errorMessage(error);}
     finally {if(request===jobRequest){state.loading=false;const changed=previous!==JSON.stringify([state.upcoming,state.history,state.upcomingTotal,state.historyTotal,state.unacknowledged,state.jobsError,state.loading,state.selectedJob,state.storageError]);if(shouldRender&&changed&&!state.busy&&!['composer','settings'].includes(state.view)&&!state.picking)render();else updateChrome();}}
   }
-  function updateChrome(){const notices=$('#notices');if(notices){notices.innerHTML=notice();notices.querySelectorAll('[data-action]').forEach(button=>{button.onclick=()=>action(button.dataset.action);});notices.querySelectorAll('[data-nav]').forEach(button=>{button.onclick=()=>navigate(button.dataset.nav);});}document.querySelectorAll('[data-count="upcoming"]').forEach(node=>{node.textContent=state.upcomingTotal;});document.querySelectorAll('[data-count="history"]').forEach(node=>{node.textContent=state.unacknowledged||'';});const status=$('#connection-state');if(status){status.textContent=state.online===null?'Connecting…':state.online?'T3 Code connected':'Offline · queue saved';status.classList.toggle('offline',state.online===false);}}
+  function updateChrome(){const notices=$('#notices');if(notices){notices.innerHTML=notice();notices.querySelectorAll('[data-action]').forEach(button=>{button.onclick=()=>action(button.dataset.action);});notices.querySelectorAll('[data-nav]').forEach(button=>{button.onclick=()=>navigate(button.dataset.nav);});}document.querySelectorAll('[data-count="upcoming"]').forEach(node=>{node.textContent=state.upcomingTotal;});document.querySelectorAll('[data-count="history"]').forEach(node=>{node.textContent=state.unacknowledged||'';});if($('#ka-status'))$('#ka-status').textContent=keepAwakeStatus();const status=$('#connection-state');if(status){status.textContent=state.online===null?'Connecting…':state.online?'T3 Code connected':'Offline · queue saved';status.classList.toggle('offline',state.online===false);}}
   async function refreshThreads(shouldRender=true) {
     const request=++threadRequest;
     const previous=JSON.stringify([state.threads,state.online]);
@@ -262,6 +292,8 @@
   if(api.onScheduleInit)cleanup.push(api.onScheduleInit(payload=>route({...payload,view:'composer'})));
   if(api.onJobsChanged)cleanup.push(api.onJobsChanged(()=>void refreshJobs(true,true)));
   if(api.onSettingsChanged)cleanup.push(api.onSettingsChanged(settings=>{state.settings=settings;state.storageError=settings.storageError||state.storageError;for(const item of state.drafts.values())if(!item.editId)item.bufferSeconds=settings.bufferSeconds;}));
+  if(api.onKeepAwakeChanged)cleanup.push(api.onKeepAwakeChanged(snapshot=>{state.keepAwake=snapshot;updateChrome();}));
+  if(api.getKeepAwake)void api.getKeepAwake().then(snapshot=>{if(stopped)return;state.keepAwake=snapshot;if(state.view==='settings'&&!state.busy)render();else updateChrome();}).catch(()=>{/* Keep-awake status is advisory; Settings shows loading until it arrives. */});
   const onFocus=()=>{if(Date.now()-lastRefresh>10000){void refreshThreads();void refreshJobs();}};
   window.addEventListener('focus',onFocus);
   const onTheme=()=>{if(state.theme==='system')render();};mediaTheme.addEventListener('change',onTheme);
