@@ -7,9 +7,9 @@
   "license": "MIT",
   "scripts": {
     "start": "electron .",
-    "build": "electron-builder --mac zip",
-    "build:dmg": "electron-builder --mac dmg",
-    "build:all": "electron-builder",
+    "build": "electron-builder --mac zip --publish never",
+    "build:dmg": "electron-builder --mac dmg --publish never",
+    "build:all": "electron-builder --publish never",
     "test": "node --test",
     "test:electron": "electron tools/electron-smoke.cjs"
   },
