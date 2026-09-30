@@ -225,7 +225,7 @@ ipcMain.handle('connection:check', async () => {
   catch (error) { return { online: false, error: toErrorInfo(error) }; }
 });
 ipcMain.handle('dashboard:threads', async (_event, options) => {
-  const failedJobs = service.jobs.filter((job) => ['failed', 'unconfirmed'].includes(job.status) && !job.acknowledgedAt)
+  const failedJobs = service.jobs.filter((job) => ['failed', 'unconfirmed'].includes(service.present(job).deliveryStatus) && !job.acknowledgedAt)
     .map((job) => ({ id: job.id, message: job.message, note: service.present(job).note }));
   try {
     const threads = await activeThreads({ showSettled: options?.showSettled === true });

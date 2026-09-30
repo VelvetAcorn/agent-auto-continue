@@ -153,7 +153,7 @@ test('failed edits and cancellations leave the original schedule armed', async (
 test('schedule again blocks uncertainty and returns a draft without sending', () => {
   const h = harness([legacy({ status: 'unconfirmed' })]);
   assert.throws(() => h.service.scheduleAgain('job'), /Confirm/);
-  h.service.get('job').status = 'sent';
+  h.service.patch(h.service.get('job'), { status: 'sent' });
   const draft = h.service.scheduleAgain('job');
   assert.equal(draft.message, 'Continue');
   assert.equal(draft.threadId, 'thread');
@@ -185,4 +185,59 @@ test('confirmed missing and archived threads cancel without dispatch; settled al
 test('migration refuses unknown versions and invalid persisted records instead of dropping data', () => {
   assert.throws(() => migrateJobs({ version: 3, jobs: [legacy()] }), /unsupported format/);
   assert.throws(() => migrateJobs([legacy(), { id: 'broken' }]), /invalid records/);
+});
+
+
+test('legacy ambiguous failures preserve history and require read-only confirmation across restarts', async () => {
+  for (const note of ['T3 Code did not respond within 10 seconds.', 'Unexpected token <', 'Unknown failure']) {
+    for (const wrapped of [false, true]) {
+      const original = legacy({ status: 'failed', note });
+      const h = harness(wrapped ? { version: 2, jobs: [original] } : [original]);
+      h.service.recover();
+      for (const key of Object.keys(original)) assert.equal(h.stored.jobs[0][key], original[key]);
+      assert.equal(h.stored.jobs[0].deliveryCertainty, 'unknown');
+      const presented = h.service.list({ view: 'history', status: 'unconfirmed' });
+      assert.equal(presented.total, 1);
+      assert.equal(presented.jobs[0].deliveryLabel, 'Delivery unconfirmed');
+      assert.equal(h.service.list({ status: 'failed' }).total, 0);
+      assert.throws(() => h.service.scheduleAgain('job'), /Confirm/);
+      h.service.acknowledge('job');
+      assert.throws(() => h.service.scheduleAgain('job'), /Confirm/);
+      await h.service.reconcile('job');
+      assert.equal(h.stored.jobs[0].note, note);
+      assert.equal(h.stored.jobs[0].deliveryCertainty, 'unknown');
+      const restored = harness(h.stored);
+      restored.service.schedulePending();
+      restored.setClock(90_000);
+      await restored.service.resume();
+      await restored.service.run('job');
+      assert.equal(restored.timers.length, 0);
+      assert.throws(() => restored.service.scheduleAgain('job'), /Confirm/);
+      restored.api.fetchThread = async () => { throw new Error('offline'); };
+      await assert.rejects(restored.service.reconcile('job'), /offline/);
+      assert.throws(() => restored.service.scheduleAgain('job'), /Confirm/);
+      restored.api.fetchThread = async () => ({ ...thread(), messages: [{ id: original.messageId }] });
+      const confirmed = await restored.service.reconcile('job');
+      assert.equal(confirmed.deliveryStatus, 'sent');
+      assert.equal(restored.stored.jobs[0].status, original.status);
+      assert.equal(restored.stored.jobs[0].note, original.note);
+      assert.equal(restored.service.list({ status: 'sent' }).total, 1);
+      assert.equal(restored.service.list().unacknowledgedFailures, 0);
+      const confirmedRestart = harness(restored.stored);
+      assert.equal(confirmedRestart.service.scheduleAgain('job').message, original.message);
+      assert.equal(confirmedRestart.service.list({ status: 'unconfirmed' }).total, 0);
+      assert.equal(h.calls + restored.calls + confirmedRestart.calls, 0);
+    }
+  }
+});
+
+test('confirmed pre-dispatch failures remain eligible for a draft after restart', async () => {
+  const h = harness([legacy()], { fetchThread: async () => { throw new ApiError('timeout', 'Read timed out', {}, true); } });
+  h.setClock(90_000);
+  await h.service.run('job');
+  assert.equal(h.service.get('job').deliveryCertainty, 'not-delivered');
+  assert.equal(h.service.list({ status: 'failed' }).total, 1);
+  const restored = harness(h.stored);
+  assert.equal(restored.service.scheduleAgain('job').message, 'Continue');
+  assert.equal(h.calls + restored.calls, 0);
 });

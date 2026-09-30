@@ -17,7 +17,7 @@ const failures = [];
 let offline = false;
 let dispatches = 0;
 let menu;
-const fixtureThread = { id: 'thread-active', title: 'Production renderer test', projectId: 'project-fixture', updatedAt: '2026-09-30T12:00:00Z', settledOverride: null, messages: [], modelSelection: { model: 'fixture', instanceId: 'fixture' }, runtimeMode: 'full-access', interactionMode: 'default' };
+const fixtureThread = { id: 'thread-active', title: 'Production renderer test', projectId: 'project-fixture', updatedAt: '2026-09-30T12:34:56.789Z', settledOverride: null, messages: [], modelSelection: { model: 'fixture', instanceId: 'fixture' }, runtimeMode: 'full-access', interactionMode: 'default' };
 const jobs = [{ id: 'failure-fixture', commandId: 'command-fixture', messageId: 'message-fixture', threadId: fixtureThread.id, threadTitle: fixtureThread.title, message: 'Previous failed delivery', scheduleAt: '2026-01-01T10:00:00Z', createdAt: '2026-01-01T09:00:00Z', updatedAt: '2026-01-01T10:00:00Z', status: 'failed', note: 'Unexpected token <', bufferSeconds: 5, timeZone: 'UTC' }];
 jobs.push({ ...jobs[0], id: 'uncertain-fixture', messageId: 'uncertain-message', status: 'unconfirmed', message: 'Unconfirmed fixture delivery' });
 files.set('/fixture/jobs.json', JSON.stringify(jobs));
@@ -81,6 +81,8 @@ async function run() {
   loadProductionMain();
   await waitFor(() => windows.length === 1 && !windows[0].webContents.isLoading(), 'production window loaded');
   const window = windows[0];
+  window.webContents.debugger.attach('1.3');
+  await window.webContents.debugger.sendCommand('Emulation.setFocusEmulationEnabled', { enabled: true });
   const js = code => window.webContents.executeJavaScript(code, true);
   await waitFor(() => js('Boolean(window.autoContinue && document.querySelector("main"))'), 'production renderer initialized');
   assert.equal(windows.length, 1);
@@ -139,6 +141,12 @@ async function rendererJourney(js) {
   await click('[data-nav="history"]');
   await heading('History');
   await click('[data-job="failure-fixture"]');
+  assert.equal(await js(`Boolean(document.querySelector('[data-action="again"]'))`), false);
+  assert.equal(await js(`document.querySelector('.detail-header .pill').textContent`), 'Delivery unconfirmed');
+  await click('[data-action="reconcile"]');
+  await waitFor(() => js(`window.autoContinue.getJob('failure-fixture').then(job=>Boolean(job.lastReconciledAt))`), 'legacy reconciliation recorded');
+  await waitFor(() => js(`!document.querySelector('[data-action="reconcile"]').disabled`), 'legacy reconciliation completed');
+  assert.equal(await js(`Boolean(document.querySelector('[data-action="again"]'))`), false);
   await click('[data-action="ack"]');
   await waitFor(() => js(`window.autoContinue.getJob('failure-fixture').then(job=>Boolean(job.acknowledgedAt))`), 'acknowledgment persisted');
   await waitFor(() => js(`document.querySelector('[data-action="ack"]')?.textContent.includes('Acknowledged')`), 'acknowledged UI');
@@ -158,6 +166,21 @@ async function rendererJourney(js) {
   await heading('Threads');
   await waitFor(() => js(`Boolean(document.querySelector('[data-thread="thread-active"]'))`), 'thread data loaded');
   assert.equal(await js(`Boolean(document.querySelector('[data-thread="thread-settled"]'))`), false);
+  await js(`document.querySelector('[data-thread="thread-active"]').focus()`);
+  const exactTime = await js(`(() => {
+    const row = document.activeElement;
+    const exact = row.querySelector('time');
+    const short = row.querySelector('.thread-time-short');
+    return { thread: row.dataset.thread, text: exact.textContent, datetime: exact.dateTime,
+      visible: exact.getBoundingClientRect().width > 1 && getComputedStyle(exact).clipPath === 'none',
+      shortHidden: getComputedStyle(short).display === 'none', relative: row.querySelector('[data-relative]').textContent };
+  })()`);
+  assert.equal(exactTime.thread, 'thread-active');
+  assert.equal(exactTime.text, fixtureThread.updatedAt);
+  assert.equal(exactTime.datetime, fixtureThread.updatedAt);
+  assert.equal(exactTime.visible, true, JSON.stringify(exactTime));
+  assert.equal(exactTime.shortHidden, true);
+  assert.ok(exactTime.relative.length > 0);
   await click('#show-settled');
   assert.equal(await js(`Boolean(document.querySelector('[data-thread="thread-settled"]'))`), true);
   await click('[data-nav="settings"]');
