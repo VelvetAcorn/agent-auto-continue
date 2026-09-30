@@ -510,9 +510,9 @@ Screenshots are in [`design/mockups/screenshots/`](../design/mockups/screenshots
 - **Status strip.** The top bar replaces "T3 Code connected" with one monogram per agent carrying an availability dot, a keep-awake chip and a phone chip.
   Below 760 px it collapses to "3 agents need a look" and the moon, so status never disappears (fixes S3).
 - **Composer.** Three questions in order: which thread, when (When the agent is free, At a time, Right away), and how far (a set number of turns, or Until done).
-  The turn limit is optional for agents that can report completion, required for API agents that cannot, and Until done is unavailable for desktop agents.
+  In Until done mode, the turn limit is optional for agents that can report completion and required for API agents that cannot; Until done is unavailable for desktop agents.
   Safety stops that can never be turned off are shown checked and locked.
-  A plan sentence restates the whole task, and the submit button repeats the commitment ("Start when Claude Code is free", "Schedule for 06:30").
+  A plan sentence restates the whole task, and the recommended task wording makes the submit button repeat the commitment ("Start when Claude Code is free", "Schedule for 06:30"). When the selected agent is already free, the When free plan says it starts right away and the button says "Start now".
   Turn counts are validated inline with `aria-invalid` (fixes F1 and F2 in the new design).
 - **Harness selection.** The agent is chosen implicitly through a thread picker grouped by agent, with availability per group and agents that cannot run listed with a reason.
   Agents is a management page with a capability table per agent and an Add agent flow that explains Accessibility permission for desktop apps.
