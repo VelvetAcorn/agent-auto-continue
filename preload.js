@@ -33,6 +33,7 @@ contextBridge.exposeInMainWorld('autoContinue', {
   checkConnection: (harness) => ipcRenderer.invoke('connection:check', harness),
   listHarnesses: () => ipcRenderer.invoke('harnesses:list'),
   checkAvailability: (harness) => ipcRenderer.invoke('harnesses:availability', harness),
+  openPermissionSettings: () => ipcRenderer.invoke('harnesses:open-permission-settings'),
   onJobsChanged: (callback) => {
     const listener = () => callback();
     ipcRenderer.on('jobs:changed', listener);

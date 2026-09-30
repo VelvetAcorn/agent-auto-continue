@@ -7,6 +7,9 @@ const path = require('node:path');
 const vm = require('node:vm');
 const electron = require('electron');
 const { app, BrowserWindow } = electron;
+// A locked screen can stop Electron from ever becoming ready; fail clearly instead of hanging.
+const HARD_TIMEOUT_MS = Number(process.env.T3_SMOKE_TIMEOUT_MS) || 180_000;
+setTimeout(() => { console.error(`Electron smoke test timed out after ${HARD_TIMEOUT_MS / 1000} seconds. Is the screen locked?`); app.exit(1); }, HARD_TIMEOUT_MS).unref();
 // Chromium storage is isolated too; even theme/localStorage cannot touch user state.
 const profile = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 't3-scheduler-smoke-'));
 app.setPath('userData', profile);

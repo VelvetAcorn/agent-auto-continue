@@ -65,7 +65,7 @@
   }
   function notice() {
     const storage = state.storageError ? `<div class="notice" role="alert"><div><strong>Local schedule storage needs attention</strong><p>${escape(state.storageError.message)}</p></div></div>` : '';
-    return storage + (state.online === false ? `<div class="notice"><div><strong>${escape(harnessLabel())} is unavailable</strong><p>${escape(state.connectionError?.message || `Check that ${harnessLabel()} is available and review your connection settings. Your local queue and history remain available.`)}</p>${technical(state.connectionError)}</div><button type="button" data-action="check">Check connection</button><button type="button" class="ghost" data-nav="settings">Settings</button></div>` : '');
+    return storage + (state.online === false ? `<div class="notice"><div><strong>${escape(harnessLabel())} is unavailable</strong><p>${escape(state.connectionError?.message || `Check that ${harnessLabel()} is available and review your connection settings. Your local queue and history remain available.`)}</p>${technical(state.connectionError)}</div>${state.connectionError?.code === 'permission_required' ? '<button type="button" data-action="open-permission-settings">Open System Settings</button>' : ''}<button type="button" data-action="check">Check connection</button><button type="button" class="ghost" data-nav="settings">Settings</button></div>` : '');
   }
   function technical(info) {
     if (!info?.details && !info?.code) return '';
@@ -262,6 +262,7 @@
     if(name==='refresh'){void refreshJobs();void refreshThreads();return;}
     if(name==='more'){if(state.view==='history')state.historyLimit+=50;else state.limit+=50;void refreshJobs();return;}
     if(name==='check-t3'){void perform(()=>api.checkConnection('t3'),{errorTarget:'#settings-error',success:async result=>{if(!result.online)throw new Error(result.errorInfo?.message||(typeof result.error==='object'?result.error?.message:result.error)||'Cannot connect to T3 Code.');toast('Connected to T3 Code.');if(state.harness==='t3')await refreshThreads(false);}});return;}
+    if(name==='open-permission-settings'){void perform(()=>api.openPermissionSettings());return;}
     if(name==='check'){void perform(()=>api.checkConnection(state.harness),{success:async result=>{if(result.online){state.online=true;state.connectionError=null;toast(`Connected to ${harnessLabel()}.`);}else{state.online=false;state.connectionError=result.errorInfo||(typeof result.error==='object'?result.error:{message:result.error});}await refreshThreads(false);}});return;}
     const job=findJob();
     if(!job)return;
