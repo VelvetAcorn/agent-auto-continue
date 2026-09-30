@@ -95,6 +95,9 @@ async function run() {
   const window = windows[0];
   window.webContents.debugger.attach('1.3');
   await window.webContents.debugger.sendCommand('Emulation.setFocusEmulationEnabled', { enabled: true });
+  // CI runners may have Reduce motion switched on; pin the OS preference so motion checks are deterministic.
+  const reducedMotion = value => window.webContents.debugger.sendCommand('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value }] });
+  await reducedMotion('no-preference');
   const js = code => window.webContents.executeJavaScript(code, true);
   await waitFor(() => js('Boolean(window.autoContinue && document.querySelector("main"))'), 'production renderer initialized');
   await js(`(() => { if (document.body.classList.contains('dark')) document.querySelector('[data-action="theme"]').click(); })()`);
@@ -105,7 +108,7 @@ async function run() {
   await js('window.autoContinue.scheduleThread("thread-active")');
   assert.equal(windows.length, 1);
   // DOM journey assertions are maintained below with the production selectors.
-  await rendererJourney(js);
+  await rendererJourney(js, reducedMotion);
   offline = true;
   const history = await js('window.autoContinue.listJobs({view:"history"})');
   assert.ok(history.total >= 1, 'History survives offline API');
@@ -125,7 +128,7 @@ async function run() {
   assert.ok(menu.find(item => item.label === 'Open scheduler'));
   console.log('Electron production workflow smoke passed: one window, real preload/IPC/renderer, local history, sanitized offline error, zero sends.');
 }
-async function rendererJourney(js) {
+async function rendererJourney(js, reducedMotion) {
   const click = async selector => {
     await waitFor(() => js(`Boolean(document.querySelector(${JSON.stringify(selector)}))`), `control ${selector}`);
     await js(`document.querySelector(${JSON.stringify(selector)}).click()`);
@@ -213,7 +216,7 @@ async function rendererJourney(js) {
   assert.equal(await js(`Boolean(document.querySelector('[data-thread="thread-settled"]'))`), true);
   await click('[data-nav="settings"]');
   await waitFor(() => js(`Boolean(document.querySelector('#settings-form'))`), 'settings loaded');
-  await supportStarJourney(js, click);
+  await supportStarJourney(js, click, reducedMotion);
   await click('[data-action="support"]');
   await waitFor(() => externalUrls.length === 1, 'support page opened in browser');
   assert.deepEqual(externalUrls, ['https://ko-fi.com/velvetacorn']);
@@ -236,7 +239,7 @@ async function rendererJourney(js) {
   assert.match(await js(`document.querySelector('#schedule-preview').textContent`), /12-second/);
   assert.equal(windows.length, 1, 'Every journey stayed in the same window');
 }
-async function supportStarJourney(js, click) {
+async function supportStarJourney(js, click, reducedMotion) {
   const phrase = () => js(`document.querySelector('#star-phrase').textContent`);
   const phrases = await js('window.SupportStar.STICKER_PHRASES');
   const star = await js(`(() => { const star=document.querySelector('#support-star'); return { tag: star.tagName, name: star.getAttribute('aria-label'), described: star.getAttribute('aria-describedby'), lines: star.querySelectorAll('.star-text span').length, fit: star.querySelector('.star-text').style.getPropertyValue('--fit') }; })()`);
@@ -282,13 +285,22 @@ async function supportStarJourney(js, click) {
   await js(`document.querySelector('[data-action="theme"]').click()`);
   assert.equal(motion.changed, true);
   const steps = motion.samples.slice(1).map(([time, angle], index) => ({ elapsed: time - motion.samples[index][0], turned: (angle - motion.samples[index][1] + 360) % 360 }));
-  assert.ok(steps.length > 20, 'the star animates frame by frame');
+  const total = steps.reduce((sum, step) => sum + step.turned, 0), evidence = JSON.stringify({ frames: steps.length, total, span: motion.samples.at(-1)[0] - motion.samples[0][0] });
+  assert.ok(steps.length > 20, `the star animates frame by frame ${evidence}`);
   for (const step of steps) assert.ok(step.turned <= 480 * Math.max(step.elapsed, 17) / 1000 + 0.5, `angle jumped ${JSON.stringify(step)}`);
-  assert.ok(Math.max(...steps.map(step => step.turned / Math.max(step.elapsed, 1) * 1000)) > 200, 'the click produced a fast burst');
-  // Reduced motion: no spin or burst, but a click still changes the phrase.
+  // Idle alone turns about 56 degrees in 1.4 s; the burst adds roughly 190 more.
+  assert.ok(total > 150, `the click produced a fast burst ${evidence}`);
+  // Reduced motion (app toggle or OS): no spin or burst, but a click still changes the phrase.
+  const still = () => js(`new Promise(resolve => { const angle = () => document.querySelector('#support-star polygon').style.transform, before = document.querySelector('#star-phrase').textContent; document.querySelector('#support-star').click(); const first = angle(); setTimeout(() => resolve({ moved: angle() !== first, changed: document.querySelector('#star-phrase').textContent !== before }), 400); })`);
   await click('#motion');
-  const still = await js(`new Promise(resolve => { const angle = () => document.querySelector('#support-star polygon').style.transform, first = angle(), before = document.querySelector('#star-phrase').textContent; document.querySelector('#support-star').click(); setTimeout(() => resolve({ moved: angle() !== first, changed: document.querySelector('#star-phrase').textContent !== before }), 400); })`);
-  assert.deepEqual(still, { moved: false, changed: true });
+  assert.deepEqual(await still(), { moved: false, changed: true });
   await click('#motion');
+  await reducedMotion('reduce');
+  assert.deepEqual(await still(), { moved: false, changed: true });
+  await reducedMotion('no-preference');
+  await js(`document.querySelector('[data-action="theme"]').click()`);
+  await js(`document.querySelector('[data-action="theme"]').click()`);
+  const first = await js(`document.querySelector('#support-star polygon').style.transform`);
+  await waitFor(async () => (await js(`document.querySelector('#support-star polygon').style.transform`)) !== first, 'spin resumes when reduced motion ends');
 }
 run().then(() => app.exit(0), error => { console.error(error.stack); app.exit(1); });

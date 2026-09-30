@@ -36,6 +36,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run test:electron
-      - run: npm run build
+      # Packaging only; CI has no release token, so electron-builder must not try to publish.
+      - run: npm run build -- --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
