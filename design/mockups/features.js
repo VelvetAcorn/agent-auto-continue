@@ -71,7 +71,7 @@
 
   // Vocabulary alternatives: see decision D2 in docs/ui-review.md.
   const W = {
-    task: { one: 'task', many: 'tasks', One: 'Task', New: 'New task', home: 'Board', verb: (d) => d.when === 'time' ? `Schedule for ${d.time}` : d.when === 'now' ? 'Start now' : `Start when ${agentOf(d.thread).name} is free` },
+    task: { one: 'task', many: 'tasks', One: 'Task', New: 'New task', home: 'Board', verb: (d) => d.when === 'time' ? `Schedule for ${d.time}` : d.when === 'now' || agentOf(d.thread).avail === 'free' ? 'Start now' : `Start when ${agentOf(d.thread).name} is free` },
     handoff: { one: 'handoff', many: 'handoffs', One: 'Handoff', New: 'New handoff', home: 'Board', verb: () => 'Hand off' },
     schedule: { one: 'schedule', many: 'schedules', One: 'Schedule', New: 'New schedule', home: 'Upcoming', verb: () => 'Schedule' }
   }[state.words];
@@ -96,7 +96,7 @@
       delete terminal.tally;
       delete terminal.availTone;
       return terminal;
-    }).filter((t) => t.id !== 'pricing');
+    }).filter((t) => t.id !== 'pricing').map((t) => t.id === 'onboard' ? { ...t, right: 'Checking again at 07:05' } : t);
     return list;
   }
   const counts = () => { const list = tasks(); return { needs: list.filter((t) => t.group === 'needs').length, running: list.filter((t) => t.group === 'running').length, waiting: list.filter((t) => t.group === 'waiting').length, awake: list.filter((t) => t.needsAwake || t.group === 'running').length }; };
@@ -109,7 +109,7 @@
   function strip() {
     const c = counts();
     const trouble = Object.keys(agents).filter((k) => ['down', 'unknown', 'stale'].includes(agents[k].avail)).length;
-    const awakeChip = state.scenario === 'empty' ? '' : state.scenario === 'morning' ? '<button class="chip" data-nav="settings">☾ Shift ended 06:52</button>' : `<button class="chip awake" data-action="awake" aria-label="Keeping the Mac awake for ${c.awake} ${W.many}">☾ Awake · ${c.awake}</button>`;
+    const awakeChip = state.scenario === 'empty' ? '' : state.scenario === 'morning' ? '<button class="chip" data-nav="settings">☾ Kept awake until 06:52</button>' : `<button class="chip awake" data-action="awake" aria-label="Keeping the Mac awake for ${c.awake} ${W.many}">☾ Awake · ${c.awake}</button>`;
     return `<div class="strip strip-full">${Object.keys(agents).map((k) => `<button class="strip-agent" data-agent="${k}" title="${esc(agents[k].name)}: ${esc(agents[k].availText)} (${esc(agents[k].source)})" aria-label="${esc(agents[k].name)}: ${esc(agents[k].availText)}">${mono(k)}<i class="dot ${agents[k].avail}"></i></button>`).join('')}<span class="sep"></span>${awakeChip}<span class="chip" title="Paired phone last seen 2 minutes ago">▯ Phone · 2 min</span><button class="ghost" data-action="theme" aria-label="Switch to ${state.theme === 'dark' ? 'light' : 'dark'} theme">${state.theme === 'dark' ? '☀' : '☾'}</button></div>
       <div class="strip strip-compact">${trouble ? `<button class="chip warn" data-nav="agents">${trouble} agents need a look</button>` : '<button class="chip" data-nav="agents">7 agents ready</button>'}${awakeChip.replace('☾ Awake · ', '☾ ')}<button class="ghost" data-action="theme" aria-label="Switch theme">${state.theme === 'dark' ? '☀' : '☾'}</button></div>`;
   }
@@ -138,7 +138,7 @@
   function awakeCard() {
     if (state.awake !== 'session' || state.scenario === 'empty') return '';
     const c = counts();
-    if (state.scenario === 'morning') return `<section class="awake-card" aria-label="Keep-awake report"><div class="moon" aria-hidden="true">☀</div><div class="text"><h2>Good morning. The Mac stayed awake until 06:52.</h2><p>Awake for 8 h 12 m. Battery 100% to 81%, on power from 23:10. 3 ${W.many} finished, 19 turns ran, 1 needs you.</p></div><div class="act"><button data-action="ack-report">Dismiss report</button></div></section>`;
+    if (state.scenario === 'morning') return `<section class="awake-card" aria-label="Keep-awake report"><div class="moon" aria-hidden="true">☀</div><div class="text"><h2>Good morning. The Mac stayed awake until 06:52.</h2><p>Awake for 8 h 12 m. Battery 100% to 81%, on power from 23:10. 3 ${W.many} finished, 19 turns ran, 2 need you.</p></div><div class="act"><button data-action="ack-report">Dismiss report</button></div></section>`;
     if (state.scenario === 'trouble') return `<section class="awake-card attention" aria-label="Keep-awake status"><div class="moon" aria-hidden="true">☾</div><div class="text"><h2>Awake, but one ${W.one} needs the screen</h2><p>Claude desktop cannot run while the screen is locked. The 06:30 ${W.one} will wait unless you keep the display on.</p><ul class="why"><li>System stays awake</li><li>Display: needed at 06:30</li><li>Ends at 20% battery</li></ul></div><div class="act"><button class="primary" data-action="display">Keep display on from 06:25</button><button class="ghost" data-action="skip">Let it wait</button></div></section>`;
     return `<section class="awake-card" aria-label="Keep-awake status"><div class="moon" aria-hidden="true">☾</div><div class="text"><h2>Keeping this Mac awake until ${c.awake} ${W.many} finish</h2><p>Display can sleep and the screen can lock. Ends about 07:15, or as soon as nothing needs the Mac.</p><ul class="why"><li>2 running</li><li>3 waiting</li><li>Ends at 20% battery</li><li>Lid must stay open</li></ul></div><div class="act"><button data-action="stop-awake">Stop keeping awake</button><button class="ghost" data-nav="settings">Rules</button></div></section>`;
   }
@@ -187,7 +187,7 @@
   function planSentence(d) {
     if (turnError(d)) return 'Fix the turn count above to see the plan.';
     const th = threadOf(d.thread), a = agentOf(d.thread);
-    const when = d.when === 'free' ? (a.avail === 'limited' ? `When ${a.name} is free, around <em>03:00</em>,` : a.avail === 'free' ? `${a.name} is free now, so right away` : `When ${a.name} is free (availability ${a.availText.toLowerCase()}),`) : d.when === 'time' ? `At <em>${esc(d.date)} ${esc(d.time)}</em>` : 'Right away';
+    const when = d.when === 'free' ? (a.avail === 'limited' ? `When ${a.name} is free, around <em>03:00</em>,` : a.avail === 'free' ? `Right away, because ${a.name} is free now,` : `When ${a.name} is free (availability ${a.availText.toLowerCase()}),`) : d.when === 'time' ? `At <em>${esc(d.date)} ${esc(d.time)}</em>` : 'Right away';
     const far = d.far === 'turns' ? (Number(d.turns) === 1 ? 'once' : `up to ${esc(d.turns)} turns`) : !reportsCompletion(a) ? `and keep going until it stops making progress, at most ${esc(d.max)} turns` : `and keep going until ${a.name} says it is done${d.max ? `, at most ${esc(d.max)} turns` : ', with no turn limit'}`;
     return `${when} send "${esc(d.message)}" to <em>${esc(th.title)}</em> ${far}. Stop and wait for you if it asks anything.`;
   }

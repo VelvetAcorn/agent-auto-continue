@@ -76,3 +76,4 @@ Ideas adopted from it are credited in the review.
 `screenshots/` holds full-page captures of 05-08 in light and Bone Outline themes at 1180, 620 and 420 pixels wide, plus the Phone stage at 1000 pixels wide.
 Regenerate them from the repository root with `env -u ELECTRON_RUN_AS_NODE npx electron design/mockups/capture.cjs`.
 Committed copies were reduced to 256 colours to keep the repository small.
+Electron cannot start while the Mac's screen is locked; headless Chrome renders the same pages at the same widths and was used for the current copies.
