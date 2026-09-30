@@ -167,7 +167,7 @@ caffeinate -u:         "Timeout will fire in 19 secs" with -t 20; without -t the
 | `navigator.getBattery()` on a `data:` page | Unavailable, because it is not a secure context |
 
 Electron's main process does not expose the battery percentage.
-The app reads `pmset -g batt` only while on battery, and only once per minute, rather than depending on a renderer window being open.
+The app reads `pmset -g batt` at most once per minute, and only while on battery with a session holding or about to hold an assertion that the battery floor can end, rather than depending on a renderer window being open.
 `ioreg` reported `AppleClamshellCausesSleep = No` with an external display attached, which is the flag that closed-display mode clears.
 
 ### App Nap and timers
@@ -304,7 +304,7 @@ armed <--> active (task states change; same assertion)
 armed/active --no work--> releasing --grace expires--> off
 releasing --work appears--> armed/active (same assertion)
 armed/active/releasing --Let Mac sleep--> ended (release now)
-armed/active --time limit--> ended --new work or "Keep awake again"--> armed/active
+armed/active --time limit--> ended --new work, deferred work that is due, or "Keep awake again"--> armed/active
 armed/active --battery at floor--> ended --power connected--> armed/active
 armed/active --on battery, AC-only--> paused --power connected--> armed/active
 any --disabled, app quit--> off (release now)
@@ -321,6 +321,7 @@ It evaluates on every source change, power-source change and wake, and on a one-
   Unconfirmed deliveries are watched like sent ones, because the agent may be working, but they are never resent.
   If T3 Code stops answering, completion becomes `unknown` for 30 minutes from when the agent was last seen working, then the task ends.
   Only an idle reading taken after the 3-minute start grace closes a delivery's watch.
+  While T3 Code is answering but has not yet been polled after the grace, the delivery stays `running` until the next poll.
   The time limit bounds everything else.
 - **Agent disconnects.**
   The same 30-minute unknown window applies.
@@ -342,7 +343,8 @@ It evaluates on every source change, power-source change and wake, and on a one-
 - **Time limit.**
   Each session ends after the configured hours, from 1 to 72, with a notification.
   Waiting work that starts after the active session deadline is deferred.
-  When the limit ends a session, deferred work is not suppressed, so it starts its own session once it is due within the limit.
+  When the limit ends a session, the tasks it covered stay excluded from later sessions until they finish, or until a task that was still waiting starts, so a stuck task cannot chain sessions.
+  Deferred work counts as new only once it is due, so it then starts its own session without the capped tasks.
   Without a session, eligibility uses the configured duration from now.
 
 ### UI

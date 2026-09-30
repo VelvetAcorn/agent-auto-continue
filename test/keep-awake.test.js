@@ -152,7 +152,8 @@ test('the maximum duration ends a session and notifies once', () => {
   assert.equal(h.notifications.length, 1);
   assert.match(h.notifications[0].body, /2-hour limit/);
   h.setTasks([running(), waiting('job-2')]);
-  assert.equal(h.controller.snapshot().state, 'active');
+  assert.equal(h.controller.snapshot().state, 'armed', 'New work starts a session without the task that reached the limit');
+  assert.deepEqual(h.controller.snapshot().tasks.map((task) => task.id), ['job-2']);
   assert.equal(h.controller.snapshot().deadline, new Date(Date.parse('2026-10-01T02:00:00Z') + 2 * HOUR).toISOString());
 });
 
@@ -505,4 +506,120 @@ test('a failed switch to the display assertion keeps the held blocker tracked', 
   assert.equal(h.controller.snapshot().holding, 'system', 'The blocker still held must stay tracked');
   h.controller.configure({ ...ENABLED, enabled: false });
   assert.deepEqual(h.power.held(), [], 'Disabling releases the blocker instead of leaking it');
+});
+
+test('a stuck task cannot chain sessions past the time limit through deferred work', () => {
+  const later = { ...waiting('later'), conversation: 't3:b', until: '2026-10-01T20:00:00.000Z' };
+  const h = harness({ tasks: [{ ...running('stuck'), conversation: 't3:a' }, later] });
+  let threads = [];
+  h.registry.register({ id: 'threads', tasks: () => threads });
+  h.controller.start();
+  h.advance(12 * HOUR);
+  h.controller.evaluate();
+  assert.equal(h.controller.snapshot().ended.reason, 'max-duration');
+  assert.match(h.notifications[0].body, /Your Mac can sleep now/);
+  // A turn surfacing on the stuck task's thread is the same work, not a way back in.
+  threads = [{ ...running('t3:thread:a'), conversation: 't3:a', supplementary: true }];
+  for (let minutes = 10; minutes < 8 * 60; minutes += 10) {
+    h.advance(10 * 60_000);
+    h.controller.evaluate();
+    assert.equal(h.controller.snapshot().state, 'ended', `Still asleep ${minutes} minutes after the limit`);
+    assert.deepEqual(h.power.held(), []);
+  }
+  assert.deepEqual(h.controller.snapshot().capped.map((task) => task.id), ['stuck'], 'The thread turn is shown once, behind the stuck job');
+  assert.deepEqual(h.controller.snapshot().tasks, []);
+  assert.deepEqual(h.controller.snapshot().deferred.map((task) => task.id), ['later'], 'Deferred work is held back until it is due');
+  h.advance(10 * 60_000);
+  h.controller.evaluate();
+  let snapshot = h.controller.snapshot();
+  assert.equal(snapshot.state, 'armed', 'Deferred work starts its own session once it is due');
+  assert.deepEqual(snapshot.tasks.map((task) => task.id), ['later'], 'It does not carry the capped tasks with it');
+  h.setTasks([{ ...running('stuck'), conversation: 't3:a' }]);
+  assert.equal(h.controller.snapshot().state, 'releasing', 'Only the stuck task remains, so the new session winds down');
+  h.advance(120_000);
+  h.controller.evaluate();
+  snapshot = h.controller.snapshot();
+  assert.equal(snapshot.state, 'ended');
+  assert.equal(snapshot.ended.reason, 'max-duration');
+  assert.deepEqual(h.power.held(), []);
+  threads = [];
+  h.setTasks([]);
+  assert.equal(h.controller.snapshot().state, 'off', 'The exclusion ends when the capped work finishes');
+  assert.deepEqual(h.controller.snapshot().capped, []);
+  assert.equal(h.notifications.length, 1);
+});
+
+test('a capped task that was still waiting is released from the cap when it starts', () => {
+  const overdue = { ...waiting('overdue'), until: '2026-10-01T01:00:00.000Z' };
+  const h = harness({ tasks: [running('stuck'), overdue] });
+  h.controller.start();
+  h.advance(12 * HOUR);
+  h.controller.evaluate();
+  assert.equal(h.controller.snapshot().state, 'ended');
+  h.setTasks([running('stuck'), { ...overdue, state: 'running' }]);
+  const snapshot = h.controller.snapshot();
+  assert.equal(snapshot.state, 'active', 'A new delivery is new activity');
+  assert.deepEqual(snapshot.tasks.map((task) => task.id), ['overdue']);
+  assert.deepEqual(snapshot.capped.map((task) => task.id), ['stuck']);
+});
+
+test('keep awake again after the time limit includes the capped work', () => {
+  const h = harness({ tasks: [running('stuck')] });
+  h.controller.start();
+  h.advance(12 * HOUR);
+  h.controller.evaluate();
+  assert.equal(h.controller.snapshot().state, 'ended');
+  const resumed = h.controller.resume();
+  assert.equal(resumed.state, 'active');
+  assert.deepEqual(resumed.tasks.map((task) => task.id), ['stuck']);
+  assert.deepEqual(resumed.capped, []);
+});
+
+test('the battery level is only polled while a session could reach the floor', async () => {
+  const power = fakePower({ onBattery: true, percent: 50 });
+  const h = harness({ tasks: [], power });
+  h.controller.start();
+  await h.controller.tick();
+  assert.equal(power.batteryReads, 0, 'Nothing to keep awake');
+  h.setTasks([running()]);
+  await h.controller.tick();
+  assert.equal(power.batteryReads, 1, 'Active session on battery');
+  h.controller.configure({ ...ENABLED, batteryFloorPercent: 0 });
+  await h.controller.tick();
+  assert.equal(power.batteryReads, 1, 'No floor to reach');
+  h.controller.configure({ ...ENABLED, powerSource: 'ac-only' });
+  await h.controller.tick();
+  assert.equal(h.controller.snapshot().state, 'paused');
+  await h.controller.tick();
+  assert.equal(power.batteryReads, 1, 'Paused on battery');
+  h.controller.configure(ENABLED);
+  power.percent = 10;
+  await h.controller.tick();
+  await h.controller.tick();
+  assert.equal(h.controller.snapshot().ended.reason, 'battery-floor');
+  const reads = power.batteryReads;
+  await h.controller.tick();
+  assert.equal(power.batteryReads, reads, 'Ended at the floor');
+  power.onBattery = false;
+  await h.controller.tick();
+  assert.equal(power.batteryReads, reads, 'On power');
+});
+
+test('work deferred at the time limit waits until it is due even after the capped work finishes', () => {
+  const later = { ...waiting('later'), until: '2026-10-02T06:00:00.000Z' };
+  const h = harness({ tasks: [running('stuck'), later] });
+  h.controller.start();
+  h.advance(12 * HOUR);
+  h.controller.evaluate();
+  assert.equal(h.controller.snapshot().state, 'ended');
+  h.setTasks([later]);
+  assert.equal(h.controller.snapshot().state, 'off');
+  h.advance(6 * HOUR);
+  h.controller.evaluate();
+  assert.equal(h.controller.snapshot().state, 'off', 'Within the limit of a fresh session, but not yet due');
+  assert.deepEqual(h.power.held(), []);
+  h.advance(12 * HOUR);
+  h.controller.evaluate();
+  assert.equal(h.controller.snapshot().state, 'armed', 'Due now, so it starts its own session');
+  assert.deepEqual(h.power.held(), [SYSTEM_BLOCKER]);
 });

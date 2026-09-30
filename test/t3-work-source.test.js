@@ -174,3 +174,24 @@ test('a distant pending schedule preserves running and unknown supplementary cov
   assert.equal(h.source.tasks()[1].state, 'unknown');
   assert.equal(h.source.tasks()[1].supplementary, true);
 });
+
+test('an idle reading just before the start grace ends is not reported as T3 Code not responding', async () => {
+  const h = harness({ jobs: [job({ status: 'sent', deliveryCertainty: 'delivered', dispatchedAt: '2026-10-01T00:00:00.000Z' })] });
+  h.advance(2 * MINUTE + 50_000);
+  await h.source.refresh();
+  h.advance(20_000);
+  let [task] = h.source.tasks();
+  assert.equal(task.state, 'running', 'T3 Code answered, so completion is not unknown');
+  assert.doesNotMatch(task.detail, /not responding/);
+  h.advance(40_000);
+  await h.source.refresh();
+  assert.deepEqual(h.source.tasks(), [], 'The next idle reading after the grace closes it');
+  const stale = harness({ jobs: [job({ status: 'sent', deliveryCertainty: 'delivered', dispatchedAt: '2026-10-01T00:00:00.000Z' })] });
+  stale.advance(2 * MINUTE + 50_000);
+  await stale.source.refresh();
+  stale.state.fail = true;
+  stale.advance(3 * MINUTE);
+  await stale.source.refresh();
+  [task] = stale.source.tasks();
+  assert.equal(task.state, 'unknown', 'Once T3 Code stops answering, the bounded unknown window applies');
+});
