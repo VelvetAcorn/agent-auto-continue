@@ -77,3 +77,9 @@ Ideas adopted from it are credited in the review.
 Regenerate them from the repository root with `env -u ELECTRON_RUN_AS_NODE npx electron design/mockups/capture.cjs`.
 Committed copies were reduced to 256 colours to keep the repository small.
 Electron cannot start while the Mac's screen is locked; headless Chrome renders the same pages at the same widths and was used for the current copies.
+
+### Browser interaction checks
+
+Run `CHROME_BIN=/path/to/chrome node design/mockups/browser-smoke.cjs ./prototype-evidence` from the repository root with Node.js 22 and Chrome installed.
+The output directory argument is required; screenshots and an interaction transcript are written there.
+This standalone browser check is run explicitly, separately from `npm test`, which discovers the Node.js unit tests without requiring Chrome or an evidence directory.

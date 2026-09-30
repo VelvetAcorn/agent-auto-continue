@@ -1,6 +1,6 @@
 'use strict';
 // Focused browser test for the standalone feature prototypes. No npm dependencies.
-// CHROME_BIN=/path/to/chrome node design/mockups/test.cjs /absolute/evidence/dir
+// CHROME_BIN=/path/to/chrome node design/mockups/browser-smoke.cjs /absolute/evidence/dir
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
