@@ -46,12 +46,12 @@ async function freePort() {
  */
 async function startRemote({ enabled = true, jobs = [], storageError = null, networkInterfaces = () => ({}), keepAwake, automation, harnesses, initialState, now } = {}) {
   const harness = fakeHarness();
-  const files = { saved: initialState };
+  const files = { saved: initialState, failSave: false };
   let storage = storageError;
   const service = new JobService({ jobs, api: harness.api, persist: () => { if (storage) throw new Error(storage.message); }, ...(now ? { now } : {}) });
   const timers = [];
   const remote = new RemoteControl({
-    load: () => files.saved, save: (state) => { files.saved = JSON.parse(JSON.stringify(state)); },
+    load: () => files.saved, save: (state) => { if (files.failSave) throw Object.assign(new Error('Disk full'), { code: 'ENOSPC' }); files.saved = JSON.parse(JSON.stringify(state)); },
     getService: () => service, ensureStorage: () => { if (storage) throw new Error(storage.message); }, getStorageError: () => storage,
     harnesses: harnesses ? harnesses(harness) : createT3HarnessSource(harness.api), keepAwake, automation, appInfo: { name: 'Agent Auto-Continue test', version: '0.0.0-test' },
     networkInterfaces, setTimer: (fn, ms) => { const timer = { fn, ms, unref() {} }; timers.push(timer); return timer; }, clearTimer: () => {},
@@ -76,6 +76,7 @@ async function startRemote({ enabled = true, jobs = [], storageError = null, net
   return {
     remote, service, harness, files, timers, port, base, request, control, read,
     setStorageError: (value) => { storage = value; },
+    setSaveFailure: (value) => { files.failSave = value; },
     close: () => remote.stop()
   };
 }

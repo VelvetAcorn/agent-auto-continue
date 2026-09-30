@@ -21,6 +21,7 @@ Remote control is off by default.
   The loopback listener only answers requests addressed to `127.0.0.1` or `localhost`, which blocks DNS rebinding.
 - **Bounded requests.** Bodies are limited to 64 KiB, headers must arrive within 10 seconds and whole requests within 30 seconds, and each listener accepts at most 64 concurrent connections.
 - **Visible audit trail.** Every remote change, denial, failed authentication and token or settings change is recorded and shown under Settings, Remote activity.
+  Requests refused for a foreign host name, a disallowed browser origin or a rate limit are recorded too, collapsed to one entry per address per minute with a count of the rest.
   Retries answered from an idempotency key are marked as repeats that changed nothing.
   Routine reads are not logged, so a polling phone cannot push older entries out of the 500-entry log.
 
@@ -143,6 +144,10 @@ A job's `deliveryStatus` is `pending`, `dispatching`, `sent`, `failed`, `cancele
 
 Idempotency keys are 1 to 128 characters from `A-Z a-z 0-9 . _ : -`, scoped to the token, and remembered for 24 hours across restarts.
 Reusing a key with a different request returns `409 idempotency_conflict`.
+The key is saved before the schedule is created: if it cannot be saved, the request fails with `503 storage_unavailable` and nothing is scheduled.
+If the app stops between saving the key and the schedule, a retry with the same key finds the saved schedule, or creates it if it was never saved.
+In the rare case that the earlier attempt cannot be identified, the retry answers `409 idempotency_indeterminate`; check `GET /v1/jobs` before retrying with a new key.
+Unexpired keys are never discarded early; a device with 1,000 active keys, or 5,000 across all devices, gets `429 idempotency_capacity` and nothing is created.
 
 ### Errors
 
@@ -159,10 +164,10 @@ Errors use one shape:
 | `403` | `insufficient_scope`, `origin_not_allowed`, `host_not_allowed` |
 | `404` | `not_found`, `job_not_found`, `thread_not_found` |
 | `405` | `method_not_allowed`, with an `Allow` header |
-| `409` | `invalid_state`, `idempotency_conflict` |
+| `409` | `invalid_state`, `idempotency_conflict`, `idempotency_indeterminate` |
 | `413` | `payload_too_large` |
 | `415` | `unsupported_media_type` |
-| `429` | `too_many_failures`, `rate_limited`, with `Retry-After` |
+| `429` | `too_many_failures`, `rate_limited`, with `Retry-After`; `idempotency_capacity` |
 | `501` | `not_supported` |
 | `502` | `harness_unavailable`, with sanitized `details.upstream` |
 | `503` | `storage_unavailable` |

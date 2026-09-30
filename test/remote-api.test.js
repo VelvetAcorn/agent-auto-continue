@@ -273,3 +273,37 @@ test('port conflicts surface a clear listener error', async (t) => {
   assert.equal(state.running, false);
   assert.match(state.listeners[0].error, /already in use/);
 });
+
+test('R3: host, origin and rate-limit rejections are audited once per address per minute without credentials', async (t) => {
+  let time = Date.now();
+  const f = await startRemote({ now: () => time });
+  t.after(f.close);
+  const http = require('node:http');
+  const rebind = () => new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port: f.port, path: '/v1/status', headers: { Host: `attacker.example:${f.port}`, Authorization: `Bearer ${f.control.token}` } }, (res) => { res.resume(); res.on('end', () => resolve(res.statusCode)); });
+    req.on('error', reject);
+    req.end();
+  });
+  const rejections = () => f.remote.getState().audit.filter((entry) => entry.action === 'reject_request');
+  for (let attempt = 0; attempt < 3; attempt++) assert.equal(await rebind(), 403);
+  assert.equal(rejections().length, 1, 'repeats from one address are collapsed');
+  assert.match(rejections()[0].error, /^host_not_allowed: /);
+  assert.equal(rejections()[0].outcome, 'denied');
+  assert.equal(rejections()[0].remoteAddress, '127.0.0.1');
+  time += 61_000;
+  await rebind();
+  assert.equal(rejections().length, 2);
+  assert.match(rejections()[0].error, /\(2 similar requests not logged\)$/);
+
+  assert.equal((await f.request('GET', '/v1/status', { headers: { Origin: 'https://evil.example' } })).status, 403);
+  assert.match(rejections()[0].error, /^origin_not_allowed: /);
+
+  let status = 200;
+  for (let attempt = 0; attempt < 245 && status !== 429; attempt++) status = (await f.request('GET', '/v1/jobs?limit=1', { token: f.read.token })).status;
+  assert.equal(status, 429);
+  const limited = rejections()[0];
+  assert.match(limited.error, /^rate_limited: /);
+  assert.equal(limited.tokenLabel, 'Dashboard', 'the authenticated device is named');
+  const log = JSON.stringify(f.remote.getState().audit);
+  for (const token of [f.control.token, f.read.token]) assert.equal(log.includes(token.slice(4)), false, 'no credentials are logged');
+});
