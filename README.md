@@ -1,15 +1,18 @@
 # T3 Code Auto-Continue
 
-T3 Code Auto-Continue is a small macOS menu-bar companion that schedules a user message (by default, `Continue`) for an existing T3 Code thread. It uses T3 Code's local orchestration HTTP API; it does not modify the T3 Code app, simulate keyboard input, or send data to a remote service.
+T3 Code Auto-Continue is a macOS menu-bar companion that schedules a user message (by default, `Continue`) for an existing T3 Code thread.
+Its Paper Focus interface keeps the queue, history, thread picker, composer and settings in one window.
+It uses T3 Code's local orchestration HTTP API; it does not modify the T3 Code app, simulate keyboard input, or send messages to a remote service.
 
 ## What it does
 
-- Lists active T3 Code threads from the local server.
+- Lists threads by most recent update with relative and exact times, hiding settled by default with a Show settled option.
+- Shows upcoming schedules and local delivery history, including failed, canceled and unconfirmed outcomes.
 - Schedules a message for a chosen thread, with `+5 min`, `+30 min`, `+1 hour`, and tomorrow shortcuts.
 - Persists jobs through quitting, restarting, and sleep/wake.
-- Adds a configurable post-time safety buffer (5 seconds by default).
+- Snapshots a configurable post-time safety buffer per job (5 seconds by default).
 - Checks the thread before dispatching. It cancels a job if the thread is missing, archived, or has newer user activity.
-- Uses stable command/message IDs and inspects the latest snapshot before replaying an interrupted dispatch, reducing duplicate sends after a crash.
+- Uses stable command/message IDs and marks interrupted or ambiguous dispatches as unconfirmed for reconciliation without automatic resending.
 - Keeps the token in the app's macOS application-data directory (permissions `0600`) or accepts `T3_TOKEN` only for the current launch.
 
 ## Requirements
@@ -31,7 +34,16 @@ npm start
 
 On launch, the app opens its control window. Enter the bearer token in **Settings** if it is not already configured. The default server address is fixed to `http://127.0.0.1:3773`; Settings only permits changing the port, so the app cannot be pointed at a remote host.
 
-Use the search field to find a thread, choose **Schedule…**, then select a date and time and save. The configured buffer is added to the selected time. The menu-bar icon provides the same controls, but the visible window is the primary interface. Only one copy may run at a time.
+Choose **New schedule**, select a thread, enter a message, then choose an ISO date (`yyyy-mm-dd`), 24-hour time and timezone.
+Quick times include +5 minutes, +30 minutes, +1 hour and tomorrow at 09:00.
+The preview includes the safety buffer; daylight-saving gaps are rejected and repeated local times require choosing an offset.
+Upcoming shows saved schedules immediately; select one to edit or cancel it before sending starts.
+History keeps outcomes and lets you acknowledge delivery problems, check uncertain delivery, or prepare another schedule.
+The menu-bar controls open the relevant view in the same window.
+Only one copy may run at a time.
+
+Settings offers light, Bone Outline dark and system appearance with reduced-motion support.
+The rotating Support star keeps its text upright; its Ko-fi placeholder is inactive until a real destination is configured.
 
 You can avoid persisting the token by launching with an environment variable:
 
@@ -54,14 +66,27 @@ The default build produces a ZIP in `dist/`, which is the most portable artifact
 
 Jobs are stored under macOS's app data directory as `jobs.json`; configuration is stored beside it as `config.json`. Do not place either file in this repository or source control.
 
-At dispatch time the app fetches a per-thread snapshot, then posts a `thread.turn.start`-shaped dispatch containing persistent `commandId` and `messageId` values. If the app stopped after starting an outbound dispatch but before storing the response, it reuses those identifiers and first checks whether the message already appears in the snapshot. End-to-end exactly-once delivery ultimately depends on the local T3 Code server honoring the command ID as an idempotency key; the client deliberately never creates a new ID while recovering the same job.
+At dispatch time the app fetches a per-thread snapshot, then posts a `thread.turn.start` command containing persistent `commandId` and `messageId` values.
+A verified `{sequence}` acceptance response or finding the message in a thread establishes delivery to T3 Code, not successful completion of the agent's work.
+New user activity since schedule creation cancels the job; settling a thread only filters the picker.
+Saved schedules retain their UTC instant and buffer when settings or the system timezone change.
+Missed pending schedules catch up after restart or wake and record lateness.
 
-Failures are recorded in the menu and require the user to schedule a new message. The app intentionally does not retry provider failures automatically, which avoids repeatedly sending messages after an unknown quota reset.
+Interrupted sends and ambiguous POST responses become `unconfirmed` and never retry automatically.
+Reconciliation only reads the thread snapshot, marking delivery confirmed if the stable message ID is found.
+Absence from a windowed snapshot is not proof of nondelivery.
+Schedule again provides a draft only for confirmed terminal outcomes; it is blocked for unconfirmed delivery.
+Acknowledgment clears an attention badge without deleting history or sending anything.
+
+The renderer uses queue/history, edit/cancel, acknowledgment, reconciliation and job-change APIs.
+Corrupt, unreadable, or unsupported local schedule files are preserved; the app pauses scheduling and shows a storage error instead of overwriting them.
+See [the development plan](DEVELOPMENT_PLAN.md) for accepted decisions, prototype review, and remaining release gates.
 
 ## Verify the source
 
 ```sh
 npm test
+npm run test:electron  # safe production-window smoke fixture; no real sends
 node --check main.js
 node --check preload.js
 ```
@@ -72,4 +97,11 @@ node --check preload.js
 
 ## Limits
 
-The app needs the API endpoint and command payload described in [`initial-app-creation.md`](initial-app-creation.md). It cannot determine a provider quota-reset time on its own, and it does not retry a failed send. A user can still cancel a pending job from the menu at any time.
+The HTTP routes and settlement/dispatch fields were checked against the installed T3 Code Alpha 0.0.40 source maps.
+The reported HTML response was reproduced with controlled responses through the dashboard IPC boundary; its actual live-server cause is still unconfirmed.
+No live messages were sent during these checks.
+Unit and IPC tests inject transport, clocks, timers and persistence.
+The Electron smoke fixture exercises the production main process, preload and renderer against in-memory storage and a fake API that prohibits dispatch.
+Live-server and real macOS sleep/wake smoke tests remain necessary before release.
+The app cannot determine a provider quota-reset time on its own, and it does not retry failed or unconfirmed sends.
+A user can still cancel a pending job from the menu at any time.

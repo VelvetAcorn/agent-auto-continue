@@ -10,7 +10,8 @@
     "build": "electron-builder --mac zip",
     "build:dmg": "electron-builder --mac dmg",
     "build:all": "electron-builder",
-    "test": "node --test"
+    "test": "node --test",
+    "test:electron": "electron tools/electron-smoke.cjs"
   },
   "dependencies": {
     "node-schedule": "^2.1.1"
@@ -24,7 +25,10 @@
     "icon": "assets/icon.png",
     "mac": {
       "category": "public.app-category.developer-tools",
-      "target": ["dmg", "zip"]
+      "target": [
+        "dmg",
+        "zip"
+      ]
     },
     "files": [
       "main.js",
@@ -35,6 +39,7 @@
       "styles.css",
       "assets/icon.png",
       "lib/**/*.js",
+      "renderer/**/*.js",
       "package.json"
     ]
   }

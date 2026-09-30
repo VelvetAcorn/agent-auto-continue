@@ -1,0 +1,41 @@
+name: Validate scheduler
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Tests and JavaScript syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - name: Check production JavaScript
+        run: |
+          node --check main.js
+          node --check preload.js
+          for file in lib/*.js renderer/*.js; do node --check "$file"; done
+  package:
+    name: Package macOS app
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run test:electron
+      - run: npm run build
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'

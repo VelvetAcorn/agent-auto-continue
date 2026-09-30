@@ -66,3 +66,10 @@ test('findLatestUserTurnAt reads the latest user message from a thread detail', 
   ] });
   assert.equal(date.toISOString(), '2030-01-01T00:03:00.000Z');
 });
+
+test('schedule input rejects ambiguous local timestamps and nonexistent calendar dates', () => {
+  for (const whenISO of ['2099-02-30T12:00:00Z', '2099-02-29T12:00:00Z', '2099-01-01T12:00', '2099-01-01', '2099-13-01T12:00:00Z']) {
+    assert.throws(() => validateScheduleInput({ threadId: 'thread', message: 'Continue', whenISO }));
+  }
+  assert.equal(validateScheduleInput({ threadId: 'thread', message: 'Continue', whenISO: '2099-01-01T12:00:00+05:30' }).whenISO, '2099-01-01T06:30:00.000Z');
+});
