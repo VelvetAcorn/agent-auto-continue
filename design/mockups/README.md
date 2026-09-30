@@ -3,7 +3,7 @@
 Open `index.html` directly, or run from the repository root:
 
 ```sh
-python3 -m http.server 4173 --bind 127.0.0.1 --directory mockups
+python3 -m http.server 4173 --bind 127.0.0.1 --directory design/mockups
 ```
 
 Then visit <http://127.0.0.1:4173/>.
@@ -37,7 +37,7 @@ This is a design prototype, not production scheduling/date infrastructure. Calen
 
 ## Verification performed
 
-- `node --check mockups/app.js` passed.
+- `node --check design/mockups/app.js` passed.
 - Browser inspected all four designs visually, plus Quilla Bone Outline and the support card.
 - Created a mock schedule and observed the queue count and detail update.
 - Acknowledged the example failure and verified the badge cleared while the record remained.

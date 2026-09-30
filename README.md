@@ -1,8 +1,25 @@
-# T3 Code Auto-Continue
+# Agent Auto-Continue
 
-T3 Code Auto-Continue is a macOS menu-bar companion that schedules a user message (by default, `Continue`) for an existing T3 Code thread.
+Agent Auto-Continue is a macOS menu-bar companion that schedules a user message (by default, `Continue`) for an existing T3 Code thread.
 Its Paper Focus interface keeps the queue, history, thread picker, composer and settings in one window.
 It uses T3 Code's local orchestration HTTP API; it does not modify the T3 Code app, simulate keyboard input, or send messages to a remote service.
+
+The repository is [agent-auto-continue](https://github.com/VelvetAcorn/agent-auto-continue).
+The current app supports T3 Code; additional harnesses and automation modes are tracked in the [future feature backlog](docs/roadmap.md).
+The existing package name and macOS app identity are retained to preserve compatibility with installed copies and their saved data.
+
+## Repository layout
+
+| Location | Purpose |
+| --- | --- |
+| `main.js`, `preload.js`, `dashboard.html`, `styles.css` | Electron entry points and shared styles |
+| `lib/`, `renderer/` | Backend services and production UI |
+| `assets/` | Application artwork |
+| `test/`, `tools/` | Automated checks and Electron smoke fixture |
+| `docs/` | Development plan, implementation reference and future backlog |
+| `design/mockups/` | Standalone design prototypes |
+| `legacy/` | Original accessibility-based shell and Swift helpers |
+| `ui.html`, `settings.html` | Retained older screens, still listed in the build configuration |
 
 ## What it does
 
@@ -71,7 +88,7 @@ At dispatch time the app fetches a per-thread snapshot, then posts a `thread.tur
 A verified `{sequence}` acceptance response or finding the message in a thread establishes delivery to T3 Code, not successful completion of the agent's work.
 New user activity since schedule creation cancels the job; settling a thread only filters the picker.
 Archived threads are always excluded from the picker, while unknown states remain visible.
-See [migration details](initial-app-creation.md#job-model-and-delivery-safeguards) for legacy activity-baseline limits.
+See [migration details](docs/implementation-review.md#job-model-and-delivery-safeguards) for legacy activity-baseline limits.
 Saved schedules retain their UTC instant and buffer when settings or the system timezone change.
 Missed pending schedules catch up after restart or wake and record lateness.
 
@@ -83,7 +100,7 @@ Acknowledgment clears an attention badge without deleting history or sending any
 
 The renderer uses queue/history, edit/cancel, acknowledgment, reconciliation and job-change APIs.
 Corrupt, unreadable, or unsupported local schedule files are preserved; the app pauses scheduling and shows a storage error instead of overwriting them.
-See [the development plan](DEVELOPMENT_PLAN.md) for accepted decisions, prototype review, and remaining release gates.
+See [the development plan](docs/development-plan.md) for accepted decisions, prototype review, and remaining release gates.
 
 ## Verify the source
 
@@ -97,7 +114,7 @@ for file in lib/*.js renderer/*.js; do node --check "$file"; done
 
 ## Legacy script
 
-`continue-at.sh` and `press-continue.swift` remain as the original, accessibility-based one-shot helper. They are not used by the v2 app and require an unlocked Mac, a focused prepared draft, and Accessibility permission. Prefer the menu-bar app for ordinary use.
+[`legacy/continue-at.sh`](legacy/continue-at.sh) and [`legacy/press-continue.swift`](legacy/press-continue.swift) remain as the original, accessibility-based one-shot helper. They are not used by the v2 app and require an unlocked Mac, a focused prepared draft, and Accessibility permission. Prefer the menu-bar app for ordinary use.
 
 ## Limits
 

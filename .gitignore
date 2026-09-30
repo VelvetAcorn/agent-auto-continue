@@ -7,3 +7,6 @@ main.npm.js
 *.log
 config.json
 jobs.json
+
+# Compiled legacy Swift helpers
+.build/
