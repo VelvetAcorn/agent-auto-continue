@@ -23,7 +23,7 @@
   const mediaTheme = matchMedia('(prefers-color-scheme: dark)');
   const mediaMotion = matchMedia('(prefers-reduced-motion: reduce)');
   // The sticker's phrase and spin live outside the DOM so re-renders never reset or stutter it.
-  const starState = { phrase: '', spin: sticker.idle(performance.now()), frame: 0, held: false, layouts: new Map() };
+  const starState = { phrase: '', spin: sticker.idle(performance.now()), frame: 0, paintedAt: 0, held: false, layouts: new Map() };
   let measureContext;
   const cleanup = [];
   const draft = () => state.drafts.get(state.draftKey);
@@ -155,7 +155,9 @@
   const starMoves = () => !state.reduceMotion && !mediaMotion.matches;
   function paintStar(now) {
     const shape = document.querySelector('#support-star polygon');
-    if (shape) shape.style.transform = `rotate(${sticker.sample(starState.spin, now).angle.toFixed(3)}deg)`;
+    // Frame timestamps can trail a performance.now() paint made during a render or click; never paint an earlier time.
+    starState.paintedAt = Math.max(now, starState.paintedAt);
+    if (shape) shape.style.transform = `rotate(${sticker.sample(starState.spin, starState.paintedAt).angle.toFixed(3)}deg)`;
     return Boolean(shape);
   }
   function starFrame(now) { starState.frame = 0; if (!starMoves()) syncStar(); else if (paintStar(now)) starState.frame = requestAnimationFrame(starFrame); }
