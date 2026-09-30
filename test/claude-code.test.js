@@ -187,6 +187,38 @@ test('availability is inferred from recent usage-limit messages', async () => {
   assert.equal((await probe([ok('2026-10-01T13:00:00Z')])).state, 'unknown');
 });
 
+test('sessions owned by Claude Desktop are hidden and refused with a pointer to that harness', async () => {
+  const s = setup();
+  const org = path.join(s.home, 'Library', 'Application Support', 'Claude', 'claude-code-sessions', 'acct', 'org');
+  fs.mkdirSync(org, { recursive: true });
+  fs.writeFileSync(path.join(org, 'local_aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee.json'), JSON.stringify({ sessionId: 'local_aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', cliSessionId: OTHER, cwd: s.project, title: 'Desktop', isArchived: false }));
+  const adapter = s.make();
+  assert.deepEqual((await adapter.listConversations()).map((item) => item.id), [SESSION]);
+  const state = await adapter.inspectConversation({ conversationId: OTHER, deliveryKey: null });
+  assert.throws(() => adapter.prepareTurn(turn({ conversationId: OTHER }), state), (error) => error.code === 'owned_by_other_harness' && error.details.harness === 'claude-desktop' && !error.deliveryUncertain);
+  assert.equal(s.log().length, 0, 'Nothing was started');
+});
+
+test('fresh Claude plan usage drives availability; stale samples fall back to transcripts', async () => {
+  const s = setup();
+  const now = Date.parse('2026-10-01T14:00:00Z');
+  const desktop = path.join(s.home, 'Library', 'Application Support', 'Claude');
+  fs.mkdirSync(desktop, { recursive: true });
+  const write = (t, fh, sd) => fs.writeFileSync(path.join(desktop, 'plan-usage-history.json'), JSON.stringify({ version: 2, samples: [{ t, org: 'o', u: { fh, sd } }] }));
+  write(now - 5 * 60_000, 100, 40);
+  const limited = await s.make({ now: () => now }).probeAvailability();
+  assert.equal(limited.state, 'limited');
+  assert.equal(limited.source, 'inferred');
+  assert.equal(limited.resetsAt, null);
+  assert.match(limited.reason, /five-hour/);
+  write(now - 5 * 60_000, 30, 101);
+  assert.match((await s.make({ now: () => now }).probeAvailability()).reason, /weekly/);
+  write(now - 5 * 60_000, 30, 40);
+  assert.equal((await s.make({ now: () => now }).probeAvailability()).state, 'available');
+  write(now - 60 * 60_000, 100, 100);
+  assert.equal((await s.make({ now: () => now }).probeAvailability()).state, 'unknown', 'A stale sample is ignored');
+});
+
 test('a Claude Code job goes from schedule to delivered and completed through the job service', async () => {
   const s = setup();
   let clock = Date.now() + 60_000;

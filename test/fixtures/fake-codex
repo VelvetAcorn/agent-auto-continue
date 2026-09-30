@@ -1,17 +1,63 @@
 #!/usr/bin/env node
 'use strict';
-// Fake `codex app-server` for adapter tests: JSON-RPC 2.0 over stdio backed by
-// a JSON state file (FAKE_CODEX_STATE). Requests are logged to FAKE_CODEX_LOG.
+// Fake Codex for adapter tests. `codex app-server` speaks newline JSON-RPC over
+// stdio; `codex app-server proxy` emulates the shared daemon, which speaks
+// WebSocket. State lives in FAKE_CODEX_STATE; requests are logged to FAKE_CODEX_LOG.
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const readline = require('node:readline');
 const statePath = process.env.FAKE_CODEX_STATE;
 const mode = process.env.FAKE_CODEX_MODE || 'complete';
+const proxy = process.argv[3] === 'proxy';
 const load = () => JSON.parse(fs.readFileSync(statePath, 'utf8'));
 const save = (state) => fs.writeFileSync(statePath, JSON.stringify(state));
 const log = (entry) => { if (process.env.FAKE_CODEX_LOG) fs.appendFileSync(process.env.FAKE_CODEX_LOG, `${JSON.stringify(entry)}\n`); };
-const send = (value) => process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', ...value })}\n`);
 if (process.argv[2] !== 'app-server') { process.stderr.write('unsupported command\n'); process.exit(2); }
-log({ start: true, cwd: process.cwd(), env: Object.keys(process.env) });
+log({ start: true, proxy, cwd: process.cwd(), env: Object.keys(process.env), pid: process.pid });
+
+// Server-side WebSocket framing (unmasked frames out, masked frames in).
+function frame(text, opcode = 1) {
+  const payload = Buffer.from(text);
+  const header = payload.length < 126 ? Buffer.from([0x80 | opcode, payload.length]) : Buffer.from([0x80 | opcode, 126, payload.length >> 8, payload.length & 0xff]);
+  return Buffer.concat([header, payload]);
+}
+let emitRaw;
+if (proxy) {
+  let buffer = Buffer.alloc(0), upgraded = false;
+  const handle = (text) => onMessage(JSON.parse(text));
+  emitRaw = (value) => process.stdout.write(frame(JSON.stringify(value)));
+  process.stdin.on('data', (chunk) => {
+    buffer = Buffer.concat([buffer, chunk]);
+    if (!upgraded) {
+      const end = buffer.indexOf('\r\n\r\n');
+      if (end < 0) return;
+      const key = /sec-websocket-key: (.+)/i.exec(buffer.subarray(0, end).toString())[1].trim();
+      buffer = buffer.subarray(end + 4);
+      upgraded = true;
+      if (mode === 'bad-handshake') { process.stdout.write('HTTP/1.1 403 Forbidden\r\n\r\n'); return; }
+      const accept = crypto.createHash('sha1').update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest('base64');
+      process.stdout.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
+      process.stdout.write(frame('', 9));
+    }
+    while (buffer.length >= 2) {
+      const opcode = buffer[0] & 0x0f;
+      let length = buffer[1] & 0x7f, offset = 2;
+      if (length === 126) { length = buffer.readUInt16BE(2); offset = 4; } else if (length === 127) { length = Number(buffer.readBigUInt64BE(2)); offset = 10; }
+      if (buffer.length < offset + 4 + length) return;
+      const mask = buffer.subarray(offset, offset + 4);
+      const payload = Buffer.from(buffer.subarray(offset + 4, offset + 4 + length).map((byte, index) => byte ^ mask[index % 4]));
+      buffer = buffer.subarray(offset + 4 + length);
+      if (opcode === 1) handle(payload.toString());
+      else if (opcode === 10) log({ pong: true });
+      else if (opcode === 8) process.exit(0);
+    }
+  });
+  process.stdin.on('end', () => process.exit(0));
+} else {
+  emitRaw = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
+  readline.createInterface({ input: process.stdin }).on('line', (line) => onMessage(JSON.parse(line)));
+}
+const send = (value) => emitRaw({ jsonrpc: '2.0', ...value });
 const waiting = new Map();
 let serverRequest = 1000;
 function ask(method, params) {
@@ -21,37 +67,37 @@ function ask(method, params) {
 }
 async function runTurn(threadId, turnId) {
   const decisions = [];
-  if (mode === 'approval') {
-    decisions.push(await ask('item/commandExecution/requestApproval', { threadId, turnId, command: 'rm -rf build' }));
-    decisions.push(await ask('item/tool/requestUserInput', { threadId, turnId }));
-  }
-  if (mode === 'long') return;
+  if (mode === 'approval') decisions.push(await ask('item/commandExecution/requestApproval', { threadId, turnId, command: 'rm -rf build' }));
+  if (mode === 'user-input') decisions.push(await ask('item/tool/requestUserInput', { threadId, turnId }));
+  if (mode === 'long' || mode === 'user-input') { const state = load(); state.decisions = decisions; save(state); return; }
   const state = load();
   const turn = state.threads[threadId].turns.find((item) => item.id === turnId);
-  turn.status = mode === 'limit' ? 'failed' : 'completed';
+  turn.status = mode === 'limit' ? 'failed' : mode === 'approval' ? 'interrupted' : 'completed';
   turn.completedAt = Math.floor(Date.now() / 1000);
   if (mode === 'limit') turn.error = { message: "You've hit your usage limit.", codexErrorInfo: 'usageLimitExceeded' };
   state.decisions = decisions;
   save(state);
   send({ method: 'turn/completed', params: { threadId, turn } });
 }
-readline.createInterface({ input: process.stdin }).on('line', (line) => {
-  const message = JSON.parse(line);
+function onMessage(message) {
   if (message.id !== undefined && message.method === undefined) { waiting.get(message.id)?.(message.result ?? { error: message.error }); return; }
   if (message.id === undefined) return;
-  log({ method: message.method, params: message.params });
+  log({ method: message.method, params: message.params, proxy });
   const state = load();
   const reply = (result) => send({ id: message.id, result });
   const fail = (code, text) => send({ id: message.id, error: { code, message: text } });
   const thread = state.threads[message.params?.threadId];
+  const bare = (value) => { const { turns, ...rest } = value; return rest; };
   switch (message.method) {
     case 'initialize': return reply({ userAgent: 'fake', codexHome: '/tmp', platformOs: 'macos' });
     case 'account/read': return reply(state.account);
     case 'account/rateLimits/read': return reply(state.rateLimits);
-    case 'thread/list': return reply({ data: Object.values(state.threads).map(({ turns, ...rest }) => rest), nextCursor: null });
-    case 'thread/read': return thread ? reply({ thread: (({ turns, ...rest }) => rest)(thread) }) : fail(-32600, `thread/read failed: no rollout found for thread id ${message.params.threadId}`);
+    case 'thread/list': return reply({ data: Object.values(state.threads).map(bare), nextCursor: null });
+    case 'thread/read': return thread ? reply({ thread: bare(thread) }) : fail(-32600, `thread/read failed: no rollout found for thread id ${message.params.threadId}`);
     case 'thread/turns/list': return thread ? reply({ data: [...thread.turns].reverse().slice(0, message.params.limit), nextCursor: null }) : fail(-32600, 'no rollout found');
-    case 'thread/resume': return thread ? reply({ thread: (({ turns, ...rest }) => rest)(thread) }) : fail(-32600, 'thread/resume failed: no rollout found');
+    case 'thread/resume':
+      if (mode === 'locked') return fail(-32600, `thread ${message.params.threadId} already has an active writer`);
+      return thread ? reply({ thread: bare(thread) }) : fail(-32600, 'thread/resume failed: no rollout found');
     case 'turn/interrupt': {
       const turn = thread.turns.find((item) => item.id === message.params.turnId);
       turn.status = 'interrupted';
@@ -60,7 +106,7 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
       return send({ method: 'turn/completed', params: { threadId: message.params.threadId, turn } });
     }
     case 'turn/start': {
-      if (mode === 'reject') return fail(-32602, 'Invalid request: thread is busy');
+      if (mode === 'reject') return fail(-32602, 'Invalid request: bad input');
       const turn = { id: `turn-${thread.turns.length + 1}`, status: 'inProgress', startedAt: Math.floor(Date.now() / 1000), completedAt: null, error: null,
         items: [{ type: 'userMessage', id: `item-${thread.turns.length + 1}`, clientId: message.params.clientUserMessageId ?? null, content: message.params.input }] };
       thread.turns.push(turn);
@@ -73,4 +119,4 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     }
     default: return fail(-32601, 'Method not found');
   }
-});
+}
