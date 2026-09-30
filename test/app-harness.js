@@ -1,5 +1,6 @@
 'use strict';
 // Runs the production main.js in a VM with fake Electron, filesystem and T3 transport.
+// Like the inline harness in ipc.test.js, plus preloaded files and every app lifecycle listener.
 const vm = require('node:vm');
 const fs = require('node:fs');
 const path = require('node:path');

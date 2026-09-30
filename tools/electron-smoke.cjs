@@ -127,6 +127,64 @@ async function run() {
   assert.ok(menu.find(item => item.label === 'Open scheduler'));
   console.log('Electron production workflow smoke passed: one window, real preload/IPC/renderer, local history, sanitized offline error, zero sends.');
 }
+// Turns on remote control from Settings, then drives the real listener over HTTP and MCP.
+async function remoteJourney(js, click, fill) {
+  const { Client, StreamableHTTPClientTransport } = require('@modelcontextprotocol/client');
+  const server = require('node:net').createServer();
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+  await new Promise(resolve => server.close(resolve));
+  await waitFor(() => js(`Boolean(document.querySelector('#remote-form'))`), 'remote settings loaded');
+  assert.equal(await js(`document.querySelector('#remote-enabled').checked`), false, 'remote control is off by default');
+  assert.equal(await js(`document.querySelector('#remote-bind').value`), '', 'loopback only by default');
+  await js(`(() => { const box=document.querySelector('#remote-enabled'); box.checked=true; box.dispatchEvent(new Event('change',{bubbles:true})); })()`);
+  await fill('#remote-port', String(port));
+  await js(`document.querySelector('#remote-form').requestSubmit()`);
+  await waitFor(() => js(`Boolean(document.querySelector('.remote-listeners .pill.sent'))`), 'remote listener running');
+  await js(`document.querySelector('#remote-form').scrollIntoView({block:'start'})`);
+  await capture('settings-remote-listening');
+  assert.match(await js(`document.querySelector('.remote-endpoints').textContent`), new RegExp(`http://127\\.0\\.0\\.1:${port}/mcp`));
+  await fill('#remote-token-label', 'Smoke phone');
+  await js(`document.querySelector('#remote-token-form').requestSubmit()`);
+  await waitFor(() => js(`Boolean(document.querySelector('.token-reveal img'))`), 'token revealed once');
+  await waitFor(() => js(`document.querySelector('.token-reveal img').complete && document.querySelector('.token-reveal img').naturalWidth > 0`), 'QR code rendered');
+  const token = await js(`document.querySelector('#remote-new-token').textContent`);
+  assert.match(token, /^aac_[A-Za-z0-9_-]{43}$/);
+  const previousClipboard = electron.clipboard.readText();
+  await click('[data-action="remote-copy"]');
+  await waitFor(() => electron.clipboard.readText() === token, 'token copied to the clipboard');
+  electron.clipboard.writeText(previousClipboard);
+  await js(`document.querySelector('#toast-dismiss')?.click(); document.querySelector('.token-reveal').scrollIntoView({block:'center'})`);
+  await capture('settings-remote-token');
+  const call = (method, route, body) => fetch(`http://127.0.0.1:${port}${route}`, { method, headers: { Authorization: `Bearer ${token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });
+  assert.equal((await call('GET', '/v1/status')).status, 200);
+  const created = await call('POST', '/v1/jobs', { threadId: fixtureThread.id, message: 'Scheduled from the smoke phone', delayMinutes: 90 });
+  assert.equal(created.status, 201);
+  const job = (await created.json()).job;
+  await waitFor(() => js(`document.querySelector('[data-count="upcoming"]').textContent === '1'`), 'desktop queue count updates live from a remote change');
+  assert.equal((await js(`window.autoContinue.getJob(${JSON.stringify(job.id)})`)).message, 'Scheduled from the smoke phone', 'remote schedules land in the desktop queue');
+  const mcp = new Client({ name: 'electron-smoke', version: '1.0.0' }, { versionNegotiation: { mode: 'auto' } });
+  await mcp.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`), { requestInit: { headers: { Authorization: `Bearer ${token}` } } }));
+  const listed = await mcp.callTool({ name: 'list_jobs', arguments: { view: 'upcoming' } });
+  assert.ok(listed.structuredContent.jobs.some(item => item.id === job.id));
+  assert.equal((await mcp.callTool({ name: 'cancel_job', arguments: { id: job.id } })).structuredContent.job.status, 'canceled');
+  await mcp.close();
+  await click('[data-action="remote-dismiss"]');
+  assert.equal(await js(`document.body.innerText.includes(${JSON.stringify(token)})`), false, 'the token is not shown again');
+  await waitFor(() => js(`document.querySelector('.remote-audit')?.textContent.includes('Canceled a schedule')`), 'remote activity visible');
+  await js(`document.querySelectorAll('.card')[3].scrollIntoView({block:'start'})`);
+  await js(`document.querySelector('#toast-dismiss')?.click()`);
+  await capture('settings-remote-activity');
+  await click('[data-action="remote-revoke"]');
+  await click('[data-action="remote-revoke-confirm"]');
+  await waitFor(() => js(`!document.querySelector('[data-action="remote-revoke"]')`), 'token revoked');
+  assert.equal((await call('GET', '/v1/status')).status, 401, 'revocation is immediate');
+  await js(`(() => { const box=document.querySelector('#remote-enabled'); box.checked=false; box.dispatchEvent(new Event('change',{bubbles:true})); })()`);
+  await js(`document.querySelector('#remote-form').requestSubmit()`);
+  await waitFor(() => js(`document.body.innerText.includes('Nothing is listening')`), 'remote control turned off');
+  await assert.rejects(fetch(`http://127.0.0.1:${port}/v1/status`));
+  assert.doesNotMatch(files.get('/fixture/remote-control.json'), new RegExp(token.slice(4)), 'only token digests are stored');
+}
 async function rendererJourney(js) {
   const click = async selector => {
     await waitFor(() => js(`Boolean(document.querySelector(${JSON.stringify(selector)}))`), `control ${selector}`);
@@ -237,63 +295,5 @@ async function rendererJourney(js) {
   await click('[data-action="new"]');
   assert.match(await js(`document.querySelector('#schedule-preview').textContent`), /12-second/);
   assert.equal(windows.length, 1, 'Every journey stayed in the same window');
-}
-// Turns on remote control from Settings, then drives the real listener over HTTP and MCP.
-async function remoteJourney(js, click, fill) {
-  const { Client, StreamableHTTPClientTransport } = require('@modelcontextprotocol/client');
-  const server = require('node:net').createServer();
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  const port = server.address().port;
-  await new Promise(resolve => server.close(resolve));
-  await waitFor(() => js(`Boolean(document.querySelector('#remote-form'))`), 'remote settings loaded');
-  assert.equal(await js(`document.querySelector('#remote-enabled').checked`), false, 'remote control is off by default');
-  assert.equal(await js(`document.querySelector('#remote-bind').value`), '', 'loopback only by default');
-  await js(`(() => { const box=document.querySelector('#remote-enabled'); box.checked=true; box.dispatchEvent(new Event('change',{bubbles:true})); })()`);
-  await fill('#remote-port', String(port));
-  await js(`document.querySelector('#remote-form').requestSubmit()`);
-  await waitFor(() => js(`Boolean(document.querySelector('.remote-listeners .pill.sent'))`), 'remote listener running');
-  await js(`document.querySelector('#remote-form').scrollIntoView({block:'start'})`);
-  await capture('settings-remote-listening');
-  assert.match(await js(`document.querySelector('.remote-endpoints').textContent`), new RegExp(`http://127\\.0\\.0\\.1:${port}/mcp`));
-  await fill('#remote-token-label', 'Smoke phone');
-  await js(`document.querySelector('#remote-token-form').requestSubmit()`);
-  await waitFor(() => js(`Boolean(document.querySelector('.token-reveal img'))`), 'token revealed once');
-  await waitFor(() => js(`document.querySelector('.token-reveal img').complete && document.querySelector('.token-reveal img').naturalWidth > 0`), 'QR code rendered');
-  const token = await js(`document.querySelector('#remote-new-token').textContent`);
-  assert.match(token, /^aac_[A-Za-z0-9_-]{43}$/);
-  const previousClipboard = electron.clipboard.readText();
-  await click('[data-action="remote-copy"]');
-  await waitFor(() => electron.clipboard.readText() === token, 'token copied to the clipboard');
-  electron.clipboard.writeText(previousClipboard);
-  await js(`document.querySelector('#toast-dismiss')?.click(); document.querySelector('.token-reveal').scrollIntoView({block:'center'})`);
-  await capture('settings-remote-token');
-  const call = (method, route, body) => fetch(`http://127.0.0.1:${port}${route}`, { method, headers: { Authorization: `Bearer ${token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });
-  assert.equal((await call('GET', '/v1/status')).status, 200);
-  const created = await call('POST', '/v1/jobs', { threadId: fixtureThread.id, message: 'Scheduled from the smoke phone', delayMinutes: 90 });
-  assert.equal(created.status, 201);
-  const job = (await created.json()).job;
-  await waitFor(() => js(`document.querySelector('[data-count="upcoming"]').textContent === '1'`), 'desktop queue count updates live from a remote change');
-  assert.equal((await js(`window.autoContinue.getJob(${JSON.stringify(job.id)})`)).message, 'Scheduled from the smoke phone', 'remote schedules land in the desktop queue');
-  const mcp = new Client({ name: 'electron-smoke', version: '1.0.0' }, { versionNegotiation: { mode: 'auto' } });
-  await mcp.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`), { requestInit: { headers: { Authorization: `Bearer ${token}` } } }));
-  const listed = await mcp.callTool({ name: 'list_jobs', arguments: { view: 'upcoming' } });
-  assert.ok(listed.structuredContent.jobs.some(item => item.id === job.id));
-  assert.equal((await mcp.callTool({ name: 'cancel_job', arguments: { id: job.id } })).structuredContent.job.status, 'canceled');
-  await mcp.close();
-  await click('[data-action="remote-dismiss"]');
-  assert.equal(await js(`document.body.innerText.includes(${JSON.stringify(token)})`), false, 'the token is not shown again');
-  await waitFor(() => js(`document.querySelector('.remote-audit')?.textContent.includes('Canceled a schedule')`), 'remote activity visible');
-  await js(`document.querySelectorAll('.card')[3].scrollIntoView({block:'start'})`);
-  await js(`document.querySelector('#toast-dismiss')?.click()`);
-  await capture('settings-remote-activity');
-  await click('[data-action="remote-revoke"]');
-  await click('[data-action="remote-revoke-confirm"]');
-  await waitFor(() => js(`!document.querySelector('[data-action="remote-revoke"]')`), 'token revoked');
-  assert.equal((await call('GET', '/v1/status')).status, 401, 'revocation is immediate');
-  await js(`(() => { const box=document.querySelector('#remote-enabled'); box.checked=false; box.dispatchEvent(new Event('change',{bubbles:true})); })()`);
-  await js(`document.querySelector('#remote-form').requestSubmit()`);
-  await waitFor(() => js(`document.body.innerText.includes('Nothing is listening')`), 'remote control turned off');
-  await assert.rejects(fetch(`http://127.0.0.1:${port}/v1/status`));
-  assert.doesNotMatch(files.get('/fixture/remote-control.json'), new RegExp(token.slice(4)), 'only token digests are stored');
 }
 run().then(() => app.exit(0), error => { console.error(error.stack); app.exit(1); });

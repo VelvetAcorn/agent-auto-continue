@@ -1,6 +1,7 @@
 'use strict';
 // Settings section for remote control: listener settings, device tokens and the audit log.
-// app.js owns rendering; this module contributes markup and handlers through a small context.
+// app.js owns rendering and calls bind() after every render; this module then places its
+// section before the appearance card and wires its own controls, keeping app.js changes small.
 (() => {
   const ACTIONS = {
     createJob: 'Scheduled a message', editJob: 'Edited a schedule', cancelJob: 'Canceled a schedule',
@@ -72,6 +73,12 @@
 
   function bind(ctx) {
     const { $, api, perform, toast } = ctx;
+    const settings = document.querySelector('.settings');
+    if (!ctx.isVisible() || !settings || document.getElementById('remote-section')) return;
+    const anchor = document.getElementById('theme')?.closest('.card');
+    const markup = `<div id="remote-section" class="remote-section">${render(ctx)}</div>`;
+    if (anchor) anchor.insertAdjacentHTML('beforebegin', markup); else settings.insertAdjacentHTML('beforeend', markup);
+    document.querySelectorAll('#remote-section [data-action^="remote-"]').forEach((button) => { button.onclick = () => action(ctx, button.dataset.action, button); });
     const form = $('#remote-form');
     if (!form) return;
     $('#remote-enabled').onchange = (event) => { draft().enabled = event.target.checked; };
@@ -97,36 +104,33 @@
     };
   }
 
-  // Returns true when this module handled the action.
   function action(ctx, name, button) {
     const { api, perform, toast } = ctx;
     if (name === 'remote-copy') {
       const token = local.reveal?.token;
-      if (!token) return true;
+      if (!token) return;
       navigator.clipboard.writeText(token).then(() => toast('Token copied.'), () => {
         const range = document.createRange(); range.selectNodeContents(document.getElementById('remote-new-token'));
         const selection = getSelection(); selection.removeAllRanges(); selection.addRange(range);
         toast('Press Command-C to copy the selected token.');
       });
-      return true;
+      return;
     }
-    if (name === 'remote-dismiss') { local.reveal = null; ctx.render('#remote-token-label'); return true; }
-    if (name === 'remote-revoke') { local.confirmRevoke = button.dataset.token; ctx.render('[data-action="remote-revoke-confirm"]'); return true; }
-    if (name === 'remote-revoke-keep') { local.confirmRevoke = null; ctx.render(); return true; }
+    if (name === 'remote-dismiss') { local.reveal = null; ctx.render('#remote-token-label'); return; }
+    if (name === 'remote-revoke') { local.confirmRevoke = button.dataset.token; ctx.render('[data-action="remote-revoke-confirm"]'); return; }
+    if (name === 'remote-revoke-keep') { local.confirmRevoke = null; ctx.render(); return; }
     if (name === 'remote-revoke-confirm') {
       const id = button.dataset.token;
       void perform(() => api.revokeRemoteToken(id), { success: (state) => { local.state = state; local.confirmRevoke = null; toast('Token revoked. It no longer works.'); } });
-      return true;
+      return;
     }
     if (name === 'remote-clear-audit') {
       void perform(() => api.clearRemoteAudit(), { success: (state) => { local.state = state; toast('Remote activity cleared.'); } });
-      return true;
     }
-    return false;
   }
 
   // The plaintext token must not outlive the Settings visit.
   function leave() { local.reveal = null; local.confirmRevoke = null; local.draft = null; }
 
-  window.RemoteSettings = { render, bind, action, load, leave };
+  window.RemoteSettings = { bind, load, leave };
 })();
