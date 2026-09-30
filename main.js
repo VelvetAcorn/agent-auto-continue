@@ -4,7 +4,7 @@ const { app, BrowserWindow, Menu, Notification, Tray, ipcMain, nativeImage, powe
 const { randomUUID } = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
-const { setInterval } = require('node:timers');
+const { setInterval, setTimeout } = require('node:timers');
 const schedule = require('node-schedule');
 const { normaliseConfig, validateSettingsInput } = require('./lib/model');
 const { createApiClient, toErrorInfo } = require('./lib/api-client');
@@ -284,7 +284,14 @@ app.whenReady().then(() => {
   openDashboard();
   if (!token()) openSettings();
   setInterval(() => { if (!storageError) void service.pollTurns().catch(() => {}); }, TURN_POLL_MS).unref?.();
-  app.on('before-quit', () => { void harnesses.shutdown(); });
+  // Give supervised agent turns a bounded chance to stop cleanly before quitting.
+  let harnessesStopped = false;
+  app.on('before-quit', (event) => {
+    if (harnessesStopped) return;
+    event.preventDefault();
+    harnessesStopped = true;
+    void Promise.race([harnesses.shutdown(), new Promise((resolve) => setTimeout(resolve, 6000))]).finally(() => app.quit());
+  });
   powerMonitor.on('resume', () => !storageError && void service.resume().catch(() => notify('Schedule could not be updated', 'Check local disk space and restart the app.')));
   app.on('activate', () => { openDashboard(); void rebuildMenu(); });
 });
