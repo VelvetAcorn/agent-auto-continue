@@ -6,12 +6,13 @@
   "author": "T3 Code users",
   "license": "MIT",
   "scripts": {
-    "start": "electron .",
+    "start": "env -u ELECTRON_RUN_AS_NODE electron .",
     "build": "electron-builder --mac zip",
     "build:dmg": "electron-builder --mac dmg",
     "build:all": "electron-builder",
     "test": "node --test",
-    "test:electron": "electron tools/electron-smoke.cjs"
+    "check:syntax": "node tools/check-syntax.cjs",
+    "test:electron": "env -u ELECTRON_RUN_AS_NODE electron tools/electron-smoke.cjs"
   },
   "dependencies": {
     "node-schedule": "^2.1.1"

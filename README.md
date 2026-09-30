@@ -107,9 +107,7 @@ See [the development plan](docs/development-plan.md) for accepted decisions, pro
 ```sh
 npm test
 npm run test:electron  # safe production-window smoke fixture; no real sends
-node --check main.js
-node --check preload.js
-for file in lib/*.js renderer/*.js; do node --check "$file"; done
+npm run check:syntax  # every script, including nested lib directories
 ```
 
 ## Legacy script

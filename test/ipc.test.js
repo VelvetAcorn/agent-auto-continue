@@ -133,7 +133,7 @@ test('settings persistence failure leaves active configuration unchanged', () =>
 
 
 test('corrupt and future-version schedule files are preserved and block scheduling visibly', () => {
-  for (const rawJobs of ['{"jobs":', JSON.stringify({ version: 3, jobs: [] }), JSON.stringify([{ id: 'invalid-record' }])]) {
+  for (const rawJobs of ['{"jobs":', JSON.stringify({ version: 4, jobs: [] }), JSON.stringify([{ id: 'invalid-record' }])]) {
     const app = appHarness([], { rawJobs });
     assert.equal(app.files.get('/fixture/jobs.json'), rawJobs);
     const state = app.invoke('jobs:list');
