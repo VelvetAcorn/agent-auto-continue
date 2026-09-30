@@ -75,8 +75,9 @@ const injectedElectron = {
   // Real power save blockers; power events stay inert so the fixture never reacts to the host's sleep.
   powerMonitor: { on() {}, isOnBatteryPower: () => electron.powerMonitor.isOnBatteryPower() }
 };
+let mainContext;
 function loadProductionMain() {
-  vm.runInNewContext(fs.readFileSync(path.join(root, 'main.js'), 'utf8'), {
+  mainContext = vm.createContext({
     require(name) {
       if (name === 'electron') return injectedElectron;
       if (name === 'node:fs') return fakeFs;
@@ -84,7 +85,8 @@ function loadProductionMain() {
       if (name === './lib/api-client') return { ...apiModule, createApiClient: options => apiModule.createApiClient({ ...options, fetchImpl: fixtureFetch }) };
       return name.startsWith('./lib/') ? require(path.join(root, name)) : require(name);
     }, __dirname: root, process: { env: { T3_TOKEN: 'fixture-only' }, pid: process.pid }, console, Buffer
-  }, { filename: 'main.js' });
+  });
+  vm.runInContext(fs.readFileSync(path.join(root, 'main.js'), 'utf8'), mainContext, { filename: 'main.js' });
 }
 // The assertions this process holds, as macOS reports them.
 function ownAssertions() {
@@ -287,6 +289,27 @@ async function keepAwakeJourney(js) {
   await capture('keep-awake-stopped');
   await click('#notices [data-action="keep-awake-resume"]');
   await held(['NoDisplaySleepAssertion']);
+  // The production controller reaches its time limit: its clock moves past the deadline.
+  const controller = vm.runInContext('keepAwake', mainContext);
+  const hours = (await js('window.autoContinue.getKeepAwake()')).settings.maxHours;
+  controller.now = () => Date.now() + (hours + 1) * 3_600_000;
+  controller.evaluate();
+  await held([]);
+  await click('[data-nav="upcoming"]');
+  await waitFor(() => js(`document.querySelector('#notices .notice.awake')?.textContent.includes('reached the time limit')`), 'capped notice');
+  const capped = await js(`(() => { const notice = document.querySelector('#notices .notice.awake'); notice.querySelector('details').open = true; return { title: notice.querySelector('strong').textContent, summary: notice.querySelector('summary').textContent, items: [...notice.querySelectorAll('li')].map(item => item.textContent), button: notice.querySelector('button')?.textContent }; })()`);
+  assert.equal(capped.title, 'Your Mac can sleep');
+  assert.equal(capped.summary, '1 task reached the time limit');
+  assert.equal(capped.items.length, 1);
+  assert.match(capped.items[0], /^Production renderer test · Scheduled message waiting to send · starts .* · reached the time limit$/);
+  assert.equal(capped.button, 'Keep awake again');
+  assert.ok(menu.find(item => item.label === 'Keep Mac awake again'), 'Tray offers to override the limit');
+  await js(`document.querySelector('#toast-dismiss')?.click()`);
+  await capture('keep-awake-capped');
+  await click('#notices [data-action="keep-awake-resume"]');
+  await held(['NoDisplaySleepAssertion']);
+  controller.now = () => Date.now();
+  await click('[data-nav="settings"]');
   await click('#ka-enabled');
   await submit();
   await held([]);

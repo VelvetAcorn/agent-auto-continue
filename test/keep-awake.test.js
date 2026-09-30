@@ -623,3 +623,14 @@ test('work deferred at the time limit waits until it is due even after the cappe
   assert.equal(h.controller.snapshot().state, 'armed', 'Due now, so it starts its own session');
   assert.deepEqual(h.power.held(), [SYSTEM_BLOCKER]);
 });
+
+test('the snapshot published at the time limit already lists the work as capped', () => {
+  const h = harness({ tasks: [running()] });
+  h.controller.start();
+  h.advance(12 * HOUR);
+  h.controller.evaluate();
+  const atLimit = h.published.at(-1);
+  assert.equal(atLimit.state, 'ended');
+  assert.deepEqual(atLimit.tasks, [], 'Capped work is not shown as part of a session');
+  assert.deepEqual(atLimit.capped.map((task) => task.id), ['job-1']);
+});

@@ -61,13 +61,16 @@
     const title = holding ? (k.state === 'releasing' ? 'Letting your Mac sleep soon' : `Keeping your Mac awake${k.holding === 'display' ? ' with the display on' : ''}`) : k.state === 'paused' ? 'Keep-awake paused' : 'Your Mac can sleep';
     const limit = holding && k.deadline && k.state !== 'releasing' ? ` Stops by ${escape(display(k.deadline))} at the latest.` : '';
     const capped = k.capped || [];
-    const listed = holding ? k.tasks : k.tasks.concat(capped);
-    const tasks = listed.map(task => `<li><span>${escape(task.label)}</span> · ${escape(task.detail || task.state)}${task.until ? ` · ${task.state === 'waiting' ? 'starts' : 'until'} ${escape(display(task.until))}` : ''}</li>`).join('');
+    const listed = k.tasks.concat(capped);
+    const item = (task, over) => `<li><span>${escape(task.label)}</span> · ${escape(task.detail || task.state)}${task.until ? ` · ${task.state === 'waiting' ? 'starts' : 'until'} ${escape(display(task.until))}` : ''}${over ? ' · reached the time limit' : ''}</li>`;
+    const tasks = k.tasks.map(task => item(task, false)).concat(capped.map(task => item(task, true))).join('');
+    const count = (n) => `${n} ${n === 1 ? 'task' : 'tasks'}`;
+    const summary = [k.tasks.length ? `${count(k.tasks.length)} ${holding ? (k.tasks.length === 1 ? 'needs it' : 'need it') : 'still tracked'}` : '', capped.length ? `${count(capped.length)} reached the time limit` : ''].filter(Boolean).join(' · ');
     const slept = k.lastSleep?.whileHolding && k.since && k.lastSleep.from >= k.since ? `<p>macOS slept anyway from ${escape(display(k.lastSleep.from))} to ${escape(display(k.lastSleep.to))}. Missed schedules catch up after waking.</p>` : '';
     const overLimit = holding && capped.length ? `<p>${capped.length} ${capped.length === 1 ? 'task' : 'tasks'} reached the time limit and no longer ${capped.length === 1 ? 'keeps' : 'keep'} the Mac awake.</p>` : '';
     const unlocked = holding && k.requiresUnlockedScreen ? '<p>A scheduled task drives an app’s interface, so the display stays on. Keep the screen unlocked until it finishes.</p>' : '';
     const button = holding ? '<button type="button" data-action="keep-awake-stop">Let Mac sleep</button>' : k.state === 'ended' && k.ended?.reason !== 'battery-floor' && listed.length ? '<button type="button" data-action="keep-awake-resume">Keep awake again</button>' : '';
-    return `<div class="notice awake${holding ? ' holding' : ''}" role="status"><div><strong>${title}</strong><p>${escape(k.reason)}${limit}</p>${unlocked}${overLimit}${slept}${tasks ? `<details><summary>${listed.length} ${listed.length === 1 ? 'task' : 'tasks'} ${holding ? (listed.length === 1 ? 'needs' : 'need') + ' it' : 'still tracked'}</summary><ul class="awake-tasks">${tasks}</ul></details>` : ''}</div>${button}</div>`;
+    return `<div class="notice awake${holding ? ' holding' : ''}" role="status"><div><strong>${title}</strong><p>${escape(k.reason)}${limit}</p>${unlocked}${overLimit}${slept}${tasks ? `<details><summary>${summary}</summary><ul class="awake-tasks">${tasks}</ul></details>` : ''}</div>${button}</div>`;
   }
   function keepAwakeSettings() {
     const k = state.keepAwake;
