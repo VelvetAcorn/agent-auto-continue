@@ -1,0 +1,55 @@
+#!/usr/bin/env node
+'use strict';
+// Fake `claude` executable for adapter tests. Behaviour is chosen by
+// FAKE_CLAUDE_MODE; every invocation is logged to FAKE_CLAUDE_LOG.
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+const mode = process.env.FAKE_CLAUDE_MODE || 'complete';
+const log = (entry) => { if (process.env.FAKE_CLAUDE_LOG) fs.appendFileSync(process.env.FAKE_CLAUDE_LOG, `${JSON.stringify(entry)}\n`); };
+const emit = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
+const transcript = process.env.FAKE_TRANSCRIPT;
+const append = (value) => fs.appendFileSync(transcript, `${JSON.stringify(value)}\n`);
+
+if (args[0] === 'auth') {
+  log({ args, cwd: process.cwd(), env: Object.keys(process.env) });
+  if (mode === 'auth-garbage') { process.stdout.write('not json'); process.exit(0); }
+  process.stdout.write(JSON.stringify({ loggedIn: mode !== 'signed-out', authMethod: 'claude.ai' }));
+  process.exit(0);
+}
+
+let input = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (chunk) => { input += chunk; });
+process.stdin.on('end', () => {
+  const message = JSON.parse(input.trim().split('\n')[0]);
+  const session = args[args.indexOf('--resume') + 1];
+  log({ args, cwd: process.cwd(), env: Object.keys(process.env), input: message, pid: process.pid });
+  const stamp = (offset = 0) => new Date(Date.now() + offset).toISOString();
+  const record = (extra) => ({ sessionId: session, cwd: process.cwd(), timestamp: stamp(), isSidechain: false, ...extra });
+  emit({ type: 'system', subtype: 'init', session_id: session, permissionMode: 'manual' });
+  if (mode === 'no-auth') {
+    emit({ type: 'result', subtype: 'success', is_error: true, result: 'Not logged in · Please run /login', session_id: session });
+    process.exit(1);
+  }
+  if (mode === 'crash') process.exit(2);
+  if (mode === 'hang') { setInterval(() => {}, 1000); return; }
+  append(record({ type: 'user', uuid: message.uuid, message: message.message, promptSource: 'sdk' }));
+  if (mode !== 'slow-ack') emit({ ...message, session_id: session });
+  const finish = () => {
+    if (mode === 'limit') {
+      append(record({ type: 'assistant', uuid: 'a-limit', isApiErrorMessage: true, error: 'rate_limit', message: { role: 'assistant', content: [{ type: 'text', text: "You've hit your limit · resets 3pm (UTC)" }] } }));
+      emit({ type: 'assistant', error: 'rate_limit', session_id: session, message: { content: [{ type: 'text', text: "You've hit your limit · resets 3pm (UTC)" }] } });
+      emit({ type: 'result', subtype: 'success', is_error: true, result: "You've hit your limit · resets 3pm (UTC)", session_id: session });
+      process.exit(1);
+    }
+    append(record({ type: 'assistant', uuid: 'a-done', message: { role: 'assistant', stop_reason: 'end_turn', content: [{ type: 'text', text: 'Done.' }] } }));
+    emit({ type: 'result', subtype: 'success', is_error: false, result: 'Done.', session_id: session });
+    process.exit(0);
+  };
+  if (mode === 'long') {
+    process.on('SIGINT', () => { emit({ type: 'result', subtype: 'error_during_execution', is_error: true, result: 'Interrupted', session_id: session }); process.exit(130); });
+    setInterval(() => {}, 1000);
+    return;
+  }
+  setTimeout(finish, mode === 'slow-ack' ? 2000 : 20);
+});

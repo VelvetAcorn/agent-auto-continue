@@ -143,6 +143,7 @@ Version 2 files and legacy arrays load unchanged apart from the added `harness` 
 Older app versions refuse version 3 files without changing them, rather than sending another harness's conversation ID to T3 Code.
 
 Before sending, the job service inspects the conversation, cancels on archive or newer user activity, and fails without sending when `probeAvailability()` reports a limit whose reset time is still in the future.
+A limit without a reset time blocks only when its `source` is `reported`; an inferred limit without a reset time is sent, and the turn outcome records the limit if it still applies.
 That failure has error code `usage_limited`, `deliveryCertainty: 'not-delivered'`, and `error.details.resetsAt`, so Schedule again remains available.
 For adapters with `canDetectCompletion`, a sent job carries `turn: { state, turnId, completedAt, error, usageLimit, updatedAt }`.
 The main process calls `service.pollTurns()` every 30 seconds, and a `completion` promise records the outcome immediately.

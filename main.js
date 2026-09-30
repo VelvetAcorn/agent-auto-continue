@@ -80,7 +80,7 @@ function token() {
 
 const api = createApiClient({ getConfig: () => config, getToken: token });
 // Adapters read their settings lazily so a Settings change applies to the next operation.
-const harnesses = createHarnesses({ api, getSettings: (id) => resolveHarnessSettings(harnesses.get(id), config.harnesses?.[id], process.env) });
+const harnesses = createHarnesses({ api, clientVersion: app.getVersion?.(), getSettings: (id) => resolveHarnessSettings(harnesses.get(id), config.harnesses?.[id], process.env) });
 
 function harnessFor(id) {
   return harnesses.get(id === undefined || id === null || id === '' ? DEFAULT_HARNESS : id);

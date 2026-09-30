@@ -183,6 +183,18 @@ test('a reported usage limit fails before sending and remains schedulable again'
   assert.equal(h.service.scheduleAgain(job.id).harness, 'fake');
 });
 
+test('a limit without a reset time blocks only when the harness reported it', async () => {
+  for (const [source, expected] of [['reported', 'failed'], ['inferred', 'sent']]) {
+    const fake = createFakeHarness({ conversations: [{ id: 'conv' }] });
+    const h = service([fake.adapter]);
+    const job = await h.service.create(input('fake'));
+    fake.state.availability = { state: 'limited', resetsAt: null, reason: 'Limit', source };
+    h.setClock(70_000);
+    await h.service.run(job.id);
+    assert.equal(h.service.get(job.id).status, expected, source);
+  }
+});
+
 test('an expired limit does not block delivery', async () => {
   const fake = createFakeHarness({ conversations: [{ id: 'conv' }] });
   const h = service([fake.adapter]);

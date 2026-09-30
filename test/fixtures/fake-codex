@@ -1,0 +1,76 @@
+#!/usr/bin/env node
+'use strict';
+// Fake `codex app-server` for adapter tests: JSON-RPC 2.0 over stdio backed by
+// a JSON state file (FAKE_CODEX_STATE). Requests are logged to FAKE_CODEX_LOG.
+const fs = require('node:fs');
+const readline = require('node:readline');
+const statePath = process.env.FAKE_CODEX_STATE;
+const mode = process.env.FAKE_CODEX_MODE || 'complete';
+const load = () => JSON.parse(fs.readFileSync(statePath, 'utf8'));
+const save = (state) => fs.writeFileSync(statePath, JSON.stringify(state));
+const log = (entry) => { if (process.env.FAKE_CODEX_LOG) fs.appendFileSync(process.env.FAKE_CODEX_LOG, `${JSON.stringify(entry)}\n`); };
+const send = (value) => process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', ...value })}\n`);
+if (process.argv[2] !== 'app-server') { process.stderr.write('unsupported command\n'); process.exit(2); }
+log({ start: true, cwd: process.cwd(), env: Object.keys(process.env) });
+const waiting = new Map();
+let serverRequest = 1000;
+function ask(method, params) {
+  const id = ++serverRequest;
+  send({ id, method, params });
+  return new Promise((resolve) => waiting.set(id, resolve));
+}
+async function runTurn(threadId, turnId) {
+  const decisions = [];
+  if (mode === 'approval') {
+    decisions.push(await ask('item/commandExecution/requestApproval', { threadId, turnId, command: 'rm -rf build' }));
+    decisions.push(await ask('item/tool/requestUserInput', { threadId, turnId }));
+  }
+  if (mode === 'long') return;
+  const state = load();
+  const turn = state.threads[threadId].turns.find((item) => item.id === turnId);
+  turn.status = mode === 'limit' ? 'failed' : 'completed';
+  turn.completedAt = Math.floor(Date.now() / 1000);
+  if (mode === 'limit') turn.error = { message: "You've hit your usage limit.", codexErrorInfo: 'usageLimitExceeded' };
+  state.decisions = decisions;
+  save(state);
+  send({ method: 'turn/completed', params: { threadId, turn } });
+}
+readline.createInterface({ input: process.stdin }).on('line', (line) => {
+  const message = JSON.parse(line);
+  if (message.id !== undefined && message.method === undefined) { waiting.get(message.id)?.(message.result ?? { error: message.error }); return; }
+  if (message.id === undefined) return;
+  log({ method: message.method, params: message.params });
+  const state = load();
+  const reply = (result) => send({ id: message.id, result });
+  const fail = (code, text) => send({ id: message.id, error: { code, message: text } });
+  const thread = state.threads[message.params?.threadId];
+  switch (message.method) {
+    case 'initialize': return reply({ userAgent: 'fake', codexHome: '/tmp', platformOs: 'macos' });
+    case 'account/read': return reply(state.account);
+    case 'account/rateLimits/read': return reply(state.rateLimits);
+    case 'thread/list': return reply({ data: Object.values(state.threads).map(({ turns, ...rest }) => rest), nextCursor: null });
+    case 'thread/read': return thread ? reply({ thread: (({ turns, ...rest }) => rest)(thread) }) : fail(-32600, `thread/read failed: no rollout found for thread id ${message.params.threadId}`);
+    case 'thread/turns/list': return thread ? reply({ data: [...thread.turns].reverse().slice(0, message.params.limit), nextCursor: null }) : fail(-32600, 'no rollout found');
+    case 'thread/resume': return thread ? reply({ thread: (({ turns, ...rest }) => rest)(thread) }) : fail(-32600, 'thread/resume failed: no rollout found');
+    case 'turn/interrupt': {
+      const turn = thread.turns.find((item) => item.id === message.params.turnId);
+      turn.status = 'interrupted';
+      save(state);
+      reply({});
+      return send({ method: 'turn/completed', params: { threadId: message.params.threadId, turn } });
+    }
+    case 'turn/start': {
+      if (mode === 'reject') return fail(-32602, 'Invalid request: thread is busy');
+      const turn = { id: `turn-${thread.turns.length + 1}`, status: 'inProgress', startedAt: Math.floor(Date.now() / 1000), completedAt: null, error: null,
+        items: [{ type: 'userMessage', id: `item-${thread.turns.length + 1}`, clientId: message.params.clientUserMessageId ?? null, content: message.params.input }] };
+      thread.turns.push(turn);
+      save(state);
+      if (mode === 'crash') process.exit(3);
+      reply({ turn: { ...turn, items: [] } });
+      send({ method: 'turn/started', params: { threadId: thread.id, turn } });
+      setTimeout(() => void runTurn(thread.id, turn.id), 20);
+      return undefined;
+    }
+    default: return fail(-32601, 'Method not found');
+  }
+});
