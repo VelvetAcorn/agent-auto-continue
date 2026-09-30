@@ -2,6 +2,7 @@
 (() => {
   const api = window.autoContinue;
   const time = window.SchedulerTime;
+  const sticker = window.SupportStar;
   const app = document.getElementById('app');
   const $ = (selector) => document.querySelector(selector);
   const escape = (value) => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]));
@@ -20,6 +21,10 @@
   const listContexts = new Map();
   function saveListContext(){if(['upcoming','history','threads'].includes(state.view)&&!state.picking)listContexts.set(state.view,{search:state.search,scroll:window.scrollY});}
   const mediaTheme = matchMedia('(prefers-color-scheme: dark)');
+  const mediaMotion = matchMedia('(prefers-reduced-motion: reduce)');
+  // The sticker's phrase and spin live outside the DOM so re-renders never reset or stutter it.
+  const starState = { phrase: '', spin: sticker.idle(performance.now()), frame: 0, held: false, layouts: new Map() };
+  let measureContext;
   const cleanup = [];
   const draft = () => state.drafts.get(state.draftKey);
   function newDraft(threadId = '', message = 'Continue', zone = localZone) {
@@ -74,6 +79,7 @@
       const replacement = document.getElementById(activeId); replacement.focus();
       if (selection && replacement.setSelectionRange && !['number','checkbox'].includes(replacement.type)) replacement.setSelectionRange(...selection);
     } else if(activeData) app.querySelector('[data-'+activeData[0]+'="'+CSS.escape(activeData[1])+'"]')?.focus();
+    syncStar();
   }
   function jobList() {
     const history = state.view === 'history';
@@ -134,9 +140,47 @@
     return `<section class="card panel"><div class="detail-header"><span class="overline">${escape(job.projectName || job.projectId || 'T3 Code')}</span>${pill(job.deliveryStatus || job.status)}</div><h2>${escape(job.threadTitle || job.threadId)}</h2><p class="message">${escape(job.message)}</p><dl class="key-values"><dt>Requested time</dt><dd>${escape(display(job.scheduleAt, zone))}</dd><dt>Effective send time</dt><dd>${escape(display(job.effectiveAt, zone, true))}</dd><dt>Timezone</dt><dd>${escape(zone)}${job.timeZone ? '' : ' (legacy record)'}</dd><dt>Safety buffer</dt><dd>${job.bufferSeconds} seconds</dd><dt>Last updated</dt><dd>${escape(display(job.updatedAt || job.createdAt || job.scheduleAt, zone))}</dd>${job.lateBySeconds > 0 ? `<dt>Catch-up delay</dt><dd>${job.lateBySeconds} seconds</dd>` : ''}</dl>${['failed','unconfirmed'].includes(status) ? `<div class="error-detail"><h3>${status === 'unconfirmed' ? 'Check delivery before trying again' : 'This message could not be delivered'}</h3><p>${escape(job.error?.message || job.note)}</p>${technical(job.error)}${job.lastReconciledAt ? `<p>Last checked: ${escape(display(job.lastReconciledAt, zone))}. ${status === 'unconfirmed' ? 'Delivery is still unconfirmed. No resend was attempted.' : ''}</p>` : ''}<div class="actions"><button type="button" data-action="ack" ${job.acknowledgedAt ? 'disabled' : ''}>${job.acknowledgedAt ? 'Acknowledged ✓' : 'Acknowledge'}</button><button type="button" class="ghost" data-nav="settings">Connection settings</button></div></div>` : status === 'sent' ? '<p class="help">T3 Code accepted the message. This does not confirm that the agent completed its work.</p>' : job.note ? `<p class="help">${escape(job.note)}</p>` : ''}<div class="actions">${status === 'pending' ? '<button type="button" class="primary" data-action="edit">Edit schedule</button><button type="button" class="ghost danger" data-action="cancel">Cancel schedule</button>' : status === 'unconfirmed' ? '<button type="button" class="primary" data-action="reconcile">Check delivery</button>' : status !== 'dispatching' ? '<button type="button" class="primary" data-action="again">Schedule again</button>' : '<p class="help">Sending has started. This message can no longer be changed or canceled.</p>'}</div>${state.confirmCancel ? '<div class="confirm" role="group" aria-label="Confirm cancellation"><p>Cancel this scheduled message? The record will remain in History.</p><button type="button" class="danger" data-action="confirm-cancel">Cancel message</button> <button type="button" class="ghost" data-action="keep">Keep schedule</button></div>' : ''}</section>`;
   }
   function star() {
+    if (!starState.phrase) starState.phrase = sticker.pickPhrase(sticker.STICKER_PHRASES);
     const points = Array.from({length:32},(_,index) => { const angle=index*Math.PI/16, radius=index%2 ? 39.5 : 50; return `${50+radius*Math.sin(angle)},${50-radius*Math.cos(angle)}`; }).join(' ');
-    return `<div class="star" role="img" aria-label="Support"><svg viewBox="-3 -3 106 106" aria-hidden="true"><polygon points="${points}" fill="#D3A065" stroke="var(--outline)" stroke-width="2.5"/></svg><span aria-hidden="true">Support</span></div>`;
+    return `<button type="button" class="star" id="support-star" aria-label="Shuffle sticker phrase" aria-describedby="star-phrase"><svg viewBox="-3 -3 106 106" aria-hidden="true"><polygon points="${points}" fill="#D3A065" stroke="var(--outline)" stroke-width="2.5"/></svg><span class="star-text" aria-hidden="true">${starLines()}</span><span id="star-phrase" hidden>${escape(starState.phrase)}</span></button><span id="star-status" class="sr-only" role="status"></span>`;
   }
+  function starLayout(phrase) {
+    if (!starState.layouts.has(phrase)) {
+      if (!measureContext) { measureContext = document.createElement('canvas').getContext('2d'); measureContext.font = '900 100px Georgia, serif'; }
+      starState.layouts.set(phrase, sticker.layoutPhrase(phrase, text => measureContext.measureText(text).width / 100));
+    }
+    return starState.layouts.get(phrase);
+  }
+  const starLines = () => starLayout(starState.phrase).lines.map(line => `<span>${escape(line)}</span>`).join('');
+  const starMoves = () => !state.reduceMotion && !mediaMotion.matches;
+  function paintStar(now) {
+    const shape = document.querySelector('#support-star polygon');
+    if (shape) shape.style.transform = `rotate(${sticker.sample(starState.spin, now).angle.toFixed(3)}deg)`;
+    return Boolean(shape);
+  }
+  function starFrame(now) { starState.frame = 0; if (!starMoves()) syncStar(); else if (paintStar(now)) starState.frame = requestAnimationFrame(starFrame); }
+  // Runs after every render and motion change: sizes the text, keeps the angle continuous and owns the frame loop.
+  function syncStar() {
+    const button = $('#support-star'), now = performance.now();
+    if (!button) { cancelAnimationFrame(starState.frame); starState.frame = 0; if (starState.held) { starState.held = false; starState.spin = sticker.release(starState.spin, now, false); } return; }
+    button.querySelector('.star-text').style.setProperty('--fit', starLayout(starState.phrase).size.toFixed(4));
+    if (!starMoves() && starState.spin.kind !== 'still') { starState.held = false; starState.spin = sticker.freeze(starState.spin, now); }
+    else if (starMoves() && starState.spin.kind === 'still') starState.spin = sticker.release(starState.spin, now, false);
+    paintStar(now);
+    if (starMoves() && !starState.frame) starState.frame = requestAnimationFrame(starFrame);
+    if (!starMoves()) { cancelAnimationFrame(starState.frame); starState.frame = 0; }
+  }
+  function holdStar() { if (!starMoves() || starState.held) return; starState.held = true; starState.spin = sticker.press(starState.spin, performance.now()); }
+  function spinStar() {
+    starState.held = false;
+    if (starMoves()) starState.spin = sticker.release(starState.spin, performance.now(), true);
+    starState.phrase = sticker.pickPhrase(sticker.STICKER_PHRASES, starState.phrase);
+    const text = document.querySelector('#support-star .star-text');
+    if (text) { text.innerHTML = starLines(); $('#star-phrase').textContent = starState.phrase; $('#star-status').textContent = starState.phrase; }
+    syncStar();
+  }
+  // A press that ends without a click (dragged away, cancelled, window blurred) eases back to the idle spin.
+  function letGoStar() { setTimeout(() => { if (!starState.held) return; starState.held = false; starState.spin = sticker.release(starState.spin, performance.now(), false); }); }
   function settings() {
     if (!state.settings) return '<p>Loading settings…</p>';
     if (!state.settingsDraft) state.settingsDraft = { t3Token: '', httpPort: state.settings.httpPort, bufferSeconds: state.settings.bufferSeconds };
@@ -146,6 +190,7 @@
   function navigate(view, restore = false) {
     saveListContext();
     const context = restore ? listContexts.get(view) : null;
+    if (view === 'settings' && state.view !== 'settings') starState.phrase = sticker.pickPhrase(sticker.STICKER_PHRASES, starState.phrase);
     state.picking = false; state.actionError = ''; state.confirmCancel = false; state.search = context?.search || ''; state.view = view;
     render('h1');
     window.scrollTo(0,context?.scroll || 0);
@@ -202,6 +247,8 @@
     if($('#settings-form'))$('#settings-form').onsubmit=event=>{event.preventDefault();void perform(()=>api.saveSettings({...state.settingsDraft}),{errorTarget:'#settings-error',success:async()=>{state.settings=await api.getSettings();state.settingsDraft=null;toast('Settings saved.');void refreshThreads();}});};
     if($('#theme'))$('#theme').onchange=event=>{state.theme=event.target.value;savePreferences();render('#theme');};
     if($('#motion'))$('#motion').onchange=event=>{state.reduceMotion=event.target.checked;savePreferences();render('#motion');};
+    const starButton=$('#support-star');
+    if(starButton){starButton.onpointerdown=event=>{if(event.isPrimary&&event.button===0)holdStar();};starButton.onkeydown=event=>{if(event.key==='Enter'&&event.repeat)event.preventDefault();if(event.key===' '&&!event.repeat)holdStar();};starButton.onclick=spinStar;}
   }
   function savePreferences(){try{localStorage.setItem('scheduler-theme',state.theme);localStorage.setItem('scheduler-motion',state.reduceMotion?'reduce':'system');}catch{/* Cosmetic preferences can remain session-only. */}}
   function action(name) {
@@ -265,7 +312,9 @@
   const onFocus=()=>{if(Date.now()-lastRefresh>10000){void refreshThreads();void refreshJobs();}};
   window.addEventListener('focus',onFocus);
   const onTheme=()=>{if(state.theme==='system')render();};mediaTheme.addEventListener('change',onTheme);
-  window.addEventListener('beforeunload',()=>{stopped=true;clearTimeout(timer);clearTimeout(toastTimer);cleanup.forEach(unsubscribe=>unsubscribe?.());window.removeEventListener('focus',onFocus);mediaTheme.removeEventListener('change',onTheme);});
+  mediaMotion.addEventListener('change',syncStar);
+  const starReleases=['pointerup','pointercancel','keyup','blur'];starReleases.forEach(type=>window.addEventListener(type,letGoStar));
+  window.addEventListener('beforeunload',()=>{stopped=true;clearTimeout(timer);clearTimeout(toastTimer);cancelAnimationFrame(starState.frame);cleanup.forEach(unsubscribe=>unsubscribe?.());window.removeEventListener('focus',onFocus);mediaTheme.removeEventListener('change',onTheme);mediaMotion.removeEventListener('change',syncStar);starReleases.forEach(type=>window.removeEventListener(type,letGoStar));});
   async function poll(){if(stopped)return;await Promise.allSettled([refreshThreads(),refreshJobs()]);document.querySelectorAll('[data-relative]').forEach(node=>{node.textContent=node.dataset.relative?relative(node.dataset.relative):'';});timer=setTimeout(poll,state.online===false?60000:30000);}
   render();
   void api.getSettings().then(settings=>{state.settings=settings;state.storageError=settings.storageError||state.storageError;for(const item of state.drafts.values())if(!item.editId)item.bufferSeconds=settings.bufferSeconds;if(!state.drafts.has('new'))state.drafts.set('new',newDraft());if(state.view==='settings'||state.view==='composer')render();}).catch(error=>{state.actionError=errorMessage(error);render();});
