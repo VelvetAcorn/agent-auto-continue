@@ -1,5 +1,9 @@
 .DS_Store
 *.png
+# Design review evidence and prototype screenshots are committed on purpose.
+!docs/ui-review/screens/*.png
+!design/mockups/screenshots/*.png
+!design/mockups/fable-pass/shots/*.png
 dist/
 node_modules/
 .npm/

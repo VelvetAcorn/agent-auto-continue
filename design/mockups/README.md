@@ -48,3 +48,31 @@ This is a design prototype, not production scheduling/date infrastructure. Calen
 - Checked empty and offline scenarios and theme switching.
 
 Fourth-direction verification: created a message using Tomorrow, confirmed it returned to Upcoming with an updated count, and inspected empty/offline states. The fixed sample clock applies to all four directions.
+
+## Feature prototypes 05-08 (issue #6)
+
+These explore how the planned features fit into Paper / Focus: several agents (#2), auto-start with turn limits and continuous mode (#3), phone control (#4) and keep-awake (#5).
+They were built after a hands-on review of the shipped app; see [the UI review](../../docs/ui-review.md) for findings, the evaluation of the Fable pass and the decisions to approve.
+
+- **05 Board** (`?concept=board`, recommended): tasks grouped by Needs you, Running, Waiting and Done, with a keep-awake session card, agent status strip, grouped thread picker, the two-question composer and plan sentence, Agents with capability tables, History and Settings for keep-awake and phone access.
+- **06 Queue+** (`?concept=queue`): the alternative that keeps today's time-ordered Upcoming list and adds the same features, with Needs you as a notice.
+- **07 Phone** (`?concept=phone`): the trimmed board served on the private network, with Mac receipts and an unreachable state.
+- **08 Menu bar** (`?concept=tray`): tray icon states and menu.
+
+The dark studio bar at the top holds prototype-only controls for each open design choice.
+Options marked "rec." are the recommendation.
+Every control is also a URL parameter (`scenario`, `words`, `awake`, `composer`, `picker`, `theme`, `view`, `task`, `agent`, `when`, `far`, `turns`, `max`, `stops`, `pairing`, `add`), so any state can be linked directly.
+Scenarios cover a busy evening, something going wrong (a missed start while the Mac slept, an agent not running, a desktop agent that needs the screen), the next morning's report and an empty board.
+
+The feature prototypes use a **fixed sample clock of 2026-09-30 22:40 BST** instead of 14:00, because these features are about work that runs overnight.
+They load `features.css`, a self-contained copy of the production tokens with the review's contrast and alignment fixes applied, instead of `style.css`.
+Agent names, capabilities and availability sources are illustrative; each integration's real capabilities must be verified before implementation.
+
+`fable-pass/` holds the independent concept sketches and written suggestions from a Fable 5.1 design pass, kept for reference and credit.
+Ideas adopted from it are credited in the review.
+
+### Screenshots
+
+`screenshots/` holds full-page captures of 05-08 in light and Bone Outline themes at 1180, 620 and 420 pixels wide.
+Regenerate them from the repository root with `env -u ELECTRON_RUN_AS_NODE npx electron design/mockups/capture.cjs`.
+Committed copies were reduced to 256 colours to keep the repository small.
