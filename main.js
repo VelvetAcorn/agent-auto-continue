@@ -5,27 +5,24 @@ const { randomUUID } = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const schedule = require('node-schedule');
-const {
-  buildTurnStartCommand,
-  findLatestUserTurnAt,
-  hasMessageId,
-  normaliseConfig,
-  readJobs,
-  validateSettingsInput,
-  validateScheduleInput
-} = require('./lib/model');
+const { normaliseConfig, validateSettingsInput } = require('./lib/model');
+const { createApiClient, toErrorInfo } = require('./lib/api-client');
+const { JobService } = require('./lib/job-service');
+const { normaliseThreads } = require('./lib/threads');
 
 const APP_NAME = 'T3 Code Auto-Continue';
 const DEFAULT_CONFIG = { t3Token: '', httpPort: 3773, bufferSeconds: 5 };
-const jobTimers = new Map();
-const runningJobs = new Set();
 let config = { ...DEFAULT_CONFIG };
-let jobs = [];
+let service;
+let storageError;
 let tray;
-let settingsWindow;
 let dashboardWindow;
+let dashboardReady = false;
+let pendingNavigation;
+let menuRevision = 0;
 
-if (!app.requestSingleInstanceLock()) app.quit();
+const ownsInstance = app.requestSingleInstanceLock();
+if (!ownsInstance) app.quit();
 
 function dataPath(file) {
   return path.join(app.getPath('userData'), file);
@@ -35,8 +32,8 @@ function readJson(file, fallback) {
   try {
     return JSON.parse(fs.readFileSync(file, 'utf8'));
   } catch (error) {
-    if (error.code !== 'ENOENT') console.warn(`Could not read ${path.basename(file)}:`, error.message);
-    return fallback;
+    if (error.code === 'ENOENT') return fallback;
+    throw new Error(`The local ${path.basename(file)} file could not be read. Restore or repair it before restarting. Existing data has not been changed.`);
   }
 }
 
@@ -49,138 +46,45 @@ function writeJson(file, value) {
 
 function loadState() {
   config = normaliseConfig(readJson(dataPath('config.json'), DEFAULT_CONFIG));
-  jobs = readJobs(readJson(dataPath('jobs.json'), []));
+  service = new JobService({
+    jobs: readJson(dataPath('jobs.json'), []), bufferSeconds: config.bufferSeconds, api,
+    persist: (state) => writeJson(dataPath('jobs.json'), state),
+    scheduleTimer: (when, callback) => schedule.scheduleJob(when, callback),
+    onChange: () => {
+      for (const window of BrowserWindow.getAllWindows()) window.webContents.send('jobs:changed');
+      void rebuildMenu();
+    },
+    notify: (title, body) => notify(title, body)
+  });
 }
 
-function saveConfig() {
-  writeJson(dataPath('config.json'), config);
+function saveConfig(value = config) {
+  writeJson(dataPath('config.json'), value);
 }
 
-function saveJobs() {
-  writeJson(dataPath('jobs.json'), jobs);
+function ensureStorage() {
+  if (storageError) throw new Error(storageError.message);
+}
+
+function publicSettings() {
+  return { storageError, httpPort: config.httpPort, bufferSeconds: config.bufferSeconds, hasStoredToken: Boolean(config.t3Token), usingEnvironmentToken: Boolean(process.env.T3_TOKEN) };
 }
 
 function token() {
   return (process.env.T3_TOKEN || config.t3Token).trim();
 }
 
-function apiBase() {
-  return `http://127.0.0.1:${config.httpPort}/api/orchestration`;
-}
-
-async function apiRequest(endpoint, options = {}) {
-  const credential = token();
-  if (!credential) throw new Error('Add a T3 token in Settings or set T3_TOKEN before starting the app.');
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 10_000);
-  try {
-    const response = await fetch(`${apiBase()}/${endpoint}`, {
-      ...options,
-      signal: controller.signal,
-      headers: {
-        Accept: 'application/json',
-        Authorization: `Bearer ${credential}`,
-        ...(options.body ? { 'Content-Type': 'application/json' } : {}),
-        ...options.headers
-      }
-    });
-    const body = await response.text();
-    if (!response.ok) throw new Error(`${response.status} ${body.slice(0, 350) || response.statusText}`);
-    return body ? JSON.parse(body) : null;
-  } catch (error) {
-    if (error.name === 'AbortError') throw new Error('T3 Code did not respond within 10 seconds.');
-    throw error;
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-function fetchSnapshot() {
-  return apiRequest('snapshot');
-}
-
-function fetchThread(threadId) {
-  return apiRequest(`threads/${encodeURIComponent(threadId)}?turnLimit=200`);
-}
-
-function snapshotThreads(snapshot) {
-  const candidates = [snapshot?.threads, snapshot?.model?.threads, snapshot?.data?.threads];
-  return candidates.find(Array.isArray) || [];
-}
-
-function threadDetails(snapshot) {
-  return snapshot?.thread || snapshot?.data?.thread || snapshot;
-}
+const api = createApiClient({ getConfig: () => config, getToken: token });
 
 function dateLabel(iso) {
-  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(iso));
+  return new Date(iso).toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
 }
 
 function notify(title, body) {
-  if (Notification.isSupported()) new Notification({ title, body }).show();
-}
-
-function updateJob(job, patch) {
-  Object.assign(job, patch, { updatedAt: new Date().toISOString() });
-  saveJobs();
-  void rebuildMenu();
-}
-
-function cancelTimer(jobId) {
-  const timer = jobTimers.get(jobId);
-  if (timer) timer.cancel();
-  jobTimers.delete(jobId);
-}
-
-function fireTime(job) {
-  return new Date(new Date(job.scheduleAt).valueOf() + config.bufferSeconds * 1_000);
-}
-
-function scheduleJob(job) {
-  cancelTimer(job.id);
-  if (job.status !== 'pending') return;
-  const planned = fireTime(job);
-  const when = planned.valueOf() <= Date.now() ? new Date(Date.now() + 250) : planned;
-  const timer = schedule.scheduleJob(when, () => void runJob(job.id));
-  jobTimers.set(job.id, timer);
-}
-
-async function runJob(jobId) {
-  if (runningJobs.has(jobId)) return;
-  const job = jobs.find((candidate) => candidate.id === jobId);
-  if (!job || job.status !== 'pending') return;
-  runningJobs.add(jobId);
-  cancelTimer(jobId);
-  updateJob(job, { status: 'dispatching', note: 'Checking thread before dispatch' });
-
-  try {
-    const snapshot = await fetchThread(job.threadId);
-    const thread = threadDetails(snapshot);
-    if (!thread || thread.archivedAt) {
-      updateJob(job, { status: 'canceled', note: 'Thread is missing or archived' });
-      notify(APP_NAME, `Canceled: ${job.message} (thread is no longer available).`);
-      return;
-    }
-    if (hasMessageId(snapshot, job.messageId)) {
-      updateJob(job, { status: 'sent', note: 'Message was already present in the thread' });
-      return;
-    }
-    const latestUserTurn = findLatestUserTurnAt(thread);
-    if (latestUserTurn && latestUserTurn.valueOf() > new Date(job.scheduleAt).valueOf()) {
-      updateJob(job, { status: 'canceled', note: 'A newer user turn already exists' });
-      notify(APP_NAME, `Canceled: ${job.message} (the thread has newer user activity).`);
-      return;
-    }
-
-    await apiRequest('dispatch', { method: 'POST', body: JSON.stringify(buildTurnStartCommand(job, thread)) });
-    updateJob(job, { status: 'sent', note: 'Message delivered', dispatchedAt: new Date().toISOString() });
-    notify(APP_NAME, `“${job.message}” was sent.`);
-  } catch (error) {
-    updateJob(job, { status: 'failed', note: error.message });
-    notify(APP_NAME, `Could not send “${job.message}”: ${error.message}`);
-  } finally {
-    runningJobs.delete(jobId);
-  }
+  if (!Notification.isSupported()) return;
+  const notification = new Notification({ title, body });
+  notification.on('click', () => openDashboard({ view: 'history' }));
+  notification.show();
 }
 
 function makeTrayIcon() {
@@ -191,66 +95,58 @@ function makeTrayIcon() {
 }
 
 function openScheduleWindow(threadId, threadLabel) {
-  const window = new BrowserWindow({
-    width: 460,
-    height: 390,
-    resizable: false,
-    title: 'Schedule a message',
-    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true }
-  });
-  window.removeMenu();
-  window.loadFile(path.join(__dirname, 'ui.html'));
-  window.webContents.once('did-finish-load', () => window.webContents.send('schedule:init', { threadId, threadLabel, bufferSeconds: config.bufferSeconds }));
+  openDashboard({ view: 'composer', threadId, threadLabel });
 }
 
 function openSettings() {
-  if (settingsWindow && !settingsWindow.isDestroyed()) {
-    settingsWindow.focus();
-    return;
-  }
-  settingsWindow = new BrowserWindow({
-    width: 460,
-    height: 410,
-    resizable: false,
-    title: 'T3 Code Auto-Continue Settings',
-    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true }
-  });
-  settingsWindow.removeMenu();
-  settingsWindow.loadFile(path.join(__dirname, 'settings.html'));
-  settingsWindow.on('closed', () => { settingsWindow = undefined; });
+  openDashboard({ view: 'settings' });
 }
 
-function openDashboard() {
+function openDashboard(route) {
+  if (route) pendingNavigation = route;
   if (dashboardWindow && !dashboardWindow.isDestroyed()) {
+    if (dashboardWindow.isMinimized?.()) dashboardWindow.restore();
+    dashboardWindow.show?.();
     dashboardWindow.focus();
+    if (dashboardReady && pendingNavigation) {
+      dashboardWindow.webContents.send('app:navigate', pendingNavigation);
+      pendingNavigation = undefined;
+    }
     return;
   }
+  dashboardReady = false;
+  pendingNavigation ||= { view: 'upcoming' };
   dashboardWindow = new BrowserWindow({
-    width: 560,
-    height: 560,
-    minWidth: 480,
-    minHeight: 420,
+    width: 1180,
+    height: 800,
+    minWidth: 620,
+    minHeight: 560,
     title: APP_NAME,
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true }
   });
   dashboardWindow.removeMenu();
+  dashboardWindow.webContents.setWindowOpenHandler?.(() => ({ action: 'deny' }));
+  dashboardWindow.webContents.on?.('will-navigate', (event) => event.preventDefault());
+  dashboardWindow.webContents.once('did-finish-load', () => {
+    dashboardReady = true;
+    if (pendingNavigation) dashboardWindow.webContents.send('app:navigate', pendingNavigation);
+    pendingNavigation = undefined;
+  });
   dashboardWindow.loadFile(path.join(__dirname, 'dashboard.html'));
-  dashboardWindow.on('closed', () => { dashboardWindow = undefined; });
+  dashboardWindow.on('closed', () => { dashboardWindow = undefined; dashboardReady = false; });
 }
 
-async function activeThreads() {
-  const threads = snapshotThreads(await fetchSnapshot())
-    .filter((thread) => thread && typeof thread.id === 'string' && !thread.archivedAt)
-    .map((thread) => ({ id: thread.id, title: thread.title || '(Untitled thread)', projectId: thread.projectId || '' }));
-  return threads;
+async function activeThreads(options) {
+  return normaliseThreads(await api.fetchSnapshot(), options);
 }
 
 function activeJobs() {
-  return jobs.filter((job) => job.status === 'pending' || job.status === 'dispatching');
+  return service?.jobs.filter((job) => job.status === 'pending' || job.status === 'dispatching') || [];
 }
 
 async function rebuildMenu() {
   if (!tray) return;
+  const revision = ++menuRevision;
   let threadItems = [];
   let connectionLabel = `T3 Code on port ${config.httpPort}`;
   try {
@@ -268,21 +164,24 @@ async function rebuildMenu() {
 
   const pending = activeJobs();
   const jobItems = pending.length ? pending.map((job) => ({
-    label: `${job.message} — ${dateLabel(job.scheduleAt)}${job.status === 'dispatching' ? ' (sending)' : ''}`,
-    submenu: [{
+    label: `${job.message} — ${dateLabel(service.present(job).effectiveAt)}${job.status === 'dispatching' ? ' (sending)' : ''}`,
+    submenu: [{ label: 'View schedule', click: () => openDashboard({ view: 'upcoming', jobId: job.id }) }, {
       label: 'Cancel',
       enabled: job.status === 'pending',
       click: () => {
-        cancelTimer(job.id);
-        updateJob(job, { status: 'canceled', note: 'Canceled by user' });
+        try { ensureStorage(); if (job.status === 'pending') service.cancel(job.id); }
+        catch { notify('Schedule could not be canceled', 'Check local disk space and try again in the scheduler.'); }
       }
     }]
   })) : [{ label: 'No scheduled messages', enabled: false }];
 
+  if (revision !== menuRevision) return;
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: APP_NAME, enabled: false },
     { label: connectionLabel, enabled: false },
     { type: 'separator' },
+    { label: 'Open scheduler', click: () => openDashboard({ view: 'upcoming' }) },
+    { label: 'History', click: () => openDashboard({ view: 'history' }) },
     { label: 'Refresh threads', click: () => void rebuildMenu() },
     { label: 'Schedule from a thread', submenu: threadItems },
     { label: `Scheduled messages (${pending.length})`, submenu: jobItems },
@@ -297,41 +196,47 @@ async function rebuildMenu() {
   ]));
 }
 
-ipcMain.handle('settings:get', () => ({ httpPort: config.httpPort, bufferSeconds: config.bufferSeconds, hasStoredToken: Boolean(config.t3Token), usingEnvironmentToken: Boolean(process.env.T3_TOKEN) }));
+ipcMain.handle('settings:get', publicSettings);
 ipcMain.handle('settings:save', (_event, incoming) => {
+  ensureStorage();
   const input = validateSettingsInput(incoming);
   const next = normaliseConfig({ ...config, httpPort: input.httpPort, bufferSeconds: input.bufferSeconds });
   if (input.t3Token) next.t3Token = input.t3Token;
+  saveConfig(next);
   config = next;
-  saveConfig();
+  service.bufferSeconds = config.bufferSeconds;
+  for (const window of BrowserWindow.getAllWindows()) window.webContents.send('settings:changed', publicSettings());
   void rebuildMenu();
   return { ok: true };
 });
-ipcMain.handle('schedule:create', (_event, incoming) => {
-  const input = validateScheduleInput(incoming);
-  const job = {
-    id: randomUUID(), commandId: randomUUID(), messageId: randomUUID(),
-    ...input, scheduleAt: input.whenISO, status: 'pending',
-    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), note: ''
-  };
-  delete job.whenISO;
-  jobs.push(job);
-  saveJobs();
-  scheduleJob(job);
-  void rebuildMenu();
-  return { id: job.id, scheduleAt: job.scheduleAt };
+ipcMain.handle('schedule:create', (_event, incoming) => { ensureStorage(); return service.create(incoming); });
+ipcMain.handle('jobs:get', (_event, id) => service.present(service.get(id)));
+ipcMain.handle('jobs:list', (_event, options) => ({ ...service.list(options), storageError }));
+ipcMain.handle('jobs:edit', (_event, id, incoming) => { ensureStorage(); return service.edit(id, incoming); });
+ipcMain.handle('jobs:cancel', (_event, id) => { ensureStorage(); return service.cancel(id); });
+ipcMain.handle('jobs:schedule-again', (_event, id) => service.scheduleAgain(id));
+ipcMain.handle('jobs:acknowledge', (_event, id) => { ensureStorage(); return service.acknowledge(id); });
+ipcMain.handle('jobs:reconcile', async (_event, id) => {
+  try { ensureStorage(); return { ok: true, job: await service.reconcile(id) }; }
+  catch (error) { return { ok: false, error: toErrorInfo(error) }; }
 });
-ipcMain.handle('dashboard:threads', async () => {
+ipcMain.handle('connection:check', async () => {
+  try { await api.fetchSnapshot(); return { online: true }; }
+  catch (error) { return { online: false, error: toErrorInfo(error) }; }
+});
+ipcMain.handle('dashboard:threads', async (_event, options) => {
+  const failedJobs = service.jobs.filter((job) => ['failed', 'unconfirmed'].includes(service.present(job).deliveryStatus) && !job.acknowledgedAt)
+    .map((job) => ({ id: job.id, message: job.message, note: service.present(job).note }));
   try {
-    const threads = await activeThreads();
-    return { online: true, threads, pendingJobs: activeJobs().length, failedJobs: jobs.filter((job) => job.status === 'failed').map((job) => ({ id: job.id, message: job.message, note: job.note || 'Unknown error' })) };
+    const threads = await activeThreads({ showSettled: options?.showSettled === true });
+    return { online: true, threads, storageError, pendingJobs: activeJobs().length, failedJobs };
   } catch (error) {
-    return { online: false, error: error.message, threads: [], pendingJobs: activeJobs().length, failedJobs: jobs.filter((job) => job.status === 'failed').map((job) => ({ id: job.id, message: job.message, note: job.note || 'Unknown error' })) };
+    return { online: false, error: error.message, errorInfo: toErrorInfo(error), threads: [], storageError, pendingJobs: activeJobs().length, failedJobs };
   }
 });
 ipcMain.handle('dashboard:schedule-thread', async (_event, threadId) => {
   if (typeof threadId !== 'string' || !threadId.trim() || threadId.length > 512) throw new Error('Invalid thread ID.');
-  const thread = (await activeThreads()).find((candidate) => candidate.id === threadId);
+  const thread = (await activeThreads({ showSettled: true })).find((candidate) => candidate.id === threadId);
   if (!thread) throw new Error('That thread is no longer available. Refresh and try again.');
   openScheduleWindow(thread.id, thread.title);
   return { ok: true };
@@ -344,23 +249,23 @@ ipcMain.handle('dashboard:open-settings', () => {
 app.on('second-instance', () => openDashboard());
 
 app.whenReady().then(() => {
-  loadState();
-  for (const job of jobs) {
-    if (job.status === 'dispatching') {
-      job.status = 'pending';
-      job.note = 'Recovered after an interrupted dispatch; verifying idempotently';
-    }
+  if (!ownsInstance) return;
+  try {
+    loadState();
+    service.recover();
+  } catch (error) {
+    storageError = { code: 'storage_unavailable', message: error.message };
+    service ||= new JobService({ jobs: [], api, persist: () => ensureStorage() });
   }
-  saveJobs();
   tray = new Tray(makeTrayIcon());
   tray.setToolTip(APP_NAME);
   tray.on('click', () => tray.popUpContextMenu());
-  for (const job of jobs) scheduleJob(job);
+  if (!storageError) service.schedulePending();
   void rebuildMenu();
   openDashboard();
   if (!token()) openSettings();
-  powerMonitor.on('resume', () => jobs.filter((job) => job.status === 'pending' && fireTime(job).valueOf() <= Date.now()).forEach((job) => void runJob(job.id)));
+  powerMonitor.on('resume', () => !storageError && void service.resume().catch(() => notify('Schedule could not be updated', 'Check local disk space and restart the app.')));
   app.on('activate', () => { openDashboard(); void rebuildMenu(); });
 });
 
-app.on('window-all-closed', (event) => event.preventDefault());
+app.on('window-all-closed', () => { /* Keep the scheduler running in the tray. */ });
