@@ -69,6 +69,23 @@ test('a delivered message is tracked while its agent turn runs and released once
   assert.deepEqual(h.source.tasks(), [], 'A finished turn stays closed even if the user starts more work in the thread');
 });
 
+test('an idle reading from inside the start grace never closes a delivery watch', async () => {
+  const h = harness({ jobs: [job({ status: 'sent', deliveryCertainty: 'delivered', dispatchedAt: '2026-10-01T00:00:00.000Z' })] });
+  h.advance(2 * MINUTE);
+  await h.source.refresh();
+  h.state.fail = true;
+  h.advance(MINUTE);
+  await h.source.refresh();
+  h.advance(MINUTE);
+  await h.source.refresh();
+  const [task] = h.source.tasks();
+  assert.equal(task?.state, 'unknown', 'Completion was never observed after the grace');
+  assert.equal(task.until, '2026-10-01T00:30:00.000Z');
+  h.state.fail = false;
+  await h.source.refresh();
+  assert.deepEqual(h.source.tasks(), [], 'An idle reading after the grace closes it');
+});
+
 test('an idle thread right after delivery is still given time to start', async () => {
   const h = harness({ jobs: [job({ status: 'sent', deliveryCertainty: 'delivered', dispatchedAt: '2026-10-01T00:00:00.000Z' })] });
   h.advance(30_000);

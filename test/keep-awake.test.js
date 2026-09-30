@@ -382,16 +382,38 @@ test('an existing session defers later work and never suppresses it at the deadl
   assert.deepEqual(h.power.held(), [SYSTEM_BLOCKER]);
 });
 
-test('explicit stop excludes work deferred beyond the current session deadline', () => {
+test('an explicit stop stays released when clearing the session brings deferred work within the limit', () => {
   const later = { ...waiting('later'), until: '2026-10-01T13:00:00.000Z' };
   const h = harness({ tasks: [running(), later] });
   h.controller.start();
   h.advance(11 * HOUR);
   h.controller.evaluate();
+  assert.deepEqual(h.controller.snapshot().deferred.map((task) => task.id), ['later']);
+  const stopped = h.controller.stop();
+  assert.equal(stopped.state, 'ended');
+  assert.equal(stopped.ended.reason, 'user-stop');
+  assert.deepEqual(h.power.held(), []);
+  h.controller.evaluate();
+  assert.equal(h.controller.snapshot().state, 'ended');
+  h.setTasks([running(), later, waiting('new')]);
+  assert.equal(h.controller.snapshot().state, 'active', 'Genuinely new work still starts a new session');
+});
+
+test('an explicit stop covers running work hidden by supplementary de-duplication', () => {
+  const h = harness({ tasks: [{ ...waiting('job:pending'), conversation: 't3:a' }] });
+  let threads = [{ ...running('t3:thread:a'), conversation: 't3:a', supplementary: true }];
+  h.registry.register({ id: 'threads', tasks: () => threads });
+  h.controller.start();
+  assert.deepEqual(h.controller.snapshot().tasks.map((task) => task.id), ['job:pending']);
   h.controller.stop();
-  assert.equal(h.controller.snapshot().state, 'active');
-  assert.equal(h.controller.snapshot().ended, null);
-  assert.deepEqual(h.power.held(), [SYSTEM_BLOCKER]);
+  assert.deepEqual(h.power.held(), []);
+  h.setTasks([]);
+  assert.deepEqual(h.controller.snapshot().tasks.map((task) => task.id), ['t3:thread:a']);
+  assert.equal(h.controller.snapshot().state, 'ended', 'Canceling the job only reveals the same running thread');
+  assert.deepEqual(h.power.held(), []);
+  threads = [];
+  h.controller.evaluate();
+  assert.equal(h.controller.snapshot().state, 'off');
 });
 
 for (const state of ['running', 'unknown']) {

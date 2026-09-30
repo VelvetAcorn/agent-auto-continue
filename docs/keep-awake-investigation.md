@@ -320,6 +320,7 @@ It evaluates on every source change, power-source change and wake, and on a one-
 - **Completion unknown or unconfirmed delivery.**
   Unconfirmed deliveries are watched like sent ones, because the agent may be working, but they are never resent.
   If T3 Code stops answering, completion becomes `unknown` for 30 minutes from when the agent was last seen working, then the task ends.
+  Only an idle reading taken after the 3-minute start grace closes a delivery's watch.
   The time limit bounds everything else.
 - **Agent disconnects.**
   The same 30-minute unknown window applies.
@@ -332,15 +333,17 @@ It evaluates on every source change, power-source change and wake, and on a one-
   `suspend` and `resume` are recorded, and the notice reports "macOS slept anyway" for the current session.
   On wake the job service catches up missed schedules, and the controller refreshes sources and re-evaluates.
 - **User stops.**
-  "Let Mac sleep" releases immediately and ends the session for the current tasks.
-  A task changing state is not new work; a new task starts a new session.
+  "Let Mac sleep" releases immediately and ends the session for the current tasks, including deferred work and running threads hidden behind a job.
+  A task changing state is not new work; a task that was not known at the stop starts a new session.
   "Keep awake again" re-arms.
 - **Battery floor.**
   On battery at or below the floor, the session ends with a notification and stays ended until power is connected.
   A floor of 0 leaves low-battery handling to macOS, and an unreadable level never ends a session.
 - **Time limit.**
   Each session ends after the configured hours, from 1 to 72, with a notification.
-  Waiting work that starts after the active session deadline is deferred and excluded from that session's stop suppression; without a session, eligibility uses the configured duration from now.
+  Waiting work that starts after the active session deadline is deferred.
+  When the limit ends a session, deferred work is not suppressed, so it starts its own session once it is due within the limit.
+  Without a session, eligibility uses the configured duration from now.
 
 ### UI
 
