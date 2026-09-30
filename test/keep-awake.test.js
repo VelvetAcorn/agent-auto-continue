@@ -477,3 +477,32 @@ test('completion grace releases at the battery floor', async () => {
   assert.deepEqual(power.held(), []);
   assert.equal(h.notifications.length, 1);
 });
+
+test('an explicit stop is not undone when the stopped job starts its agent turn', () => {
+  const h = harness({ tasks: [{ ...waiting('job:pending'), conversation: 't3:a' }] });
+  let threads = [];
+  h.registry.register({ id: 'threads', tasks: () => threads });
+  h.controller.start();
+  h.controller.stop();
+  assert.deepEqual(h.power.held(), []);
+  // The scheduled message is delivered and the agent turn starts on the same thread.
+  threads = [{ ...running('t3:thread:a'), conversation: 't3:a', supplementary: true }];
+  h.setTasks([{ ...running('job:pending'), conversation: 't3:a' }]);
+  assert.equal(h.controller.snapshot().state, 'ended', 'The turn the stopped job started is not new work');
+  assert.deepEqual(h.power.held(), []);
+  threads.push({ ...running('t3:thread:b'), conversation: 't3:b', supplementary: true });
+  h.controller.evaluate();
+  assert.equal(h.controller.snapshot().state, 'active', 'A turn on another thread is new work');
+});
+
+test('a failed switch to the display assertion keeps the held blocker tracked', () => {
+  const h = harness({ tasks: [running()] });
+  h.controller.start();
+  const start = h.power.startBlocker;
+  h.power.startBlocker = (type) => { if (type === DISPLAY_BLOCKER) throw new Error('denied'); return start.call(h.power, type); };
+  h.controller.configure({ ...ENABLED, keepDisplayOn: true });
+  assert.deepEqual(h.power.held(), [SYSTEM_BLOCKER]);
+  assert.equal(h.controller.snapshot().holding, 'system', 'The blocker still held must stay tracked');
+  h.controller.configure({ ...ENABLED, enabled: false });
+  assert.deepEqual(h.power.held(), [], 'Disabling releases the blocker instead of leaking it');
+});

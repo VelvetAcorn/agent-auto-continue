@@ -334,7 +334,7 @@ It evaluates on every source change, power-source change and wake, and on a one-
   On wake the job service catches up missed schedules, and the controller refreshes sources and re-evaluates.
 - **User stops.**
   "Let Mac sleep" releases immediately and ends the session for the current tasks, including deferred work and running threads hidden behind a job.
-  A task changing state is not new work; a task that was not known at the stop starts a new session.
+  A task changing state is not new work, and neither is the agent turn that a stopped job starts on its thread; a task that was not known at the stop starts a new session.
   "Keep awake again" re-arms.
 - **Battery floor.**
   On battery at or below the floor, the session ends with a notification and stays ended until power is connected.
