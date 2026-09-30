@@ -281,7 +281,7 @@ T3 Code 0.0.40 exposes `session: { status, activeTurnId }` on every thread in `/
 `status` is one of `idle`, `starting`, `running`, `ready`, `interrupted`, `stopped` and `error`.
 The source polls the snapshot once a minute, and only while a delivery or agent turn needs watching.
 An optional setting also tracks every running T3 Code agent turn, even without a schedule.
-Those tasks are supplementary and are dropped when a job already covers the same thread.
+Those tasks are supplementary and are dropped only when a job retained after deferral filtering already covers the same thread.
 
 [`lib/active-work-source.js`](../lib/active-work-source.js) adapts the harness-neutral `service.activeWork()` view from #2.
 Both sources use `job:<id>` task IDs, so the registry reports each job once when both are registered.
@@ -340,7 +340,7 @@ It evaluates on every source change, power-source change and wake, and on a one-
   A floor of 0 leaves low-battery handling to macOS, and an unreadable level never ends a session.
 - **Time limit.**
   Each session ends after the configured hours, from 1 to 72, with a notification.
-  Waiting work that starts after the limit is deferred and does not start a session until it is within the limit.
+  Waiting work that starts after the active session deadline is deferred and excluded from that session's stop suppression; without a session, eligibility uses the configured duration from now.
 
 ### UI
 

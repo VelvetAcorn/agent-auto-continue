@@ -119,7 +119,9 @@ test('running agent turns without a schedule are tracked only when opted in', as
   assert.deepEqual(off.source.tasks(), []);
   const on = harness({ threads, includeRunningAgents: true, jobs: [job({ threadId: 'a' })] });
   await on.source.refresh();
-  assert.deepEqual(on.source.tasks().map((task) => task.id), ['job:job'], 'A thread covered by a job is not counted twice');
+  assert.deepEqual(on.source.tasks().map((task) => task.id), ['job:job', 't3:thread:a']);
+  assert.equal(on.source.tasks()[1].supplementary, true);
+  assert.equal(on.source.tasks()[1].conversation, 't3:a');
   on.service.jobs.length = 0;
   assert.deepEqual(on.source.tasks().map((task) => [task.id, task.label, task.state]), [['t3:thread:a', 'Alpha', 'running']]);
   on.state.fail = true;
@@ -139,4 +141,19 @@ test('refresh notifies subscribers so the controller can re-evaluate', async () 
   unsubscribe();
   h.source.changed();
   assert.equal(calls, 2);
+});
+
+test('a distant pending schedule preserves running and unknown supplementary coverage', async () => {
+  const h = harness({ includeRunningAgents: true, jobs: [job({ scheduleAt: '2026-10-03T00:00:00.000Z' })],
+    threads: [thread({ session: session('running') })] });
+  await h.source.refresh();
+  assert.deepEqual(h.source.tasks().map(({ id, state, conversation, supplementary }) => ({ id, state, conversation, supplementary })), [
+    { id: 'job:job', state: 'waiting', conversation: 't3:thread', supplementary: undefined },
+    { id: 't3:thread:thread', state: 'running', conversation: 't3:thread', supplementary: true }
+  ]);
+  h.state.fail = true;
+  h.advance(5 * MINUTE);
+  await h.source.refresh();
+  assert.equal(h.source.tasks()[1].state, 'unknown');
+  assert.equal(h.source.tasks()[1].supplementary, true);
 });

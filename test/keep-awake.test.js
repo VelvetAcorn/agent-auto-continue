@@ -363,3 +363,95 @@ test('supplementary tasks are dropped when another task covers the same conversa
   ] });
   assert.deepEqual(registry.tasks().tasks.map((task) => task.id), ['job:1', 't3:thread:b']);
 });
+
+test('an existing session defers later work and never suppresses it at the deadline', () => {
+  const later = { ...waiting('later'), until: '2026-10-01T13:00:00.000Z' };
+  const h = harness({ tasks: [running(), later] });
+  h.controller.start();
+  h.advance(11 * HOUR);
+  h.controller.evaluate();
+  assert.deepEqual(h.controller.snapshot().tasks.map((task) => task.id), ['job-1']);
+  assert.deepEqual(h.controller.snapshot().deferred.map((task) => task.id), ['later']);
+  h.advance(HOUR);
+  h.controller.evaluate();
+  assert.equal(h.controller.snapshot().ended.reason, 'max-duration');
+  assert.deepEqual([...h.controller.suppression.taskIds], ['job-1']);
+  h.advance(HOUR);
+  h.setTasks([running(), running('later')]);
+  assert.equal(h.controller.snapshot().state, 'active');
+  assert.deepEqual(h.power.held(), [SYSTEM_BLOCKER]);
+});
+
+test('explicit stop excludes work deferred beyond the current session deadline', () => {
+  const later = { ...waiting('later'), until: '2026-10-01T13:00:00.000Z' };
+  const h = harness({ tasks: [running(), later] });
+  h.controller.start();
+  h.advance(11 * HOUR);
+  h.controller.evaluate();
+  h.controller.stop();
+  assert.equal(h.controller.snapshot().state, 'active');
+  assert.equal(h.controller.snapshot().ended, null);
+  assert.deepEqual(h.power.held(), [SYSTEM_BLOCKER]);
+});
+
+for (const state of ['running', 'unknown']) {
+  test(`deferral preserves supplementary ${state} coverage across sources`, () => {
+    const later = { ...waiting('later'), conversation: 't3:a', until: '2026-10-03T00:00:00.000Z' };
+    const h = harness({ tasks: [later] });
+    h.registry.register({ id: 'threads', tasks: () => [{ ...running('thread:a'), state, conversation: 't3:a', supplementary: true }] });
+    h.controller.start();
+    assert.equal(h.controller.snapshot().state, 'active');
+    assert.deepEqual(h.controller.snapshot().tasks.map((task) => task.id), ['thread:a']);
+    assert.deepEqual(h.controller.snapshot().deferred.map((task) => task.id), ['later']);
+    assert.deepEqual(h.power.held(), [SYSTEM_BLOCKER]);
+    assert.deepEqual(h.registry.tasks().tasks.map((task) => task.id), ['later']);
+    h.setTasks([{ ...later, until: '2026-10-01T01:00:00.000Z' }]);
+    assert.deepEqual(h.controller.snapshot().tasks.map((task) => task.id), ['later']);
+  });
+}
+
+test('completion grace cannot extend the session deadline', () => {
+  const h = harness({ tasks: [running()], settings: { ...ENABLED, maxHours: 1 } });
+  h.controller.start();
+  h.advance(HOUR - 60_000);
+  h.setTasks([]);
+  assert.equal(h.controller.snapshot().state, 'releasing');
+  h.advance(60_000);
+  h.controller.evaluate();
+  assert.equal(h.controller.snapshot().ended.reason, 'max-duration');
+  assert.equal(h.controller.snapshot().releaseAt, null);
+  assert.deepEqual(h.power.held(), []);
+  assert.equal(h.notifications.length, 1);
+});
+
+test('AC-only completion grace releases as soon as battery power is observed', async () => {
+  const h = harness({ tasks: [running()], settings: { ...ENABLED, powerSource: 'ac-only' } });
+  h.controller.start();
+  h.setTasks([]);
+  assert.equal(h.controller.snapshot().state, 'releasing');
+  h.power.onBattery = true;
+  await h.controller.tick();
+  assert.equal(h.controller.snapshot().state, 'paused');
+  assert.equal(h.controller.snapshot().lastRelease.reason, 'on-battery');
+  assert.equal(h.controller.snapshot().releaseAt, null);
+  assert.deepEqual(h.power.held(), []);
+  h.power.onBattery = false;
+  await h.controller.tick();
+  assert.equal(h.controller.snapshot().state, 'off');
+  assert.deepEqual(h.power.held(), []);
+});
+
+test('completion grace releases at the battery floor', async () => {
+  const power = fakePower({ onBattery: true, percent: 40 });
+  const h = harness({ tasks: [running()], power });
+  h.controller.start();
+  await h.controller.tick();
+  h.setTasks([]);
+  assert.equal(h.controller.snapshot().state, 'releasing');
+  power.percent = 20;
+  await h.controller.tick();
+  assert.equal(h.controller.snapshot().ended.reason, 'battery-floor');
+  assert.equal(h.controller.snapshot().releaseAt, null);
+  assert.deepEqual(power.held(), []);
+  assert.equal(h.notifications.length, 1);
+});
