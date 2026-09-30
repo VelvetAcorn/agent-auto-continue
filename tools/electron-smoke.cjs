@@ -61,6 +61,9 @@ class FixtureWindow extends BrowserWindow {
     this.webContents.on('render-process-gone', (_event, detail) => failures.push(`Renderer stopped: ${detail.reason}`));
     this.webContents.on('did-fail-load', (_event, code, description) => failures.push(`Load failed ${code}: ${description}`));
   }
+  // Electron does not list subclassed windows, which silently dropped main-process broadcasts
+  // such as jobs:changed and settings:changed in this fixture.
+  static getAllWindows() { return windows.filter(window => !window.isDestroyed()); }
   show() { /* Keep executable tests out of the user's foreground. */ }
   focus() { /* Keep executable tests out of the user's foreground. */ }
 }
@@ -133,6 +136,7 @@ async function rendererJourney(js) {
   const fill = async (selector, value) => js(`(() => { const input=document.querySelector(${JSON.stringify(selector)}); input.value=${JSON.stringify(value)}; input.dispatchEvent(new Event('input',{bubbles:true})); })()`);
   const heading = expected => waitFor(() => js(`document.querySelector('h1')?.textContent === ${JSON.stringify(expected)}`), `view ${expected}`);
   await heading('New schedule');
+  await js('window.__jobsChanged = 0; window.autoContinue.onJobsChanged(() => window.__jobsChanged++); 0');
   await fill('#message', 'Fixture message from the production composer');
   await fill('#date', '2099-02-30');
   await fill('#time', '12:00');
@@ -150,6 +154,7 @@ async function rendererJourney(js) {
   assert.equal(created.timeZone, 'UTC');
   assert.equal(created.scheduleAt, '2099-12-15T12:00:00.000Z');
   assert.equal(created.effectiveAt, '2099-12-15T12:00:05.000Z');
+  assert.ok(await js('window.__jobsChanged') > 0, 'Main-process jobs:changed broadcasts reach the renderer');
   await capture('upcoming-scheduled');
   await click(`[data-job="${created.id}"]`);
   await click('[data-action="edit"]');
