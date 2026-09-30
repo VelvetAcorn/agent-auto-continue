@@ -7,6 +7,9 @@ const path = require('node:path');
 const schedule = require('node-schedule');
 const { normaliseConfig, validateSettingsInput } = require('./lib/model');
 const { createApiClient, toErrorInfo } = require('./lib/api-client');
+const { RemoteControl } = require('./lib/remote');
+const { registerRemoteIpc } = require('./lib/remote/ipc');
+const { createT3HarnessSource } = require('./lib/remote/harnesses');
 const { JobService } = require('./lib/job-service');
 const { normaliseThreads } = require('./lib/threads');
 
@@ -20,6 +23,7 @@ let dashboardWindow;
 let dashboardReady = false;
 let pendingNavigation;
 let menuRevision = 0;
+let remote;
 
 const ownsInstance = app.requestSingleInstanceLock();
 if (!ownsInstance) app.quit();
@@ -75,6 +79,16 @@ function token() {
 }
 
 const api = createApiClient({ getConfig: () => config, getToken: token });
+
+function createRemoteControl() {
+  return new RemoteControl({
+    load: () => readJson(dataPath('remote-control.json'), undefined),
+    save: (state) => writeJson(dataPath('remote-control.json'), state),
+    getService: () => service, ensureStorage, getStorageError: () => storageError,
+    harnesses: createT3HarnessSource(api), appInfo: { name: APP_NAME, version: app.getVersion?.() || '' },
+    onChange: () => { for (const window of BrowserWindow.getAllWindows()) window.webContents.send('remote:changed'); }
+  });
+}
 
 function dateLabel(iso) {
   return new Date(iso).toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
@@ -242,6 +256,7 @@ ipcMain.handle('dashboard:schedule-thread', async (_event, threadId) => {
   openScheduleWindow(thread.id, thread.title);
   return { ok: true };
 });
+registerRemoteIpc(ipcMain, () => remote);
 ipcMain.handle('dashboard:open-settings', () => {
   openSettings();
   return { ok: true };
@@ -262,6 +277,8 @@ app.whenReady().then(() => {
   tray.setToolTip(APP_NAME);
   tray.on('click', () => tray.popUpContextMenu());
   if (!storageError) service.schedulePending();
+  remote = createRemoteControl();
+  void remote.start();
   void rebuildMenu();
   openDashboard();
   if (!token()) openSettings();
@@ -269,4 +286,5 @@ app.whenReady().then(() => {
   app.on('activate', () => { openDashboard(); void rebuildMenu(); });
 });
 
+app.on('before-quit', () => { void remote?.stop(); });
 app.on('window-all-closed', () => { /* Keep the scheduler running in the tray. */ });

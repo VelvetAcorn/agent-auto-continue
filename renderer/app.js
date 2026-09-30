@@ -2,6 +2,7 @@
 (() => {
   const api = window.autoContinue;
   const time = window.SchedulerTime;
+  const remote = window.RemoteSettings;
   const app = document.getElementById('app');
   const $ = (selector) => document.querySelector(selector);
   const escape = (value) => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]));
@@ -137,20 +138,25 @@
     const points = Array.from({length:32},(_,index) => { const angle=index*Math.PI/16, radius=index%2 ? 39.5 : 50; return `${50+radius*Math.sin(angle)},${50-radius*Math.cos(angle)}`; }).join(' ');
     return `<div class="star" role="img" aria-label="Support"><svg viewBox="-3 -3 106 106" aria-hidden="true"><polygon points="${points}" fill="#D3A065" stroke="var(--outline)" stroke-width="2.5"/></svg><span aria-hidden="true">Support</span></div>`;
   }
+  function remoteContext() {
+    return { api, escape, display, $, perform, toast, render, errorMessage, isVisible: () => state.view === 'settings' };
+  }
   function settings() {
     if (!state.settings) return '<p>Loading settings…</p>';
     if (!state.settingsDraft) state.settingsDraft = { t3Token: '', httpPort: state.settings.httpPort, bufferSeconds: state.settings.bufferSeconds };
     const d=state.settingsDraft;
-    return `<div class="settings"><section class="card"><span class="overline">Connection</span><h2>Your local T3 Code</h2><form id="settings-form"><label class="field">T3 bearer token<input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="Leave blank to keep the saved token" value="${escape(d.t3Token)}"><small>${state.settings.usingEnvironmentToken ? 'Using T3_TOKEN from the environment for this launch.' : state.settings.hasStoredToken ? 'A token is stored locally. Leave blank to keep it.' : 'No token has been saved yet.'}</small></label><div class="two"><label class="field">Local HTTP port<input id="port" type="number" min="1" max="65535" required value="${d.httpPort}"></label><label class="field">Safety buffer · seconds<input id="buffer" type="number" min="0" max="300" required value="${d.bufferSeconds}"></label></div><p class="help">Connects only to 127.0.0.1. Buffer changes apply to new schedules.</p><p class="error" id="settings-error" role="alert"></p><div class="actions"><button type="submit" class="primary">Save settings</button><button type="button" data-action="check">Check connection</button></div></form></section><section class="card"><span class="overline">Make it yours</span><div class="setting-row"><label for="theme">Appearance</label><select id="theme">${[['system','Follow system'],['light','Light'],['dark','Bone Outline']].map(([value,label]) => `<option value="${value}" ${state.theme === value ? 'selected' : ''}>${label}</option>`).join('')}</select></div><div class="setting-row"><label for="motion">Reduce motion</label><input id="motion" type="checkbox" ${state.reduceMotion ? 'checked' : ''}></div><p class="help">Your system’s reduced-motion preference is always respected.</p></section><section class="card support">${star()}<div><span class="overline">Support this app</span><h2>Buy me a coffee</h2><button type="button" data-action="support" aria-describedby="support-note">Support on Ko-fi</button><p id="support-note" class="help">Opens ko-fi.com/velvetacorn in your browser.</p></div></section></div>`;
+    return `<div class="settings"><section class="card"><span class="overline">Connection</span><h2>Your local T3 Code</h2><form id="settings-form"><label class="field">T3 bearer token<input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="Leave blank to keep the saved token" value="${escape(d.t3Token)}"><small>${state.settings.usingEnvironmentToken ? 'Using T3_TOKEN from the environment for this launch.' : state.settings.hasStoredToken ? 'A token is stored locally. Leave blank to keep it.' : 'No token has been saved yet.'}</small></label><div class="two"><label class="field">Local HTTP port<input id="port" type="number" min="1" max="65535" required value="${d.httpPort}"></label><label class="field">Safety buffer · seconds<input id="buffer" type="number" min="0" max="300" required value="${d.bufferSeconds}"></label></div><p class="help">Connects only to 127.0.0.1. Buffer changes apply to new schedules.</p><p class="error" id="settings-error" role="alert"></p><div class="actions"><button type="submit" class="primary">Save settings</button><button type="button" data-action="check">Check connection</button></div></form></section>${remote ? remote.render(remoteContext()) : ''}<section class="card"><span class="overline">Make it yours</span><div class="setting-row"><label for="theme">Appearance</label><select id="theme">${[['system','Follow system'],['light','Light'],['dark','Bone Outline']].map(([value,label]) => `<option value="${value}" ${state.theme === value ? 'selected' : ''}>${label}</option>`).join('')}</select></div><div class="setting-row"><label for="motion">Reduce motion</label><input id="motion" type="checkbox" ${state.reduceMotion ? 'checked' : ''}></div><p class="help">Your system’s reduced-motion preference is always respected.</p></section><section class="card support">${star()}<div><span class="overline">Support this app</span><h2>Buy me a coffee</h2><button type="button" data-action="support" aria-describedby="support-note">Support on Ko-fi</button><p id="support-note" class="help">Opens ko-fi.com/velvetacorn in your browser.</p></div></section></div>`;
   }
   function navigate(view, restore = false) {
     saveListContext();
+    if (state.view === 'settings' && view !== 'settings') remote?.leave();
     const context = restore ? listContexts.get(view) : null;
     state.picking = false; state.actionError = ''; state.confirmCancel = false; state.search = context?.search || ''; state.view = view;
     render('h1');
     window.scrollTo(0,context?.scroll || 0);
     if (view === 'threads') void refreshThreads();
     if (['upcoming','history'].includes(view)) void refreshJobs();
+    if (view === 'settings') void remote?.load(remoteContext());
   }
   function openComposer(threadId) {
     saveListContext();
@@ -180,7 +186,8 @@
   function bindOccurrence() { if($('#occurrence')) $('#occurrence').onchange=event=>{draft().occurrence=event.target.value;updatePreview();}; }
   function bind() {
     document.querySelectorAll('[data-nav]').forEach(button=>{button.onclick=()=>navigate(button.dataset.nav);});
-    document.querySelectorAll('[data-action]').forEach(button=>{button.onclick=()=>action(button.dataset.action);});
+    document.querySelectorAll('[data-action]').forEach(button=>{button.onclick=()=>action(button.dataset.action,button);});
+    remote?.bind(remoteContext());
     document.querySelectorAll('[data-job]').forEach(button=>{button.onclick=()=>{saveListContext();state.returnView=state.view;state.selected=button.dataset.job;state.selectedJob=findJob(state.selected);state.view='detail';state.actionError='';state.confirmCancel=false;render('h1');};});
     document.querySelectorAll('[data-thread]').forEach(button=>{button.onclick=()=>{const thread=state.threads.find(item=>item.id===button.dataset.thread);if(state.picking){draft().threadId=thread.id;state.view='composer';state.picking=false;state.search='';render('h1');}else openComposer(thread.id);};});
     document.querySelectorAll('[data-filter]').forEach(button=>{button.onclick=()=>{state.historyFilter=button.dataset.filter;state.historyLimit=50;state.history=[];state.search='';render();void refreshJobs();};});
@@ -204,7 +211,8 @@
     if($('#motion'))$('#motion').onchange=event=>{state.reduceMotion=event.target.checked;savePreferences();render('#motion');};
   }
   function savePreferences(){try{localStorage.setItem('scheduler-theme',state.theme);localStorage.setItem('scheduler-motion',state.reduceMotion?'reduce':'system');}catch{/* Cosmetic preferences can remain session-only. */}}
-  function action(name) {
+  function action(name, button) {
+    if(name.startsWith('remote-')&&remote?.action(remoteContext(),name,button))return;
     if(name==='support'){void perform(()=>api.openSupport());return;}
     if(name==='new')return openComposer();
     if(name==='theme'){state.theme=document.body.classList.contains('dark')?'light':'dark';savePreferences();render();return;}
@@ -261,6 +269,7 @@
   if(api.onNavigate)cleanup.push(api.onNavigate(route));
   if(api.onScheduleInit)cleanup.push(api.onScheduleInit(payload=>route({...payload,view:'composer'})));
   if(api.onJobsChanged)cleanup.push(api.onJobsChanged(()=>void refreshJobs(true,true)));
+  if(api.onRemoteChanged)cleanup.push(api.onRemoteChanged(()=>{if(state.view==='settings'&&!state.busy)void remote?.load(remoteContext());}));
   if(api.onSettingsChanged)cleanup.push(api.onSettingsChanged(settings=>{state.settings=settings;state.storageError=settings.storageError||state.storageError;for(const item of state.drafts.values())if(!item.editId)item.bufferSeconds=settings.bufferSeconds;}));
   const onFocus=()=>{if(Date.now()-lastRefresh>10000){void refreshThreads();void refreshJobs();}};
   window.addEventListener('focus',onFocus);
