@@ -61,7 +61,7 @@ The menu-bar controls open the relevant view in the same window.
 Only one copy may run at a time.
 
 Settings offers light, Bone Outline dark and system appearance with reduced-motion support.
-The rotating Support star keeps its text upright; its Ko-fi placeholder is inactive until a real destination is configured.
+The rotating Support star keeps its text upright; the Settings support button opens [VelvetAcorn on Ko-fi](https://ko-fi.com/velvetacorn) in your default browser.
 
 You can avoid persisting the token by launching with an environment variable:
 

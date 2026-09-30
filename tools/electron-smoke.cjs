@@ -16,6 +16,7 @@ const windows = [];
 const failures = [];
 let offline = false;
 let dispatches = 0;
+const externalUrls = [];
 let menu;
 const evidenceDirectory = process.env.T3_SMOKE_EVIDENCE_DIR;
 async function capture(name) {
@@ -67,6 +68,7 @@ const injectedElectron = {
   ...electron, app: appProxy, BrowserWindow: FixtureWindow,
   Tray: class { setToolTip() {} on() {} setContextMenu(value) { menu = value; } },
   Menu: { buildFromTemplate: value => value }, Notification: { isSupported: () => false },
+  shell: { openExternal: async url => { externalUrls.push(url); } },
   powerMonitor: { on() {} }
 };
 function loadProductionMain() {
@@ -211,13 +213,18 @@ async function rendererJourney(js) {
   assert.equal(await js(`Boolean(document.querySelector('[data-thread="thread-settled"]'))`), true);
   await click('[data-nav="settings"]');
   await waitFor(() => js(`Boolean(document.querySelector('#settings-form'))`), 'settings loaded');
+  await click('[data-action="support"]');
+  await waitFor(() => externalUrls.length === 1, 'support page opened in browser');
+  assert.deepEqual(externalUrls, ['https://ko-fi.com/velvetacorn']);
+  await waitFor(() => js(`!document.querySelector('[data-action="support"]').disabled`), 'support operation finished');
+  assert.ok(windows[0].webContents.getURL().startsWith('file:'), 'Support must leave the app on its local page');
   await fill('#buffer', '12');
   await js(`document.querySelector('#settings-form').requestSubmit()`);
   await waitFor(() => js(`window.autoContinue.getSettings().then(settings=>settings.bufferSeconds===12)`), 'settings saved');
   await waitFor(() => js(`!document.querySelector('#buffer').disabled`), 'settings operation finished');
   await js(`(() => { const select=document.querySelector('#theme'); select.value='dark'; select.dispatchEvent(new Event('change',{bubbles:true})); })()`);
   assert.equal(await js(`document.body.classList.contains('dark')`), true);
-  assert.equal(await js(`document.querySelector('.support button').disabled`), true);
+  assert.equal(await js(`document.querySelector('.support button').disabled`), false);
   assert.equal(await js(`Boolean(document.querySelector('.star svg'))`), true);
   await capture('settings-bone-outline');
   await js(`document.querySelector('.support').scrollIntoView({block:'center'})`);

@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, Menu, Notification, Tray, ipcMain, nativeImage, powerMonitor } = require('electron');
+const { app, BrowserWindow, Menu, Notification, Tray, ipcMain, nativeImage, powerMonitor, shell } = require('electron');
 const { randomUUID } = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -196,6 +196,7 @@ async function rebuildMenu() {
   ]));
 }
 
+ipcMain.handle('support:open', () => shell.openExternal('https://ko-fi.com/velvetacorn'));
 ipcMain.handle('settings:get', publicSettings);
 ipcMain.handle('settings:save', (_event, incoming) => {
   ensureStorage();

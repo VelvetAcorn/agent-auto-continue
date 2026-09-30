@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('autoContinue', {
     ipcRenderer.on('settings:changed', listener);
     return () => ipcRenderer.removeListener('settings:changed', listener);
   },
+  openSupport: () => ipcRenderer.invoke('support:open'),
   getSettings: () => ipcRenderer.invoke('settings:get'),
   saveSettings: (settings) => ipcRenderer.invoke('settings:save', settings),
   createSchedule: (job) => ipcRenderer.invoke('schedule:create', job),
