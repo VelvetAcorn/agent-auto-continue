@@ -76,11 +76,15 @@ Use `prepareTurn()` to create a harness-specific key when the harness needs its 
 ### Data shapes
 
 A conversation summary is `{ harness, id, title, projectId, projectName, updatedAt, state, settled }`.
-`state` is `active`, `settled` or `unknown`, and `settled` is `true`, `false` or `null`; unknown states stay visible.
+`state` is a short lowercase label for display, such as `active`, `settled`, `working`, `idle` or `unknown`.
+`settled` is `true`, `false` or `null` and drives the Show settled filter; unknown states stay visible.
 
-A conversation state is `{ id, title, projectId, projectName, archived, latestUserActivityAt, delivered, busy, context }`.
+A conversation state is `{ id, title, projectId, projectName, archived, latestUserActivityAt, delivered, busy, awaitingInput, context }`.
 `delivered` is true when `ref.deliveryKey` is already present.
 `busy` is `true`, `false` or `null` when unknown.
+`awaitingInput` is `true` when the agent is blocked on the user, such as a question, an approval or permission prompt, or a plan confirmation.
+It is optional for adapters and normalises to `null`, meaning unknown; `null` must never block anything.
+Adapters set it only from a signal the harness genuinely exposes.
 `context` is private to the adapter and is passed back to `prepareTurn()`.
 
 An availability is `{ state, resetsAt, reason, source, checkedAt }`.

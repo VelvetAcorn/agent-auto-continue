@@ -1,11 +1,11 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { CAPABILITIES, availability, defineHarness, describeHarness, turnOutcome } = require('../lib/harnesses/contract');
+const { CAPABILITIES, availability, conversationState, defineHarness, describeHarness, turnOutcome } = require('../lib/harnesses/contract');
 const { HarnessError, redact, toErrorInfo } = require('../lib/harnesses/errors');
 const { createHarnessRegistry } = require('../lib/harnesses/registry');
 const { applyHarnessSettingsInput, normaliseHarnessSettings, publicHarnessSettings, resolveHarnessSettings } = require('../lib/harnesses/settings');
-const { createT3Harness } = require('../lib/harnesses/t3');
+const { awaitingInput, createT3Harness } = require('../lib/harnesses/t3');
 const { JobService, migrateJobs } = require('../lib/job-service');
 const { createFakeHarness } = require('../tools/fake-harness.cjs');
 
@@ -62,6 +62,25 @@ test('normalisers keep unknown values explicit and timestamps in ISO form', () =
   assert.equal(availability({ state: 'limited', resetsAt: 1_790_000_000 }).resetsAt, new Date(1_790_000_000_000).toISOString());
   assert.equal(turnOutcome({ state: 'done' }).state, 'unknown');
   assert.equal(turnOutcome({ state: 'failed', usageLimit: { resetsAt: '2030-01-01T00:00:00Z', message: 'Limit' } }).usageLimit.resetsAt, '2030-01-01T00:00:00.000Z');
+});
+
+test('awaitingInput is optional and normalises anything but a boolean to unknown', () => {
+  assert.equal(conversationState({ id: 'a' }).awaitingInput, null);
+  assert.equal(conversationState({ id: 'a', awaitingInput: true }).awaitingInput, true);
+  assert.equal(conversationState({ id: 'a', awaitingInput: false }).awaitingInput, false);
+  assert.equal(conversationState({ id: 'a', awaitingInput: 'yes' }).awaitingInput, null);
+});
+
+test('T3 awaitingInput follows T3 Code open-request accounting', () => {
+  const activity = (kind, requestId, detail) => ({ kind, payload: { requestId, ...(detail ? { detail } : {}) } });
+  assert.equal(awaitingInput({}), null, 'Missing activities are unknown');
+  assert.equal(awaitingInput({ activities: [] }), false);
+  assert.equal(awaitingInput({ activities: [activity('approval.requested', 'a')] }), true);
+  assert.equal(awaitingInput({ activities: [activity('approval.requested', 'a'), activity('approval.resolved', 'a')] }), false);
+  assert.equal(awaitingInput({ activities: [activity('user-input.requested', 'b'), activity('approval.resolved', 'a')] }), true);
+  assert.equal(awaitingInput({ activities: [activity('user-input.requested', 'b'), activity('provider.user-input.respond.failed', 'b', 'Network error')] }), true);
+  assert.equal(awaitingInput({ activities: [activity('user-input.requested', 'b'), activity('provider.user-input.respond.failed', 'b', 'Stale pending user-input request')] }), false);
+  assert.equal(awaitingInput({ activities: [null, { kind: 'approval.requested' }, activity('tool.completed', 'c')] }), false);
 });
 
 test('errors are sanitized and credential-like text is redacted', () => {
