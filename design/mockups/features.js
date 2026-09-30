@@ -87,7 +87,16 @@
       list.unshift({ id: 'missed', thread: 'th-pricing', group: 'needs', message: 'Pick up where you left off and finish the comparison table.', stateLabel: 'Started late', tone: 'amber', reason: 'The Mac slept anyway at 01:12, so this started 4 h 12 m late at 07:12. It ran once and was delivered.', actions: [['Acknowledge', 'primary']], plan: 'at 03:00 send "Pick up…" to <em>Summarise the competitor pricing pages</em> once.', left: 'Delivered 07:12', right: 'Missed its start while the Mac slept' });
       list.push({ id: 'feeds', thread: 'th-feeds', group: 'needs', message: 'Continue', stateLabel: 'Waiting, agent not running', tone: 'amber', reason: 'OpenCode is not running. This will wait rather than fail.', actions: [['How to start OpenCode', 'quiet'], ['End', 'ghost']], plan: 'when OpenCode is free, send "Continue" to <em>Tidy the feed mapping rules</em> once.', left: 'Waiting since 22:10', right: 'No answer on port 4096' });
     }
-    if (state.scenario === 'morning') list = list.map((t) => t.group === 'running' || t.id === 'notes' ? { ...t, group: 'done', stateLabel: t.id === 'export' ? 'Done, 9 turns' : t.id === 'notes' ? 'Done, 6 turns' : 'Done, 4 turns', tone: 'green', left: 'Finished overnight', right: t.id === 'sched' ? 'Stopped at its 4 turn limit' : 'The agent reported the task complete' } : t).filter((t) => t.id !== 'pricing');
+    if (state.scenario === 'morning') list = list.map((t) => {
+      if (t.group !== 'running' && t.id !== 'notes') return t;
+      const terminal = { ...t, group: 'done', needsAwake: false, left: 'Finished overnight',
+        stateLabel: t.id === 'sched' ? 'Stopped at 4 turns' : t.id === 'export' ? 'Done, 9 turns' : 'Done, 6 turns',
+        tone: t.id === 'sched' ? 'muted' : 'green',
+        right: t.id === 'sched' ? 'Reached its turn limit; T3 Code cannot report completion' : t.id === 'export' ? 'Codex reported the task complete' : 'Claude Code reported the task complete' };
+      delete terminal.tally;
+      delete terminal.availTone;
+      return terminal;
+    }).filter((t) => t.id !== 'pricing');
     return list;
   }
   const counts = () => { const list = tasks(); return { needs: list.filter((t) => t.group === 'needs').length, running: list.filter((t) => t.group === 'running').length, waiting: list.filter((t) => t.group === 'waiting').length, awake: list.filter((t) => t.needsAwake || t.group === 'running').length }; };
@@ -234,7 +243,7 @@
       : t.group === 'running' ? `<div class="state-box" role="status"><h3>${t.tally ? tally(t.tally) : ''}</h3><p>${esc(t.left)}. ${esc(t.right)}.</p><div class="actions"><button class="quiet">Stop after this turn</button><button class="ghost danger">End now</button></div></div>`
       : t.group === 'waiting' ? `<div class="state-box"><h3>${esc(t.left)}</h3><p>${esc(t.right)}.</p><div class="actions"><button class="primary">Edit</button><button class="quiet">Start now</button><button class="ghost danger">Cancel</button></div></div>`
       : `<div class="state-box"><h3>${esc(t.stateLabel)}</h3><p>${esc(t.right)}.</p><div class="actions"><button class="primary">Continue again</button></div></div>`;
-    const turns = t.id === 'billing' ? [['1', '22:02:05', '22:14', 'Ended normally'], ['2', '22:14:40', '22:31', 'Asked a question, paused']] : t.id === 'sched' ? [['1', '21:40:05', '21:58', 'Ended normally'], ['2', '21:58:31', '22:15', 'Ended normally'], ['3', '22:34:02', 'Running', '']] : t.id === 'audit-failed' ? [['-', 'Not sent', '', 'Token rejected before sending (HTTP 401)']] : [];
+    const turns = t.id === 'billing' ? [['1', '22:02:05', '22:14', 'Ended normally'], ['2', '22:14:40', '22:31', 'Asked a question, paused']] : t.id === 'sched' ? [['1', '21:40:05', '21:58', 'Ended normally'], ['2', '21:58:31', '22:15', 'Ended normally'], ...(t.group === 'done' ? [['3', '22:34:02', '22:50', 'Ended normally'], ['4', '22:50:30', '23:06', 'Reached turn limit']] : [['3', '22:34:02', 'Running', '']])] : t.id === 'audit-failed' ? [['-', 'Not sent', '', 'Token rejected before sending (HTTP 401)']] : [];
     return `<button class="ghost back" data-nav="board">← Back to ${home().toLowerCase()}</button><div class="heading"><div><span class="who">${mono(th.agent)}<span>${esc(a.name)}</span><span class="muted">/ ${esc(th.project)}</span></span><h1 tabindex="-1" style="margin-top:10px;font-size:28px">${esc(th.title)}</h1></div></div>
       <section class="card pad"><p class="plan-lead">${t.plan.charAt(0).toUpperCase() + t.plan.slice(1)}</p>${box}
       ${turns.length ? `<h3 style="margin-top:22px">Turns</h3><table><thead><tr><th scope="col">Turn</th><th scope="col">Delivered</th><th scope="col">Turn ended</th><th scope="col">Result</th></tr></thead><tbody>${turns.map((r) => `<tr>${r.map((c) => `<td>${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody></table>` : ''}
