@@ -18,6 +18,7 @@ let offline = false;
 let dispatches = 0;
 const externalUrls = [];
 let menu;
+let trayImage;
 const evidenceDirectory = process.env.T3_SMOKE_EVIDENCE_DIR;
 async function capture(name) {
   if (!evidenceDirectory) return;
@@ -66,7 +67,7 @@ class FixtureWindow extends BrowserWindow {
 }
 const injectedElectron = {
   ...electron, app: appProxy, BrowserWindow: FixtureWindow,
-  Tray: class { setToolTip() {} on() {} setContextMenu(value) { menu = value; } },
+  Tray: class { constructor(image) { trayImage = image; } setToolTip() {} on() {} setContextMenu(value) { menu = value; } },
   Menu: { buildFromTemplate: value => value }, Notification: { isSupported: () => false },
   shell: { openExternal: async url => { externalUrls.push(url); } },
   powerMonitor: { on() {} }
@@ -123,6 +124,11 @@ async function run() {
   assert.equal(dispatches, 0, 'The fixture must never send a message');
   assert.deepEqual(failures, []);
   assert.ok(menu.find(item => item.label === 'Open scheduler'));
+  // The real nativeImage decodes the tray glyph, so an unreadable or undecodable asset fails here.
+  assert.equal(trayImage.isEmpty(), false, 'The menu-bar icon must contain pixels');
+  assert.deepEqual(trayImage.getSize(), { width: 18, height: 18 });
+  assert.equal(trayImage.isTemplateImage(), true, 'The menu-bar icon must adapt to light and dark menu bars');
+  assert.ok(trayImage.getScaleFactors().includes(2), 'The menu-bar icon needs a Retina representation');
   console.log('Electron production workflow smoke passed: one window, real preload/IPC/renderer, local history, sanitized offline error, zero sends.');
 }
 async function rendererJourney(js) {

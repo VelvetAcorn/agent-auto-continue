@@ -24,7 +24,7 @@ function appHarness(initialJobs = [], { ownsInstance = true, rawJobs } = {}) {
     ipcMain: { handle: (name, fn) => { handlers[name] = fn; } }, BrowserWindow: Window,
     Menu: { buildFromTemplate: value => value }, Notification: { isSupported: () => false },
     Tray: class { setToolTip() {} on() {} setContextMenu(menu) { trayMenu = menu; } },
-    nativeImage: { createFromDataURL: () => ({ setTemplateImage() {} }) }, powerMonitor: { on() {} }
+    nativeImage: { createFromPath: () => ({ setTemplateImage() {} }) }, powerMonitor: { on() {} }
   };
   const fakeFs = { readFileSync: name => { if (!files.has(name)) throw Object.assign(new Error('missing'), { code: 'ENOENT' }); return files.get(name); }, mkdirSync() {}, writeFileSync: (name, value) => { if (failWrite) throw new Error('Disk full'); files.set(name, value); }, renameSync: (from, to) => { files.set(to, files.get(from)); files.delete(from); } };
   const apiModule = require('../lib/api-client');

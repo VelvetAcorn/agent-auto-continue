@@ -11,7 +11,8 @@
     "build:dmg": "electron-builder --mac dmg",
     "build:all": "electron-builder",
     "test": "node --test",
-    "test:electron": "electron tools/electron-smoke.cjs"
+    "test:electron": "electron tools/electron-smoke.cjs",
+    "icons": "electron tools/build-icons.cjs"
   },
   "dependencies": {
     "node-schedule": "^2.1.1"
@@ -22,7 +23,7 @@
   },
   "build": {
     "appId": "io.t3code.auto-continue",
-    "icon": "assets/icon.png",
+    "icon": "assets/icon.icns",
     "mac": {
       "category": "public.app-category.developer-tools",
       "target": [
@@ -37,7 +38,7 @@
       "settings.html",
       "dashboard.html",
       "styles.css",
-      "assets/icon.png",
+      "assets/trayTemplate*.png",
       "lib/**/*.js",
       "renderer/**/*.js",
       "package.json"

@@ -80,6 +80,9 @@ npm run build:dmg   # optional disk image
 
 The default build produces a ZIP in `dist/`, which is the most portable artifact for local testing. `npm run build:dmg` creates a disk image on a normal macOS host with disk-image tooling available; `npm run build:all` requests both. The menu includes **Launch at login** after the app has been installed.
 
+The app icon (`assets/icon.icns`) and menu-bar glyph (`assets/trayTemplate.png`, `assets/trayTemplate@2x.png`) are generated from the SVG sources in `assets/` and committed.
+After editing `assets/icon.svg` or `assets/trayTemplate.svg`, run `npm run icons` on macOS and commit the regenerated files.
+
 ## Reliability model
 
 Jobs are stored under macOS's app data directory as `jobs.json`; configuration is stored beside it as `config.json`. Do not place either file in this repository or source control.
