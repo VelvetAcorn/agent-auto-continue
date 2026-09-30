@@ -48,6 +48,11 @@ async function fixtureFetch(url, options = {}) {
   return new Response(JSON.stringify(payload), { headers: { 'content-type': 'application/json' } });
 }
 const apiModule = require('../lib/api-client');
+const harnessModule = require('../lib/harnesses');
+const { createT3Harness } = require('../lib/harnesses/t3');
+const { createFakeHarness } = require('./fake-harness.cjs');
+// A second, in-memory harness exercises the picker without touching real agents.
+const fake = createFakeHarness({ label: 'Fake Agent', conversations: [{ id: 'conv-fake', title: 'Fake conversation', projectName: 'Fake repo', updatedAt: '2026-09-30T10:00:00Z' }], settings: [{ key: 'port', type: 'port', label: 'Fake agent port', default: 4096, help: 'Fixture setting.' }] });
 const appProxy = new Proxy(app, { get(target, property) {
   if (property === 'requestSingleInstanceLock') return () => true;
   if (property === 'getPath') return name => name === 'userData' ? '/fixture' : target.getPath(name);
@@ -78,6 +83,7 @@ function loadProductionMain() {
       if (name === 'node:fs') return fakeFs;
       if (name === 'node-schedule') return { scheduleJob: () => ({ cancel() {} }) };
       if (name === './lib/api-client') return { ...apiModule, createApiClient: options => apiModule.createApiClient({ ...options, fetchImpl: fixtureFetch }) };
+      if (name === './lib/harnesses') return { ...harnessModule, createHarnesses: options => harnessModule.createHarnessRegistry([createT3Harness({ api: options.api }), fake.adapter]) };
       return name.startsWith('./lib/') ? require(path.join(root, name)) : require(name);
     }, __dirname: root, process: { env: { T3_TOKEN: 'fixture-only' }, pid: process.pid }, console, Buffer
   }, { filename: 'main.js' });
@@ -106,6 +112,7 @@ async function run() {
   assert.equal(windows.length, 1);
   // DOM journey assertions are maintained below with the production selectors.
   await rendererJourney(js);
+  await harnessJourney(js);
   offline = true;
   const history = await js('window.autoContinue.listJobs({view:"history"})');
   assert.ok(history.total >= 1, 'History survives offline API');
@@ -121,6 +128,7 @@ async function run() {
   assert.equal(await js(`document.querySelector('#notices').textContent.includes('unexpected')`), false);
   if (evidenceDirectory) fs.writeFileSync(path.join(evidenceDirectory, 'persisted-fixture-jobs.json'), files.get('/fixture/jobs.json'));
   assert.equal(dispatches, 0, 'The fixture must never send a message');
+  assert.equal(fake.state.submitted.length, 0, 'The fake harness must never send a message');
   assert.deepEqual(failures, []);
   assert.ok(menu.find(item => item.label === 'Open scheduler'));
   console.log('Electron production workflow smoke passed: one window, real preload/IPC/renderer, local history, sanitized offline error, zero sends.');
@@ -234,5 +242,57 @@ async function rendererJourney(js) {
   await click('[data-action="new"]');
   assert.match(await js(`document.querySelector('#schedule-preview').textContent`), /12-second/);
   assert.equal(windows.length, 1, 'Every journey stayed in the same window');
+}
+async function harnessJourney(js) {
+  const click = async selector => {
+    await waitFor(() => js(`Boolean(document.querySelector(${JSON.stringify(selector)}))`), `control ${selector}`);
+    await js(`document.querySelector(${JSON.stringify(selector)}).click()`);
+  };
+  const fill = async (selector, value) => js(`(() => { const input=document.querySelector(${JSON.stringify(selector)}); input.value=${JSON.stringify(value)}; input.dispatchEvent(new Event('input',{bubbles:true})); })()`);
+  const choose = async (selector, value) => js(`(() => { const select=document.querySelector(${JSON.stringify(selector)}); select.value=${JSON.stringify(value)}; select.dispatchEvent(new Event('change',{bubbles:true})); })()`);
+  const heading = expected => waitFor(() => js(`document.querySelector('h1')?.textContent === ${JSON.stringify(expected)}`), `view ${expected}`);
+  await click('[data-nav="threads"]');
+  await heading('Threads');
+  await waitFor(() => js(`Boolean(document.querySelector('#threads-harness option[value="fake"]'))`), 'harness catalogue loaded');
+  await choose('#threads-harness', 'fake');
+  await waitFor(() => js(`Boolean(document.querySelector('[data-thread="conv-fake"]'))`), 'fake conversations listed');
+  await waitFor(() => js(`document.querySelector('#connection-state').textContent === 'Fake Agent connected'`), 'harness connection label');
+  assert.equal(await js(`document.querySelector('#search').placeholder`), 'Find a session…');
+  await capture('threads-harness');
+  await click('[data-thread="conv-fake"]');
+  await heading('New schedule');
+  assert.equal(await js(`document.querySelector('#harness').value`), 'fake');
+  assert.match(await js(`document.querySelector('.thread-picker').textContent`), /Fake conversation/);
+  assert.match(await js(`document.querySelector('#schedule-form').textContent`), /Send to session/);
+  await fill('#date', '2099-11-01');
+  await fill('#time', '10:00');
+  await fill('#timezone', 'UTC');
+  await capture('composer-harness');
+  await js(`document.querySelector('#schedule-form').requestSubmit()`);
+  await heading('Upcoming');
+  const job = await js(`window.autoContinue.listJobs({view:'upcoming'}).then(result=>result.jobs.find(item=>item.harness==='fake'))`);
+  assert.ok(job, 'The schedule records its harness');
+  assert.equal(job.threadTitle, 'Fake conversation');
+  await waitFor(() => js(`document.querySelector(${JSON.stringify(`[data-job="${job.id}"] .overline`)})?.textContent === 'Fake Agent · Fake repo'`), 'harness shown in the row');
+  await capture('upcoming-harness');
+  await click(`[data-job="${job.id}"]`);
+  await waitFor(() => js(`document.querySelector('.key-values')?.textContent.includes('Agent harnessFake Agent')`), 'harness shown in the detail');
+  await click('[data-action="cancel"]');
+  await click('[data-action="confirm-cancel"]');
+  await waitFor(() => js(`window.autoContinue.getJob(${JSON.stringify(job.id)}).then(item=>item.status==='canceled')`), 'fake schedule canceled');
+  await click('[data-nav="settings"]');
+  await waitFor(() => js(`Boolean(document.querySelector('#harness-form'))`), 'agent settings card');
+  assert.match(await js(`document.querySelector('#harness-form').textContent`), /Works while locked/);
+  await fill('#harness-fake-port', '4555');
+  await js(`document.querySelector('#harness-form').requestSubmit()`);
+  await waitFor(() => js(`window.autoContinue.getSettings().then(settings=>settings.harnesses.fake.port.value===4555)`), 'harness setting saved');
+  await js(`document.querySelector('#harness-form').scrollIntoView({block:'center'})`);
+  await capture('settings-harnesses');
+  // Later checks use T3 Code's connection state.
+  await click('[data-nav="threads"]');
+  await waitFor(() => js(`Boolean(document.querySelector('#threads-harness'))`), 'threads view');
+  await choose('#threads-harness', 't3');
+  await waitFor(() => js(`Boolean(document.querySelector('[data-thread="thread-active"]'))`), 'T3 threads again');
+  assert.equal(fake.state.submitted.length, 0);
 }
 run().then(() => app.exit(0), error => { console.error(error.stack); app.exit(1); });
