@@ -69,7 +69,7 @@
     draft: { thread: 'th-notes', message: 'Continue', when: pick('when', 'free', ['free', 'time', 'now']), far: pick('far', 'done', ['turns', 'done']), turns: params.get('turns') ?? '1', max: params.get('max') ?? '10', date: '2026-10-01', time: '06:30', preset: '', stops: { noprog: true, slow: false, touched: true } }
   };
 
-  // Vocabulary alternatives for decision D5. "task" is recommended; "handoff" is the Fable suggestion; "schedule" is today's word.
+  // Vocabulary alternatives: see decision D2 in docs/ui-review.md.
   const W = {
     task: { one: 'task', many: 'tasks', One: 'Task', New: 'New task', home: 'Board', verb: (d) => d.when === 'time' ? `Schedule for ${d.time}` : d.when === 'now' ? 'Start now' : `Start when ${agentOf(d.thread).name} is free` },
     handoff: { one: 'handoff', many: 'handoffs', One: 'Handoff', New: 'New handoff', home: 'Board', verb: () => 'Hand off' },

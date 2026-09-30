@@ -78,6 +78,7 @@ npm run build       # signed/unsigned ZIP, depending on local certificate setup
 npm run build:dmg   # optional disk image
 ```
 
+All build scripts package locally without publishing releases (`--publish never`).
 The default build produces a ZIP in `dist/`, which is the most portable artifact for local testing. `npm run build:dmg` creates a disk image on a normal macOS host with disk-image tooling available; `npm run build:all` requests both. The menu includes **Launch at login** after the app has been installed.
 
 ## Reliability model

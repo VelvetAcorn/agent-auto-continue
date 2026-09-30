@@ -18,7 +18,7 @@ Then visit <http://127.0.0.1:4173/>.
 
 “Later” is an exploratory wordmark, not a proposed repository/app rename.
 
-All prototypes use the same fictional sample data and **fixed sample clock of 2026-09-30 14:00 BST**. Date validation and quick shortcuts deliberately use that clock so every direction remains comparable. Nothing connects to Electron or the real scheduler. Changes last only until reload. Google Fonts supplies Fraunces and Inter; serif/system fallbacks work without a network connection.
+Directions 01-04 use the same fictional sample data and **fixed sample clock of 2026-09-30 14:00 BST**. Date validation and quick shortcuts deliberately use that clock so every direction remains comparable. Nothing connects to Electron or the real scheduler. Changes last only until reload. Google Fonts supplies Fraunces and Inter; serif/system fallbacks work without a network connection.
 
 ## Suggested review sequence
 
@@ -61,7 +61,7 @@ They were built after a hands-on review of the shipped app; see [the UI review](
 
 The dark studio bar at the top holds prototype-only controls for each open design choice.
 Options marked "rec." are the recommendation.
-Every control is also a URL parameter (`scenario`, `words`, `awake`, `composer`, `picker`, `theme`, `view`, `task`, `agent`, `when`, `far`, `turns`, `max`, `stops`, `pairing`, `add`), so any state can be linked directly.
+The following URL parameters select reproducible prototype states (`scenario`, `words`, `awake`, `composer`, `picker`, `theme`, `view`, `task`, `agent`, `when`, `far`, `turns`, `max`, `stops`, `pairing`, `add`), so these states can be linked directly.
 Scenarios cover a busy evening, something going wrong (a missed start while the Mac slept, an agent not running, a desktop agent that needs the screen), the next morning's report and an empty board.
 
 The feature prototypes use a **fixed sample clock of 2026-09-30 22:40 BST** instead of 14:00, because these features are about work that runs overnight.
@@ -73,6 +73,6 @@ Ideas adopted from it are credited in the review.
 
 ### Screenshots
 
-`screenshots/` holds full-page captures of 05-08 in light and Bone Outline themes at 1180, 620 and 420 pixels wide.
+`screenshots/` holds full-page captures of 05-08 in light and Bone Outline themes at 1180, 620 and 420 pixels wide, plus the Phone stage at 1000 pixels wide.
 Regenerate them from the repository root with `env -u ELECTRON_RUN_AS_NODE npx electron design/mockups/capture.cjs`.
 Committed copies were reduced to 256 colours to keep the repository small.

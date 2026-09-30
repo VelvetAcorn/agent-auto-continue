@@ -25,7 +25,7 @@ The real app was driven end to end.
 It uses in-memory storage and a fake T3 Code API, so no real messages can be sent.
 The fake API serves 11 realistic threads across 3 projects, 7 upcoming jobs and 69 history records.
 Those cover long titles, an untitled thread, an unknown settlement state, a missing timestamp, three timezones, a 30-second buffer, a 45-minute catch-up and a legacy record.
-A pending job was run through a real dispatch that was held to capture Sending, then rejected with HTTP 401 to capture the live failure toast.
+A pending job entered the production dispatch path; the fake API held its request to capture Sending, then rejected it with HTTP 401 to capture the live failure toast.
 
 Scenarios captured: populated, empty, first connection pending, missing token, unreadable storage, T3 Code returning HTML, and connection refused.
 Views were captured in light and Bone Outline themes at 1180 px (the default window), 620 px (the real minimum window width), 420 px and 375 px.
@@ -43,7 +43,9 @@ for s in empty storage loading no-token; do env -u ELECTRON_RUN_AS_NODE UI_REVIE
 ```
 
 Screenshots are in [`docs/ui-review/screens/`](ui-review/screens/).
-File names are `<step>-<state>-<theme>-<width>.png`.
+File names are `<step>-<state>-<theme>-<width>.png` for the populated tour and `<scenario>-<view>-<theme>-<width>.png` for other scenarios.
+The harness writes accessibility trees, keyboard reports and capture indexes to `aac-ui-review-data` under the system temporary directory.
+The committed screenshots are a selected set; regeneration also captures additional full-page and scenario views.
 Committed copies were reduced to 256 colours to keep the repository small.
 The amber or blue rings around page headings in many screenshots are real: see A3.
 
@@ -158,6 +160,7 @@ Priorities: **P0** can mislead someone into a wrong decision about whether work 
 - **What:** History rows show `updatedAt` without saying whether it is the send, failure or cancel time.
 - **Where:** `renderer/app.js:87`.
 - **Evidence:** `08-history-light-1180.png`.
+- **Why:** Without an event label, readers cannot tell what the timestamp confirms.
 - **Fix:** prefix with the event ("Sent 23:31", "Failed 23:31", "Canceled 22:10").
 
 #### H7 (P2) Detail repeats near-identical timestamps
@@ -165,6 +168,7 @@ Priorities: **P0** can mislead someone into a wrong decision about whether work 
 - **What:** Requested, Effective (with seconds) and Last updated are usually within seconds; catch-up delay shows "106 seconds".
 - **Where:** `renderer/app.js:134`.
 - **Evidence:** `10-detail-failed-light-1180.png`, `30-toast-failure-light-1180.png`.
+- **Why:** Repeated timestamps obscure the requested send time and the size of a delay.
 - **Fix:** show one "Sends at" line with the buffer as a hint, and humanise lateness ("1 min 46 s late").
 
 ### Forms
@@ -182,6 +186,7 @@ Priorities: **P0** can mislead someone into a wrong decision about whether work 
 - **What:** "Choose a thread before scheduling." appears at the bottom above the submit button; the thread picker is at the top; no field gets `aria-invalid`.
 - **Where:** `renderer/app.js:102` (`#schedule-error`), `renderer/app.js:194` (submit handler).
 - **Evidence:** `18-composer-error-no-thread-light-1180.png`, `20-composer-error-past-light-1180.png`.
+- **Why:** Users must search back through the form to find and correct the invalid input.
 - **Fix:** render the message under the relevant field, set `aria-invalid`, move focus to the first invalid field.
 
 #### F3 (P1) Quick times are grouped with the message
@@ -197,6 +202,7 @@ Priorities: **P0** can mislead someone into a wrong decision about whether work 
 - **What:** Escape does not close it; there is no today marker; past days are selectable; the toggle glyph ▦ renders as a filled grey square; the ghost toggle is inset 16 px from the field edge.
 - **Where:** `renderer/app.js:117`, `renderer/app.js:193`, `styles.css:1` `.ghost`.
 - **Evidence:** `24-composer-calendar-light-1180.png`, `25-composer-calendar-keyboard-light-1180.png`; Escape check recorded as not closing.
+- **Why:** Keyboard users lose a predictable exit, and selectable past dates invite avoidable errors.
 - **Fix:** Escape closes and returns focus to the toggle, mark today, disable past days, use a text label "Calendar" aligned to the field edge.
 
 #### F5 (P2) The thread picker reads like a button with a stray chevron
@@ -204,6 +210,7 @@ Priorities: **P0** can mislead someone into a wrong decision about whether work 
 - **What:** The chevron sits inline after the title rather than at the right edge; "Send to thread" is a `<label>` not associated with any control, so it is announced as nothing.
 - **Where:** `renderer/app.js:102`.
 - **Evidence:** `17-composer-new-light-1180.png`; the accessibility tree shows an empty `LabelText` and a button named "Choose a thread ⌄ Most recently active first".
+- **Why:** The selection affordance is unclear visually and its label is unavailable to assistive technology.
 - **Fix:** right-align the chevron as a decorative element and use `aria-labelledby` from a visible label.
 
 #### F6 (P2) Settings feedback is thin
@@ -211,6 +218,7 @@ Priorities: **P0** can mislead someone into a wrong decision about whether work 
 - **What:** Save and Check connection report only through a 5-second toast; the token placeholder says "Leave blank to keep the saved token" while an environment token is in use; "Launch at login" exists only in the tray.
 - **Where:** `renderer/app.js:144`, `main.js:188`.
 - **Evidence:** `26-settings-light-1180.png`, `27-toast-connected-light-1180.png`.
+- **Why:** Transient feedback is easy to miss, and token guidance can imply that a different credential is active.
 - **Fix:** show the last connection result inline in the Connection card, adapt the placeholder, add Launch at login to the window.
 
 #### F7 (P2) Invalid timezone is shown as a hint
@@ -218,6 +226,7 @@ Priorities: **P0** can mislead someone into a wrong decision about whether work 
 - **What:** An unknown timezone shows grey help text in the preview rather than an error on the field.
 - **Where:** `renderer/app.js:111`.
 - **Evidence:** `23-composer-bad-timezone-light-1180.png`.
+- **Why:** A blocking input problem looks like optional guidance, delaying correction.
 - **Fix:** Mark the timezone field `aria-invalid`, show the message under it as an error, and offer a suggestion list.
 
 ### Status clarity
@@ -228,13 +237,16 @@ Priorities: **P0** can mislead someone into a wrong decision about whether work 
 - **Where:** `renderer/app.js:51`, `renderer/app.js:53`.
 - **Evidence:** `33-upcoming-offline-html-light-1180.png` shows a message due in 24 minutes under "queue saved".
 - **Why:** the jobs are saved but will fail if T3 Code is still unreachable when they run; "saved" reads as "safe".
-- **Fix:** name the risk: "T3 Code is unreachable. 2 messages are due in the next hour and will fail unless it is back." Mark affected rows.
+- **Fix:** name the risk: "T3 Code is unreachable.
+  2 messages are due in the next hour and will fail unless it is back."
+  Mark affected rows.
 
 #### S2 (P1) A missing token looks like an outage
 
 - **What:** With no token the notice title is "T3 Code is unavailable" and the status is "Offline · queue saved"; only the body mentions the token.
 - **Where:** `renderer/app.js:53` (title is fixed regardless of error code).
 - **Evidence:** `no-token-upcoming-light-1180.png`.
+- **Why:** An outage diagnosis sends users toward connection troubleshooting instead of credential setup.
 - **Fix:** title by error category: "Add your T3 token", "T3 Code rejected the token", "T3 Code is not running", "Unexpected response from T3 Code".
 
 #### S3 (P1) Connection status disappears at the real minimum width
@@ -242,6 +254,7 @@ Priorities: **P0** can mislead someone into a wrong decision about whether work 
 - **What:** `.connection{display:none}` applies at 650 px and below; the window's minimum width is 620 px.
 - **Where:** `styles.css:1` `@media(max-width:650px)`, `main.js:122`.
 - **Evidence:** `01-upcoming-light-620.png`, `01-upcoming-light-420.png`.
+- **Why:** Users at a supported window width lose the persistent connection signal.
 - **Fix:** keep the dot with an accessible label at narrow widths.
 
 #### S4 (P2) Overdue pending jobs say "Scheduled · 1 min ago"
@@ -249,6 +262,7 @@ Priorities: **P0** can mislead someone into a wrong decision about whether work 
 - **What:** A job waiting for catch-up (after wake or while sending) shows the Scheduled pill with a past relative time.
 - **Where:** `renderer/app.js:87`.
 - **Evidence:** `01-upcoming-light-1180.png` (first row).
+- **Why:** A past scheduled time does not explain whether the app is catching up or has stalled.
 - **Fix:** show "Sending now" or "Catching up" when the effective time has passed.
 
 #### S5 (P2) Unconfirmed delivery uses failure styling and two action areas
@@ -256,6 +270,7 @@ Priorities: **P0** can mislead someone into a wrong decision about whether work 
 - **What:** The unconfirmed block has a red border while its pill is amber; Acknowledge appears before Check delivery, in a separate action area.
 - **Where:** `renderer/app.js:134`, `styles.css:1` `.error-detail`.
 - **Evidence:** `11-detail-unconfirmed-light-1180.png`.
+- **Why:** Failure styling suggests a known outcome even though delivery remains uncertain.
 - **Fix:** amber styling, one action row with Check delivery first.
 
 #### S6 (P2) Connection changes are silent to screen readers
@@ -263,6 +278,7 @@ Priorities: **P0** can mislead someone into a wrong decision about whether work 
 - **What:** `#connection-state` is not a live region.
 - **Where:** `renderer/app.js:51`.
 - **Evidence:** The `ax-upcoming.txt` accessibility tree dump from `tools/ui-review-capture.cjs` has no live status for the connection label; `renderer/app.js:51` renders `#connection-state` without live-region semantics.
+- **Why:** Connection changes can go unnoticed when the interface is read through assistive technology.
 - **Fix:** `role="status"` on the connection label.
 
 #### S7 (P1) Loading looks like an empty result
@@ -270,6 +286,7 @@ Priorities: **P0** can mislead someone into a wrong decision about whether work 
 - **What:** Before the first thread response, Threads says "No matching threads" and offers "Show all non-archived threads".
 - **Where:** `renderer/app.js:95` (empty state ignores `state.online === null`).
 - **Evidence:** `loading-threads-light-1180.png`, `loading-composer-picker-light-1180.png`.
+- **Why:** Users may change filters or assume their threads are missing before loading finishes.
 - **Fix:** a "Loading threads…" state while `state.online === null`.
 
 ### Error recovery
@@ -279,6 +296,7 @@ Priorities: **P0** can mislead someone into a wrong decision about whether work 
 - **What:** The live "A scheduled message failed. View" toast appears bottom-centre over "Schedule again", including when the failed job is the one on screen.
 - **Where:** `renderer/app.js:163`, `renderer/app.js:240`, `styles.css:1` `#toast`.
 - **Evidence:** `30-toast-failure-light-1180.png`.
+- **Why:** The recovery action is obscured, and the redundant View action adds no useful destination.
 - **Fix:** skip View when that job is open, place the toast bottom-left clear of the content column, and keep action toasts until dismissed (the 10-second timeout also conflicts with WCAG 2.2.1).
 
 #### E2 (P2) Authentication failures lead with Schedule again
@@ -286,6 +304,7 @@ Priorities: **P0** can mislead someone into a wrong decision about whether work 
 - **What:** For a rejected token the primary action is Schedule again; Connection settings is a ghost button.
 - **Where:** `renderer/app.js:134`.
 - **Evidence:** `10-detail-failed-light-1180.png`.
+- **Why:** Rescheduling does not repair the rejected credential and can lead to another failure.
 - **Fix:** when `error.code` is `authentication_rejected` or `missing_credentials`, make "Update token" primary.
 
 #### E3 (P0) Storage errors hide the queue and still offer scheduling
@@ -301,6 +320,7 @@ Priorities: **P0** can mislead someone into a wrong decision about whether work 
 - **What:** A legacy record shows "t-sched" and "T3 CODE" although the thread is in the current list.
 - **Where:** `renderer/app.js:134` (`job.threadTitle || job.threadId`).
 - **Evidence:** `14-detail-legacy-light-1180.png`.
+- **Why:** An internal identifier makes a historical outcome harder to associate with its conversation.
 - **Fix:** look up the current thread title, as the development plan intended; say "Timezone not recorded" rather than "(legacy record)".
 
 ### Accessibility
@@ -310,6 +330,7 @@ Priorities: **P0** can mislead someone into a wrong decision about whether work 
 - **What:** Buttons are announced as "Upcoming7" and "History2".
 - **Where:** `renderer/app.js:48`.
 - **Evidence:** accessibility tree for Upcoming.
+- **Why:** The count has no spoken meaning and runs into the navigation label.
 - **Fix:** visually hidden text: "Upcoming, 7 scheduled", "History, 2 need attention".
 
 #### A2 (P1) Row buttons have long, badly ordered names
@@ -317,6 +338,7 @@ Priorities: **P0** can mislead someone into a wrong decision about whether work 
 - **What:** Rows are announced as "AGENT-AUTO-CONTINUE Scheduled Refactor the sync worker Continue with the sync worker refactor. 2026-09-30 · 23…"; the project is in capitals; `<div>` inside `<button>` is invalid HTML.
 - **Where:** `renderer/app.js:87`, `renderer/app.js:95`.
 - **Evidence:** The `ax-upcoming.txt` accessibility tree dump from `tools/ui-review-capture.cjs` records row names beginning "AGENT-AUTO-CONTINUE Scheduled Refactor the sync worker Continue with the sync worker refactor.", with the project and status before the title.
+- **Why:** Screen reader users must hear metadata and message text before identifying the conversation.
 - **Fix:** make the title the accessible name and the rest a description, or use the prototype pattern of a title button inside an `<article>`.
 
 #### A3 (P2) Headings get an off-brand browser focus ring
@@ -324,6 +346,7 @@ Priorities: **P0** can mislead someone into a wrong decision about whether work 
 - **What:** After keyboard navigation the h1 (`tabindex="-1"`) shows the browser's default ring: amber in light, blue in dark.
 - **Where:** `renderer/app.js:69`, `styles.css:1` (no `h1:focus` rule).
 - **Evidence:** most screenshots, for example `08-history-light-1180.png`, `01-upcoming-dark-1180.png`.
+- **Why:** Inconsistent focus treatments make navigation feel disconnected from the rest of the interface.
 - **Fix:** `h1:focus{outline:none}` for programmatic focus, or the accent ring for `:focus-visible` only.
 
 #### A4 (P1) Field and pill borders are nearly invisible
@@ -331,6 +354,7 @@ Priorities: **P0** can mislead someone into a wrong decision about whether work 
 - **What:** Input borders are 1.23:1 against their fill and 1.31:1 against the card; WCAG 1.4.11 asks for 3:1 for component boundaries.
 - **Where:** `styles.css:1` `--line` used by `.field input`, `.search`, `textarea`, `.pill`.
 - **Evidence:** [Contrast measurements](#contrast-measurements).
+- **Why:** Low-contrast boundaries make editable controls harder to distinguish from their surroundings.
 - **Fix:** a separate `--field-line` token (`#857E74` light, 3.46:1; `#8A8398` dark, 3.64:1), as used in the prototypes.
 
 #### A5 (P2) Several small texts are below 4.5:1 or very small
@@ -338,6 +362,7 @@ Priorities: **P0** can mislead someone into a wrong decision about whether work 
 - **What:** Muted text on the page background is 4.50:1 (a hair under), the accent "Scheduled" pill text is 4.45:1 at 9 px, the light placeholder is 3.98:1, and dark error text on raised surfaces is 4.35:1; pills are 9 px and meta text 10 px.
 - **Where:** `styles.css:1` tokens and `.pill`, `.meta`, `.overline`.
 - **Evidence:** [Contrast measurements](#contrast-measurements) lists the measured foreground and background pairs.
+- **Why:** Small, low-contrast labels make status and error information harder to read.
 - **Fix:** `--muted:#66616D` (4.92:1 on the page), an `--accent-ink:#655785` for text, a warm placeholder colour, pills at 11 px.
 
 #### A6 (P2) The calendar is not a grid
@@ -345,15 +370,18 @@ Priorities: **P0** can mislead someone into a wrong decision about whether work 
 - **What:** Day buttons are named only by ISO date; there is no grid role or weekday in the name.
 - **Where:** `renderer/app.js:117`.
 - **Evidence:** The `ax-composer.txt` accessibility tree dump from `tools/ui-review-capture.cjs` covers the composer controls; `renderer/app.js:117` supplies ISO-only day names and no grid semantics for the opened calendar shown in `24-composer-calendar-light-1180.png`.
+- **Why:** Assistive technology lacks the weekday and row relationships that make a calendar understandable.
 - **Fix:** `role="grid"` semantics or names like "Friday 2 October 2026".
 
 ### Visual polish
 
 #### V1 (P1) The approved type is not what ships, and neither is the icon
 
-- **What:** Fraunces and Inter are not installed on a typical Mac or bundled; the CSP blocks remote fonts, so headings render in Georgia bold and body text in San Francisco. `package.json` points at `assets/icon.png`, which does not exist, and the build logs "default Electron icon is used".
+- **What:** Fraunces and Inter are not installed on a typical Mac or bundled; the CSP blocks remote fonts, so headings render in Georgia bold and body text in San Francisco.
+  `package.json` points at `assets/icon.png`, which does not exist, and the build logs "default Electron icon is used".
 - **Where:** `styles.css:1` `h1,h2,.brand`, `dashboard.html` CSP, `package.json:25`, `package.json:40`.
 - **Evidence:** every production screenshot versus the prototypes; CI build log.
+- **Why:** Fallback typography changes the approved visual identity, while a default icon makes the installed app harder to recognise.
 - **Fix:** bundle Fraunces and Inter (both OFL) as local `woff2` with `@font-face`; generate `icon.png`/`icns` from `assets/icon.svg`.
 
 #### V2 (P2) Empty count spans skew the nav
@@ -361,6 +389,7 @@ Priorities: **P0** can mislead someone into a wrong decision about whether work 
 - **What:** `.nav-count` keeps its 7 px left margin when empty, so Threads and Settings have lopsided padding.
 - **Where:** `styles.css:1` `.nav-count`, `renderer/app.js:48`.
 - **Evidence:** `01-upcoming-light-1180.png` (compare the gaps after "History 2", "Threads" and "Settings").
+- **Why:** Empty badge spacing makes otherwise equivalent navigation buttons look uneven.
 - **Fix:** `.nav-count:empty{display:none}`.
 
 #### V3 (P2) The Connection overline touches its heading
@@ -368,6 +397,7 @@ Priorities: **P0** can mislead someone into a wrong decision about whether work 
 - **What:** "CONNECTION" sits directly on "Your local T3 Code"; the support card has an 8 px gap.
 - **Where:** `styles.css:1` `.settings .card`, `.support h2`.
 - **Evidence:** `26-settings-light-1180.png`.
+- **Why:** The missing gap weakens the separation between the section label and its heading.
 - **Fix:** `.overline + h2{margin-top:6px}`.
 
 #### V4 (P2) Copy and glyph details
@@ -375,12 +405,15 @@ Priorities: **P0** can mislead someone into a wrong decision about whether work 
 - **What:** The ambiguous-time label joins "This time occurs twice" and "choose an offset" with an em dash; the appearance option is called "Bone Outline"; History search says "Search loaded messages"; "↗" on submit suggests an external link; "＋" is a full-width plus.
 - **Where:** `renderer/app.js:111`, `renderer/app.js:144`, `renderer/app.js:85`, `renderer/app.js:102`, `renderer/app.js:69`.
 - **Evidence:** `renderer/app.js:111`, `renderer/app.js:144`, `renderer/app.js:85`, `renderer/app.js:102` and `renderer/app.js:69` contain the copy and glyphs; `22-composer-dst-ambiguous-light-1180.png` and `26-settings-light-1180.png` show the ambiguous-time label and appearance option.
-- **Fix:** "This time happens twice. Choose an offset.", "Dark", "Search messages", drop the arrows, use "+".
+- **Why:** Inconsistent terminology and ambiguous glyphs add interpretation work to common actions.
+- **Fix:** "This time happens twice.
+  Choose an offset.", "Dark", "Search messages", drop the arrows, use "+".
 
 #### V5 (P2) Empty Upcoming has two primary buttons and a "0"
 
 - **Where:** `renderer/app.js:85`.
 - **Evidence:** `empty-upcoming-light-1180.png`.
+- **Why:** Competing primary actions and a redundant zero distract from the empty-state next step.
 - **Fix:** hide the header button when the empty state shows its own.
 
 #### V6 (P2) Retired screens are still packaged
@@ -388,6 +421,7 @@ Priorities: **P0** can mislead someone into a wrong decision about whether work 
 - **What:** `ui.html` and `settings.html` are unused, still in `build.files`, and use classes (`eyebrow`, `hint`, `secondary`) that no longer exist in `styles.css`.
 - **Where:** `package.json:33`.
 - **Evidence:** `package.json` `build.files` includes `ui.html` and `settings.html`; `grep -Eo "\.(eyebrow|hint|secondary)([^[:alnum:]_-]|$)" styles.css` returns no matching class selectors.
+- **Why:** Packaged obsolete screens add maintenance ambiguity and can be mistaken for supported interfaces.
 - **Fix:** remove them from the package, or delete them.
 
 #### V7 (note) The 420 px breakpoint is unreachable in the app
@@ -475,7 +509,8 @@ Screenshots are in [`design/mockups/screenshots/`](../design/mockups/screenshots
   Each row names its agent with a monogram and says in words what will stop or start it.
 - **Status strip.** The top bar replaces "T3 Code connected" with one monogram per agent carrying an availability dot, a keep-awake chip and a phone chip.
   Below 760 px it collapses to "3 agents need a look" and the moon, so status never disappears (fixes S3).
-- **Composer.** Three questions in order: which thread, when (When the agent is free, At a time, Right away), and how far (a set number of turns, or Until done with an optional turn limit).
+- **Composer.** Three questions in order: which thread, when (When the agent is free, At a time, Right away), and how far (a set number of turns, or Until done).
+  The turn limit is optional for agents that can report completion, required for API agents that cannot, and Until done is unavailable for desktop agents.
   Safety stops that can never be turned off are shown checked and locked.
   A plan sentence restates the whole task, and the submit button repeats the commitment ("Start when Claude Code is free", "Schedule for 06:30").
   Turn counts are validated inline with `aria-invalid` (fixes F1 and F2 in the new design).
@@ -508,8 +543,10 @@ I evaluated each idea against the findings above and the Paper / Focus language.
   The owner's own issues say "task" (#3 "resumes a task", #5 "which tasks need it"), and it pairs naturally with "task complete".
   The studio bar can switch the prototype to "handoff" or today's "schedule" to compare.
 - **"Shift" becomes "Keep awake".** Shift is charming but needs explaining; "Keep awake" matches issue #5, Amphetamine and macOS vocabulary, and the card still has a start, an end and a report.
-- **Zero turns is rejected, not "never send".** A task that never sends is a canceled task; the prototype says "Use at least 1 turn. To stop a task, end it instead."
-  Continuous mode takes an optional turn limit, empty meaning no limit, as the owner decided.
+- **Zero turns is rejected, not "never send".**
+  A task that never sends is a canceled task; the prototype says "Use at least 1 turn.
+  To stop a task, end it instead."
+  Unlimited continuous mode remains available for agents that can report completion; see the [composer behaviour](#what-the-recommended-direction-does) for capability restrictions.
 - **The mandatory no-progress guard** for Until done is kept, but shown as a locked stop only when Until done is chosen.
 - **Phone reach** drops the relay option; per the owner it is localhost or Tailscale with revocable tokens and MCP, never public.
 - **The primary button** restates the commitment instead of a fixed verb.
@@ -523,17 +560,19 @@ I evaluated each idea against the findings above and the Paper / Focus language.
 ## Decisions to approve
 
 Each decision has a recommendation.
-The prototype's studio bar demonstrates the alternatives for D1 to D6.
+The prototype's studio bar demonstrates the alternatives for D1, D2, D3, D5 and D6.
+D4 is a proposed first-use policy; the Settings mockup shows the automatic option selected, without a first-use prompt.
+D9 proposes Off as the initial phone-access setting; the mockup instead illustrates an already paired private-network session.
 
 | # | Decision | Options | Recommendation |
 | --- | --- | --- | --- |
-| D1 | Home screen | **Board** grouped by Needs you, Running, Waiting, Done (05) or **Queue+**, today's time-ordered Upcoming with a Needs you notice (06) | Board. "When free" and "until done" have no fixed time, and overnight the first question is "does anything need me?". |
-| D2 | Name of the thing the user creates | **Task**, **Handoff** (Fable), or **Schedule** (today) | Task, for the reasons above. Keep the data model's field names. |
-| D3 | Keep-awake presentation | **Session card** on the Board plus a strip chip, or **strip chip only** | Session card. It is the only place that can say why and until when, and it becomes the morning report. |
+| D1 | Home screen | **Board** grouped by Needs you, Running, Waiting, Done (05) or **Queue+**, today's time-ordered Upcoming with a Needs you notice (06) | Board, because "when free" and "until done" have no fixed time, and overnight the first question is "does anything need me?" |
+| D2 | Name of the thing the user creates | **Task**, **Handoff** (Fable), or **Schedule** (today) | Task, for the reasons above; keep the data model's field names. |
+| D3 | Keep-awake presentation | **Session card** on the Board plus a strip chip, or **strip chip only** | Session card, to explain why and until when the Mac stays awake and to show the morning report afterwards. |
 | D4 | Keep-awake default | Automatic while tasks need it, ask each time, or never | Ask the first time a task needs it and remember the answer; default to automatic afterwards. |
-| D5 | Composer shape | **Two questions** (when, how far) or **three presets** | Two questions. When and how far are independent; presets hide "at 03:00, until done". |
-| D6 | Harness selection | **Thread picker grouped by agent**, or **agent first** | Grouped picker. Most users think of the thread, not the tool; agent-first adds a step every time. |
-| D7 | Turn limit semantics | 0 rejected; negative rejected; empty limit in Until done means no limit; a turn counts only after confirmed delivery | Approve as prototyped. |
+| D5 | Composer shape | **Two questions** (when, how far) or **three presets** | Two questions, because when and how far are independent; presets hide "at 03:00, until done". |
+| D6 | Harness selection | **Thread picker grouped by agent**, or **agent first** | Grouped picker, because most users think of the thread, not the tool; agent-first adds a step every time. |
+| D7 | Turn limit semantics | 0 and negative values rejected; capability-dependent limits as described in the [composer behaviour](#what-the-recommended-direction-does); a turn counts only after confirmed delivery | Approve as prototyped. |
 | D8 | Desktop-app agents that need an unlocked screen | Keep display on automatically, ask per task, or never | Ask per task with a clear warning on the Board; never unlock or bypass the lock screen. |
 | D9 | Phone access | Off by default; This Mac only; Private network (Tailscale); tokens per device; MCP connector | Approve as prototyped, off by default, pairing codes expire in 5 minutes. |
 | D10 | Navigation | Board, History, Agents, Settings (Threads moves into Agents and the picker) | Approve. |
@@ -550,7 +589,7 @@ These were pre-existing problems found during the review and are in separate com
   The fixture now lists its windows explicitly and asserts that a broadcast arrives; the assertion fails without the fix.
 - **CI fails on every push to main.**
   The Package macOS app job builds successfully, then electron-builder detects CI and tries to publish a GitHub release without `GH_TOKEN`.
-  All build scripts now pass `--publish never`.
+  The packaging policy is documented under [Build a macOS app](../README.md#build-a-macos-app).
   This only happens on push events, so the pull request run cannot prove it; it will be confirmed by the first push to main after merging.
 
 `npm test` (46 tests) passed repeatedly with no flakiness, and `npm run test:electron` passes.
