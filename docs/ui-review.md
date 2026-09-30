@@ -218,6 +218,7 @@ Priorities: **P0** can mislead someone into a wrong decision about whether work 
 - **What:** An unknown timezone shows grey help text in the preview rather than an error on the field.
 - **Where:** `renderer/app.js:111`.
 - **Evidence:** `23-composer-bad-timezone-light-1180.png`.
+- **Fix:** Mark the timezone field `aria-invalid`, show the message under it as an error, and offer a suggestion list.
 
 ### Status clarity
 
@@ -261,6 +262,7 @@ Priorities: **P0** can mislead someone into a wrong decision about whether work 
 
 - **What:** `#connection-state` is not a live region.
 - **Where:** `renderer/app.js:51`.
+- **Evidence:** The `ax-upcoming.txt` accessibility tree dump from `tools/ui-review-capture.cjs` has no live status for the connection label; `renderer/app.js:51` renders `#connection-state` without live-region semantics.
 - **Fix:** `role="status"` on the connection label.
 
 #### S7 (P1) Loading looks like an empty result
@@ -314,6 +316,7 @@ Priorities: **P0** can mislead someone into a wrong decision about whether work 
 
 - **What:** Rows are announced as "AGENT-AUTO-CONTINUE Scheduled Refactor the sync worker Continue with the sync worker refactor. 2026-09-30 · 23…"; the project is in capitals; `<div>` inside `<button>` is invalid HTML.
 - **Where:** `renderer/app.js:87`, `renderer/app.js:95`.
+- **Evidence:** The `ax-upcoming.txt` accessibility tree dump from `tools/ui-review-capture.cjs` records row names beginning "AGENT-AUTO-CONTINUE Scheduled Refactor the sync worker Continue with the sync worker refactor.", with the project and status before the title.
 - **Fix:** make the title the accessible name and the rest a description, or use the prototype pattern of a title button inside an `<article>`.
 
 #### A3 (P2) Headings get an off-brand browser focus ring
@@ -334,12 +337,14 @@ Priorities: **P0** can mislead someone into a wrong decision about whether work 
 
 - **What:** Muted text on the page background is 4.50:1 (a hair under), the accent "Scheduled" pill text is 4.45:1 at 9 px, the light placeholder is 3.98:1, and dark error text on raised surfaces is 4.35:1; pills are 9 px and meta text 10 px.
 - **Where:** `styles.css:1` tokens and `.pill`, `.meta`, `.overline`.
+- **Evidence:** [Contrast measurements](#contrast-measurements) lists the measured foreground and background pairs.
 - **Fix:** `--muted:#66616D` (4.92:1 on the page), an `--accent-ink:#655785` for text, a warm placeholder colour, pills at 11 px.
 
 #### A6 (P2) The calendar is not a grid
 
 - **What:** Day buttons are named only by ISO date; there is no grid role or weekday in the name.
 - **Where:** `renderer/app.js:117`.
+- **Evidence:** The `ax-composer.txt` accessibility tree dump from `tools/ui-review-capture.cjs` covers the composer controls; `renderer/app.js:117` supplies ISO-only day names and no grid semantics for the opened calendar shown in `24-composer-calendar-light-1180.png`.
 - **Fix:** `role="grid"` semantics or names like "Friday 2 October 2026".
 
 ### Visual polish
@@ -369,6 +374,7 @@ Priorities: **P0** can mislead someone into a wrong decision about whether work 
 
 - **What:** The ambiguous-time label joins "This time occurs twice" and "choose an offset" with an em dash; the appearance option is called "Bone Outline"; History search says "Search loaded messages"; "↗" on submit suggests an external link; "＋" is a full-width plus.
 - **Where:** `renderer/app.js:111`, `renderer/app.js:144`, `renderer/app.js:85`, `renderer/app.js:102`, `renderer/app.js:69`.
+- **Evidence:** `renderer/app.js:111`, `renderer/app.js:144`, `renderer/app.js:85`, `renderer/app.js:102` and `renderer/app.js:69` contain the copy and glyphs; `22-composer-dst-ambiguous-light-1180.png` and `26-settings-light-1180.png` show the ambiguous-time label and appearance option.
 - **Fix:** "This time happens twice. Choose an offset.", "Dark", "Search messages", drop the arrows, use "+".
 
 #### V5 (P2) Empty Upcoming has two primary buttons and a "0"
@@ -381,6 +387,7 @@ Priorities: **P0** can mislead someone into a wrong decision about whether work 
 
 - **What:** `ui.html` and `settings.html` are unused, still in `build.files`, and use classes (`eyebrow`, `hint`, `secondary`) that no longer exist in `styles.css`.
 - **Where:** `package.json:33`.
+- **Evidence:** `package.json` `build.files` includes `ui.html` and `settings.html`; `grep -Eo "\.(eyebrow|hint|secondary)([^[:alnum:]_-]|$)" styles.css` returns no matching class selectors.
 - **Fix:** remove them from the package, or delete them.
 
 #### V7 (note) The 420 px breakpoint is unreachable in the app

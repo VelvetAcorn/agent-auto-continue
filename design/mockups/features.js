@@ -45,7 +45,7 @@
   const baseTasks = [
     { id: 'billing', thread: 'th-billing', group: 'needs', message: 'Continue', stateLabel: 'Paused after turn 2 of 5', tone: 'amber', reason: 'Claude Code asked a question: "Should I keep the legacy endpoint alive for 30 days?"', hint: 'Answer in Claude Code, then', actions: [['Resume', 'primary'], ['End', 'ghost']], turns: [2, 5], plan: 'send "Continue" to <em>Migrate billing webhooks to the new signature scheme</em> up to 5 turns.', left: 'Paused 22:31', right: 'Stops if it asks anything' },
     { id: 'audit-failed', thread: 'th-audit', group: 'needs', message: 'Run the integration tests and report back.', stateLabel: 'Failed', tone: 'red', reason: 'T3 Code rejected the token, so nothing was sent.', actions: [['Update token', 'primary'], ['Acknowledge', 'ghost']], plan: 'at 22:22 send "Run the integration tests and report back." to <em>Audit checkout edge cases before the autumn release</em> once.', left: 'Failed 22:22', right: 'Not sent, safe to retry' },
-    { id: 'sched', thread: 'th-sched', group: 'running', message: 'Continue. Summarise remaining risks and take the smallest safe next step.', tally: [3, 4], plan: 'send "Continue…" to <em>Polish the scheduler experience</em> up to 4 turns.', left: 'Turn 3 started 22:34', right: 'Stops after 4 turns or when T3 Code reports done' },
+    { id: 'sched', thread: 'th-sched', group: 'running', message: 'Continue. Summarise remaining risks and take the smallest safe next step.', tally: [3, 4], plan: 'send "Continue…" to <em>Polish the scheduler experience</em> up to 4 turns.', left: 'Turn 3 started 22:34', right: 'Stops after 4 turns' },
     { id: 'export', thread: 'th-export', group: 'running', message: 'Continue', tally: [7, 0], plan: 'send "Continue" to <em>Fix the flaky export integration test</em> until Codex says it is done.', left: 'Turn 7 started 22:38', right: 'Pauses after 3 turns with no progress' },
     { id: 'notes', thread: 'th-notes', group: 'waiting', message: 'Continue', stateLabel: 'Limited, resets 03:00', availTone: 'limited', source: 'from Claude Code', plan: 'when Claude Code is free, around <em>03:00</em>, send "Continue" to <em>Write release notes for 2.1</em> and keep going until Claude Code says it is done, at most 10 turns.', left: 'Starts when Claude Code is free, until done (max 10)', right: 'In about 4 hours', needsAwake: true },
     { id: 'pricing', thread: 'th-pricing', group: 'waiting', message: 'Pick up where you left off and finish the comparison table.', stateLabel: '2026-10-01 · 06:30', plan: 'at <em>06:30</em> send "Pick up where you left off…" to <em>Summarise the competitor pricing pages</em> once.', left: 'At a set time, 1 turn', right: 'Needs the screen unlocked at 06:30', warn: true, needsAwake: true },
@@ -66,7 +66,7 @@
     selected: params.get('task') || 'billing',
     expanded: params.get('agent') || 'CC',
     pickerAgent: 'CC', historyFilter: 'all', toast: params.get('toast') || '', pairing: params.get('pairing') === '1',
-    draft: { thread: 'th-notes', message: 'Continue', when: pick('when', 'free', ['free', 'time', 'now']), far: pick('far', 'done', ['turns', 'done']), turns: params.get('turns') ?? '1', max: params.get('max') ?? '10', date: '2026-10-01', time: '06:30', preset: 'free-done', stops: { noprog: true, slow: false, touched: true } }
+    draft: { thread: 'th-notes', message: 'Continue', when: pick('when', 'free', ['free', 'time', 'now']), far: pick('far', 'done', ['turns', 'done']), turns: params.get('turns') ?? '1', max: params.get('max') ?? '10', date: '2026-10-01', time: '06:30', preset: '', stops: { noprog: true, slow: false, touched: true } }
   };
 
   // Vocabulary alternatives for decision D5. "task" is recommended; "handoff" is the Fable suggestion; "schedule" is today's word.
@@ -168,17 +168,27 @@
   }
 
   // Composer (issue #3): which thread, when, how far. Alternative: three presets.
+  const reportsCompletion = (a) => ['yes', 'part'].includes(a.caps.find(([name]) => name === 'Report task complete')[1]);
+  function syncDraft() {
+    const d = state.draft;
+    if (agentOf(d.thread).app) d.far = 'turns';
+    d.preset = d.when === 'free' && d.far === 'done' ? 'free-done'
+      : d.far === 'turns' && Number(d.turns) === 1 ? ({ time: 'time-once', free: 'free-once' }[d.when] || '') : '';
+  }
   function planSentence(d) {
+    if (turnError(d)) return 'Fix the turn count above to see the plan.';
     const th = threadOf(d.thread), a = agentOf(d.thread);
     const when = d.when === 'free' ? (a.avail === 'limited' ? `When ${a.name} is free, around <em>03:00</em>,` : a.avail === 'free' ? `${a.name} is free now, so right away` : `When ${a.name} is free (availability ${a.availText.toLowerCase()}),`) : d.when === 'time' ? `At <em>${esc(d.date)} ${esc(d.time)}</em>` : 'Right away';
-    const far = d.far === 'turns' ? (Number(d.turns) === 1 ? 'once' : `up to ${esc(d.turns)} turns`) : `and keep going until ${a.name} says it is done${d.max ? `, at most ${esc(d.max)} turns` : ', with no turn limit'}`;
+    const far = d.far === 'turns' ? (Number(d.turns) === 1 ? 'once' : `up to ${esc(d.turns)} turns`) : !reportsCompletion(a) ? `and keep going until it stops making progress, at most ${esc(d.max)} turns` : `and keep going until ${a.name} says it is done${d.max ? `, at most ${esc(d.max)} turns` : ', with no turn limit'}`;
     return `${when} send "${esc(d.message)}" to <em>${esc(th.title)}</em> ${far}. Stop and wait for you if it asks anything.`;
   }
   function turnError(d) {
+    const requiresLimit = !reportsCompletion(agentOf(d.thread));
+    if (d.far === 'done' && requiresLimit && !String(d.max).trim()) return `Set a turn limit: ${agentOf(d.thread).name} cannot report when a task is done`;
     if (d.far === 'turns') {
       if (!/^-?\d+$/.test(String(d.turns).trim())) return 'Enter a whole number of turns.';
       if (Number(d.turns) < 1) return 'Use at least 1 turn. To stop a task, end it instead.';
-    } else if (d.max !== '' && (!/^\d+$/.test(String(d.max).trim()) || Number(d.max) < 1)) return 'Leave empty for no limit, or enter a whole number of at least 1.';
+    } else if (d.max !== '' && (!/^\d+$/.test(String(d.max).trim()) || Number(d.max) < 1)) return requiresLimit ? 'Enter a whole number of at least 1.' : 'Leave empty for no limit, or enter a whole number of at least 1.';
     return '';
   }
   function composeView() {
@@ -186,14 +196,15 @@
     const err = turnError(d);
     const whenQ = `<fieldset><legend>When</legend><div class="seg" role="radiogroup" aria-label="When">${[['free', `When ${a.name} is free`], ['time', 'At a time'], ['now', 'Right away']].map(([v, l]) => `<label><input type="radio" name="when" value="${v}" ${d.when === v ? 'checked' : ''}><span>${l}</span></label>`).join('')}</div>
       <div class="when-body">${d.when === 'free' ? `<p class="hint">${a.avail === 'limited' ? `Starts as soon as ${a.name} reports it is free. If the reset time cannot be read, this waits and shows "Unknown" instead of guessing.` : a.avail === 'free' ? `${a.name} is free now, so this starts right away.` : `${a.name} availability is ${a.availText.toLowerCase()}. This waits and keeps checking.`}</p>`
-        : d.when === 'time' ? `<div class="two"><label class="field"><span>Date · yyyy-mm-dd</span><input class="input" value="${esc(d.date)}" inputmode="numeric"></label><label class="field"><span>Time · 24-hour</span><input class="input" value="${esc(d.time)}" inputmode="numeric"></label></div><div class="chips" aria-label="Quick times"><button type="button">+30 min</button><button type="button">+1 hour</button><button type="button">Tomorrow 09:00</button>${a.avail === 'limited' ? '<button type="button">After the 03:00 reset</button>' : ''}</div><p class="hint">Europe/London · BST (UTC+01:00) · <button type="button" class="link">Change timezone</button></p>`
+        : d.when === 'time' ? `<div class="two"><label class="field"><span>Date · yyyy-mm-dd</span><input id="date" class="input" value="${esc(d.date)}" inputmode="numeric"></label><label class="field"><span>Time · 24-hour</span><input id="time" class="input" value="${esc(d.time)}" inputmode="numeric"></label></div><div class="chips" aria-label="Quick times"><button type="button">+30 min</button><button type="button">+1 hour</button><button type="button">Tomorrow 09:00</button>${a.avail === 'limited' ? '<button type="button">After the 03:00 reset</button>' : ''}</div><p class="hint">Europe/London · BST (UTC+01:00) · <button type="button" class="link">Change timezone</button></p>`
         : '<p class="hint">Starts now. Useful for handing a thread to the Mac before you leave.</p>'}</div></fieldset>`;
-    const farQ = `<fieldset><legend>How far</legend><div class="seg" role="radiogroup" aria-label="How far">${[['turns', 'A set number of turns'], ['done', 'Until done']].map(([v, l]) => `<label><input type="radio" name="far" value="${v}" ${d.far === v ? 'checked' : ''}><span>${l}</span></label>`).join('')}</div>
+    const farQ = `<fieldset><legend>How far</legend><div class="seg" role="radiogroup" aria-label="How far">${[['turns', 'A set number of turns'], ['done', 'Until done']].map(([v, l]) => `<label><input type="radio" name="far" value="${v}" ${d.far === v ? 'checked' : ''} ${v === 'done' && a.app ? 'disabled aria-describedby=done-unavailable' : ''}><span>${l}</span></label>`).join('')}</div>
+      ${a.app ? `<p class="hint" id="done-unavailable">Not available: ${a.name} cannot report when a task is done</p>` : ''}
       <div class="far-row">${d.far === 'turns' ? `<label for="turns" class="hint" style="margin:0">Turns</label><span class="stepper ${err ? 'invalid' : ''}"><button type="button" data-step="-1" aria-label="One fewer turn">−</button><input id="turns" inputmode="numeric" value="${esc(d.turns)}" aria-invalid="${Boolean(err)}" aria-describedby="turns-help ${err ? 'turns-error' : ''}"><button type="button" data-step="1" aria-label="One more turn">+</button></span><span class="hint" id="turns-help" style="margin:0">Default 1. Any whole number.</span>`
-        : `<label for="max" class="hint" style="margin:0">Turn limit</label><span class="stepper ${err ? 'invalid' : ''}"><button type="button" data-step="-1" aria-label="Lower limit">−</button><input id="max" inputmode="numeric" value="${esc(d.max)}" placeholder="None" aria-invalid="${Boolean(err)}" aria-describedby="max-help ${err ? 'turns-error' : ''}"><button type="button" data-step="1" aria-label="Raise limit">+</button></span><span class="hint" id="max-help" style="margin:0">Optional. Leave empty to keep going until done or until you stop it.</span>`}</div>
+        : `<label for="max" class="hint" style="margin:0">Turn limit</label><span class="stepper ${err ? 'invalid' : ''}"><button type="button" data-step="-1" aria-label="Lower limit">−</button><input id="max" inputmode="numeric" value="${esc(d.max)}" placeholder="${reportsCompletion(a) ? 'None' : 'Required'}" aria-invalid="${Boolean(err)}" aria-describedby="max-help ${err ? 'turns-error' : ''}"><button type="button" data-step="1" aria-label="Raise limit">+</button></span><span class="hint" id="max-help" style="margin:0">${reportsCompletion(a) ? 'Optional. Leave empty to keep going until done or until you stop it.' : 'Required. Stops at this limit or sooner if it stops making progress.'}</span>`}</div>
       ${err ? `<p class="field-error" id="turns-error">${err}</p>` : ''}
       ${d.far === 'done' && a.caps[4][1] === 'no' ? `<p class="field-error" style="color:var(--amber)">${a.name} cannot report that a task is done, so this stops only at the turn limit, a question or no progress.</p>` : ''}</fieldset>`;
-    const presets = `<fieldset><legend>How should it continue?</legend><div class="presets" role="radiogroup">${[['time-once', 'Once, at a time', 'Send one message at the date and time you choose.'], ['free-once', `Once, when ${a.name} is free`, 'Waits for the usage limit to reset, then sends one message.'], ['free-done', 'Keep going until done', 'Starts when free, continues turn by turn, stops when the agent says it is done.']].map(([v, l, s]) => `<label class="preset"><input type="radio" name="preset" value="${v}" ${d.preset === v ? 'checked' : ''}><span><strong>${l}</strong><small>${s}</small></span></label>`).join('')}</div><details style="margin-top:12px"><summary>Turn limit and time</summary><p class="hint">The same fields as the two-question composer, collapsed. Presets are faster to read but hide that "when" and "how far" are independent.</p></details></fieldset>`;
+    const presets = `<fieldset><legend>How should it continue?</legend><div class="presets" role="radiogroup">${[['time-once', 'Once, at a time', 'Send one message at the date and time you choose.'], ['free-once', `Once, when ${a.name} is free`, 'Waits for the usage limit to reset, then sends one message.'], ['free-done', 'Keep going until done', a.app ? `Not available: ${a.name} cannot report when a task is done` : reportsCompletion(a) ? 'Starts when free, continues turn by turn, stops when the agent says it is done.' : 'Starts when free, continues until it stops making progress or reaches the required turn limit.']].map(([v, l, s]) => `<label class="preset"><input type="radio" name="preset" value="${v}" ${d.preset === v ? 'checked' : ''} ${v === 'free-done' && a.app ? 'disabled' : ''}><span><strong>${l}</strong><small>${s}</small></span></label>`).join('')}</div><details id="preset-options" style="margin-top:12px" ${err || d.when === 'time' ? 'open' : ''}><summary>Turn limit and time</summary>${whenQ}${farQ}</details></fieldset>`;
     const stops = `<details style="margin-top:22px" ${params.get('stops') === '1' ? 'open' : ''}><summary>Stop and wait for me if</summary><div class="checks">${[['The agent asks a question', true, true], ['The agent asks for permission', true, true], ['Delivery cannot be confirmed', true, true], ['3 turns pass with no visible progress', d.stops.noprog, d.far === 'done'], ['A turn takes longer than 45 minutes', d.stops.slow, false], ['Someone else writes in the thread', d.stops.touched, false]].map(([l, on, locked]) => `<label><input type="checkbox" ${on ? 'checked' : ''} ${locked ? 'disabled' : ''}> ${l}${locked ? ' <small>(always)</small>' : ''}</label>`).join('')}</div><p class="hint">The locked rules are why the app never blindly sends again. A turn only counts once delivery is confirmed.</p></details>`;
     const awakeLine = a.caps[5][1] === 'no' ? `Needs the screen unlocked and the display on when it runs. The Mac will keep the display on from 5 minutes before.` : 'The Mac stays awake for this; the screen can lock because it runs without a window.';
     return `<button class="ghost back" data-nav="board">← Back to ${home().toLowerCase()}</button><div class="heading"><h1 tabindex="-1">${W.New}</h1></div>
@@ -281,6 +292,7 @@
   }
 
   function render() {
+    syncDraft();
     document.body.className = `features ${state.theme === 'dark' ? 'dark' : ''}`;
     document.title = `${CONCEPTS[concept]} · Scheduler design studio`;
     const app = $('#app');
@@ -298,9 +310,10 @@
     document.querySelectorAll('.strip-agent,[data-agent]').forEach((el) => { el.onclick = () => { state.expanded = state.view === 'agents' && state.expanded === el.dataset.agent ? '' : el.dataset.agent; go('agents'); }; });
     document.querySelectorAll('[data-thread]').forEach((el) => { el.onclick = () => { state.draft.thread = el.dataset.thread; go('compose'); }; });
     document.querySelectorAll('[data-picker-agent]').forEach((el) => { el.onclick = () => { state.pickerAgent = el.dataset.pickerAgent; render(); }; });
-    document.querySelectorAll('input[name=when],input[name=far],input[name=preset]').forEach((el) => { el.onchange = () => { state.draft[el.name] = el.value; render(); document.querySelector(`input[name=${el.name}][value=${el.value}]`)?.focus(); }; });
-    ['turns', 'max'].forEach((id) => { const el = $('#' + id); if (el) el.oninput = () => { state.draft[id] = el.value; const pos = el.selectionStart; render(); const again = $('#' + id); again.focus(); again.setSelectionRange(pos, pos); }; });
+    document.querySelectorAll('input[name=when],input[name=far],input[name=preset]').forEach((el) => { el.onchange = () => { if (el.name === 'preset') Object.assign(state.draft, { when: el.value === 'time-once' ? 'time' : 'free', far: el.value === 'free-done' ? 'done' : 'turns', ...(el.value === 'free-done' ? {} : { turns: '1' }) }); else state.draft[el.name] = el.value; render(); document.querySelector(`input[name=${el.name}][value=${el.value}]`)?.focus(); }; });
+    ['turns', 'max'].forEach((id) => { const el = $('#' + id); if (el) el.oninput = () => { state.draft[id] = el.value; const pos = el.selectionStart; const optionsOpen = $('#preset-options')?.open; render(); if (optionsOpen) $('#preset-options').open = true; const again = $('#' + id); again.focus(); again.setSelectionRange(pos, pos); }; });
     document.querySelectorAll('[data-step]').forEach((el) => { el.onclick = () => { const key = state.draft.far === 'turns' ? 'turns' : 'max'; const n = Number(state.draft[key]) || 0; state.draft[key] = String(Math.max(1, n + Number(el.dataset.step))); render(); }; });
+    ['date', 'time'].forEach((id) => { const el = $('#' + id); if (el) el.oninput = () => { state.draft[id] = el.value; $('#plan .sentence').innerHTML = planSentence(state.draft); $('[data-action=submit]').textContent = W.verb(state.draft); }; });
     const msg = $('#message'); if (msg) msg.oninput = () => { state.draft.message = msg.value; $('#plan .sentence').innerHTML = planSentence(state.draft); };
     document.querySelectorAll('[data-action]').forEach((el) => { el.onclick = () => action(el.dataset.action); });
   }
