@@ -19,7 +19,7 @@ It uses T3 Code's local orchestration HTTP API; it does not modify the T3 Code a
 
 - macOS and a running T3 Code app exposing its local orchestration HTTP API.
 - Node.js 20+ for development.
-- A T3 Code bearer token. Create one according to your installed T3 Code version's authentication instructions. The implementation document in this repository uses:
+- A T3 Code bearer token. Create one according to your installed T3 Code version's authentication instructions. For versions supporting the session-issue command:
 
   ```sh
   npx t3 auth session issue --token-only --label t3code-auto-continue --ttl 365d
@@ -34,11 +34,12 @@ npm start
 
 On launch, the app opens its control window. Enter the bearer token in **Settings** if it is not already configured. The default server address is fixed to `http://127.0.0.1:3773`; Settings only permits changing the port, so the app cannot be pointed at a remote host.
 
-Choose **New schedule**, select a thread, enter a message, then choose an ISO date (`yyyy-mm-dd`), 24-hour time and timezone.
+Choose **New schedule** (initially five minutes ahead), select a thread, enter a message, then choose an ISO date (`yyyy-mm-dd`), 24-hour time and timezone.
 Quick times include +5 minutes, +30 minutes, +1 hour and tomorrow at 09:00.
 The preview includes the safety buffer; daylight-saving gaps are rejected and repeated local times require choosing an offset.
 Upcoming shows saved schedules immediately; select one to edit or cancel it before sending starts.
 History keeps outcomes and lets you acknowledge delivery problems, check uncertain delivery, or prepare another schedule.
+Use **Load more** for older records; search applies to the records currently loaded.
 The menu-bar controls open the relevant view in the same window.
 Only one copy may run at a time.
 
@@ -69,10 +70,12 @@ Jobs are stored under macOS's app data directory as `jobs.json`; configuration i
 At dispatch time the app fetches a per-thread snapshot, then posts a `thread.turn.start` command containing persistent `commandId` and `messageId` values.
 A verified `{sequence}` acceptance response or finding the message in a thread establishes delivery to T3 Code, not successful completion of the agent's work.
 New user activity since schedule creation cancels the job; settling a thread only filters the picker.
+Archived threads are always excluded from the picker, while unknown states remain visible.
+See [migration details](initial-app-creation.md#job-model-and-delivery-safeguards) for legacy activity-baseline limits.
 Saved schedules retain their UTC instant and buffer when settings or the system timezone change.
 Missed pending schedules catch up after restart or wake and record lateness.
 
-Interrupted sends and ambiguous POST responses become `unconfirmed` and never retry automatically.
+Interrupted sends and ambiguous POST responses become `unconfirmed` and never retry automatically, because resending could duplicate a message that was already accepted.
 Reconciliation only reads the thread snapshot, marking delivery confirmed if the stable message ID is found.
 Absence from a windowed snapshot is not proof of nondelivery.
 Schedule again provides a draft only for confirmed terminal outcomes; it is blocked for unconfirmed delivery.
@@ -89,6 +92,7 @@ npm test
 npm run test:electron  # safe production-window smoke fixture; no real sends
 node --check main.js
 node --check preload.js
+for file in lib/*.js renderer/*.js; do node --check "$file"; done
 ```
 
 ## Legacy script
@@ -102,6 +106,6 @@ The reported HTML response was reproduced with controlled responses through the 
 No live messages were sent during these checks.
 Unit and IPC tests inject transport, clocks, timers and persistence.
 The Electron smoke fixture exercises the production main process, preload and renderer against in-memory storage and a fake API that prohibits dispatch.
-Live-server and real macOS sleep/wake smoke tests remain necessary before release.
+Read-only live-server compatibility checks and controlled real macOS sleep/wake checks remain necessary before release; do not send live messages for validation.
 The app cannot determine a provider quota-reset time on its own, and it does not retry failed or unconfirmed sends.
 A user can still cancel a pending job from the menu at any time.

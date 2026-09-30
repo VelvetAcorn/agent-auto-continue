@@ -20,7 +20,10 @@ The actual live-server cause of the reported HTML response remains unconfirmed.
 | Success | The app marks a job sent after a successful dispatch request, or when its message ID is found. | It does not establish that the agent completed its turn successfully. |
 | Updates | Job changes rebuild the tray; the dashboard refreshes at load or on demand. | Creating or completing a job does not update the main UI immediately. |
 
-## Proposed product shape
+## Accepted design brief
+
+The following brief records the accepted design direction; current usage and lifecycle
+behavior are owned by the [README](README.md).
 
 Use a single resizable application window, initially designed around approximately 1000 x 700 pixels with a usable compact layout.
 Keep the menu-bar companion and background scheduling behavior.
@@ -106,7 +109,7 @@ Show the selected timezone and UTC offset, and store the scheduled instant in UT
 Validate invalid dates, past times, daylight-saving gaps, and ambiguous repeated times explicitly.
 Preview the actual send time including the buffer before saving.
 Recommended behavior: snapshot the buffer per job so changing the setting affects newly created schedules only.
-The current code uses global buffer settings but does not rebuild existing timers on settings changes, so this also needs consistent migration and timer behavior.
+See the [reliability model](README.md#reliability-model) for saved buffer behavior and the [migration reference](initial-app-creation.md#job-model-and-delivery-safeguards) for legacy records.
 
 ## Visual direction and iteration
 
@@ -176,7 +179,7 @@ Persist acknowledgment and structured outcome data separately from delivery stat
 Verification must cover duplicate-send protection, ambiguous POST responses, crash recovery, canceled/edited timers, offline history, and restart persistence.
 Also cover settlement filtering, missing dates, recency order, ISO display under different system locales, timezone changes and DST, focus/keyboard navigation, reduced motion, and readable long messages.
 Test sleep/wake and missed schedules against the agreed policy.
-The existing seven tests cover model helpers, not API behavior, the scheduler lifecycle, or renderer interactions; extend coverage at those boundaries.
+The original seven tests covered model helpers; the implementation now includes API, lifecycle, IPC, date/time, and Electron fixture coverage.
 
 ## Accepted product decisions
 
@@ -192,7 +195,7 @@ Use rotation with upright star text and reduced-motion support; the Ko-fi URL is
 | Should pending messages support editing as well as canceling? | Yes, edit message and time until dispatch starts. |
 | Should errors disappear automatically or require acknowledgment? | Transient notification plus persistent history; explicitly acknowledge the attention badge. |
 | What should happen to schedules missed while the Mac/app was unavailable? | Preserve existing catch-up behavior initially, but show lateness clearly; consider an expiry threshold if stale prompts are risky. |
-| What does “newer user activity” mean for cancellation? | Cancel when a user message appears after schedule creation, using a captured baseline; current code instead compares against the requested send time. |
+| What does “newer user activity” mean for cancellation? | Cancel when a user message appears after schedule creation, using a captured baseline. See the [reliability model](README.md#reliability-model). |
 | Should a thread becoming settled cancel a pending job? | Treat settled as a picker filter only unless a separate cancellation rule is desired. |
 | What should Tomorrow mean, and should travel change a schedule? | Tomorrow at 09:00 in the selected local timezone; a saved schedule retains its fixed instant when system timezone changes. |
 | How long should history be retained? | Keep local history initially, with pagination and no silent deletion; decide retention before adding automatic cleanup. |
@@ -211,14 +214,10 @@ Implemented independently of the prototype renderer:
 - A versioned job service preserving existing IDs, statuses and notes, with per-job buffers, timezone context, activity baselines, stored display metadata, and UTC effective times.
 - Local queue/history listing and pagination, pending edit/cancel, persistent acknowledgment, draft-only Schedule again, and reconciliation of uncertain outcomes.
 - Duplicate-dispatch guards for stale timers, overlapping wake/run calls, interrupted sends, and ambiguous POST results.
-- Recency-sorted thread normalization using the verified settlement field, plus narrow IPC methods and removable change listeners for the future renderer.
+- Recency-sorted thread normalization using the verified settlement field, plus narrow IPC methods and removable change listeners for the production renderer.
 
 The installed T3 Code Alpha 0.0.40 application source maps were inspected read-only.
-Its HTTP contract confirms the existing `/api/orchestration/snapshot`, `/threads/:threadId`, and `/dispatch` routes.
-Dispatch acceptance is `{sequence: nonnegative integer}`; it does not confirm an agent completed successfully.
-The detail response contains `thread` and optional pagination metadata.
-The client classifies settled threads by `settledOverride === "settled"`; unknown values remain visible.
-`updatedAt` provides the requested last-update ordering.
+The [API reference](initial-app-creation.md#local-api-contract) points to the authoritative request, response and thread normalization contracts.
 No credentials or personal thread content were inspected and no live messages were sent.
 
 The original error was reproduced through the original dashboard IPC handler with a controlled HTML `Response` at the fetch boundary.
@@ -230,14 +229,11 @@ Automated tests cover response parsing/authentication/timeout, verified payload 
 The production renderer now includes Upcoming/History/acknowledgment controls, the single-window composer and settings, keyboard-operable ISO date controls, relative timestamps, and the selected Paper / Focus visual direction.
 Its light and Bone Outline themes use local system fonts, reduced motion, quiet data rows and the inactive rotating Support star in Settings.
 The production-window smoke fixture uses the real Electron main/preload/renderer with in-memory storage and a fake API that prohibits dispatch.
-Real macOS sleep/wake and installed-server authenticated smoke tests remain release gates.
+Real macOS sleep/wake and read-only installed-server compatibility checks remain release gates; use controlled fixtures for delivery validation without live messages.
 Automated PR CI runs behavioral tests, JavaScript syntax checks, the Electron smoke fixture and a macOS ZIP build.
 Renderer visual/accessibility checks and local packaging results are recorded in the delivery review.
-Legacy jobs without creation timestamps cannot reconstruct an activity baseline; they retain a conservative unknown baseline.
-A missing message in a windowed thread snapshot does not establish nondelivery, so reconciliation leaves the job unconfirmed and never automatically resends it.
-
-Corrupt, unreadable, invalid-record or future-version local schedule files now remain untouched; startup enters a visible read-only storage-error state with timers disabled.
-This was added during independent review to avoid silently replacing the existing queue/history with an empty store.
+Legacy migration limits are documented in the [implementation reference](initial-app-creation.md#job-model-and-delivery-safeguards).
+Recovery, reconciliation, and storage-error behavior are documented in the [reliability model](README.md#reliability-model).
 
 ## Paper Focus implementation review
 

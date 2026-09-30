@@ -17,6 +17,16 @@ const failures = [];
 let offline = false;
 let dispatches = 0;
 let menu;
+const evidenceDirectory = process.env.T3_SMOKE_EVIDENCE_DIR;
+async function capture(name) {
+  if (!evidenceDirectory) return;
+  fs.mkdirSync(evidenceDirectory, { recursive: true });
+  // Give Chromium a frame to paint the latest state before capturing pixels.
+  await new Promise(resolve => setTimeout(resolve, 150));
+  const screenshot = await windows[0].webContents.capturePage();
+  assert.equal(screenshot.isEmpty(), false, 'Rendered evidence must contain pixels');
+  fs.writeFileSync(path.join(evidenceDirectory, `${name}.png`), screenshot.toPNG());
+}
 const fixtureThread = { id: 'thread-active', title: 'Production renderer test', projectId: 'project-fixture', updatedAt: '2026-09-30T12:34:56.789Z', settledOverride: null, messages: [], modelSelection: { model: 'fixture', instanceId: 'fixture' }, runtimeMode: 'full-access', interactionMode: 'default' };
 const jobs = [{ id: 'failure-fixture', commandId: 'command-fixture', messageId: 'message-fixture', threadId: fixtureThread.id, threadTitle: fixtureThread.title, message: 'Previous failed delivery', scheduleAt: '2026-01-01T10:00:00Z', createdAt: '2026-01-01T09:00:00Z', updatedAt: '2026-01-01T10:00:00Z', status: 'failed', note: 'Unexpected token <', bufferSeconds: 5, timeZone: 'UTC' }];
 jobs.push({ ...jobs[0], id: 'uncertain-fixture', messageId: 'uncertain-message', status: 'unconfirmed', message: 'Unconfirmed fixture delivery' });
@@ -85,6 +95,7 @@ async function run() {
   await window.webContents.debugger.sendCommand('Emulation.setFocusEmulationEnabled', { enabled: true });
   const js = code => window.webContents.executeJavaScript(code, true);
   await waitFor(() => js('Boolean(window.autoContinue && document.querySelector("main"))'), 'production renderer initialized');
+  await js(`(() => { if (document.body.classList.contains('dark')) document.querySelector('[data-action="theme"]').click(); })()`);
   assert.equal(windows.length, 1);
   assert.equal((await js('window.autoContinue.listJobs({view:"history"})')).total, 2);
   await js('window.autoContinue.openSettings()');
@@ -98,6 +109,15 @@ async function run() {
   assert.ok(history.total >= 1, 'History survives offline API');
   const connection = await js('window.autoContinue.checkConnection()');
   assert.equal(connection.error.code, 'unexpected_response_format');
+  await js(`document.querySelector('[data-nav="threads"]').click()`);
+  await waitFor(() => js(`document.querySelector('#connection-state').textContent.includes('Offline')`), 'visible offline state');
+  await js(`document.querySelector('[data-nav="history"]').click()`);
+  await capture('history-offline');
+  offline = false;
+  await js(`document.querySelector('[data-nav="threads"]').click()`);
+  await waitFor(() => js(`document.querySelector('#connection-state').textContent.includes('connected')`), 'connection recovery clears current failure');
+  assert.equal(await js(`document.querySelector('#notices').textContent.includes('unexpected')`), false);
+  if (evidenceDirectory) fs.writeFileSync(path.join(evidenceDirectory, 'persisted-fixture-jobs.json'), files.get('/fixture/jobs.json'));
   assert.equal(dispatches, 0, 'The fixture must never send a message');
   assert.deepEqual(failures, []);
   assert.ok(menu.find(item => item.label === 'Open scheduler'));
@@ -118,6 +138,9 @@ async function rendererJourney(js) {
   await js(`document.querySelector('#schedule-form').requestSubmit()`);
   assert.match(await js(`document.querySelector('#schedule-error').textContent`), /real calendar/);
   await fill('#date', '2099-12-15');
+  await click('[data-action="calendar"]');
+  await capture('composer-calendar');
+  await click('[data-action="calendar"]');
   await js(`document.querySelector('#schedule-form').requestSubmit()`);
   await heading('Upcoming');
   const created = await js(`window.autoContinue.listJobs({view:'upcoming'}).then(result=>result.jobs.find(job=>job.message==='Fixture message from the production composer'))`);
@@ -125,6 +148,7 @@ async function rendererJourney(js) {
   assert.equal(created.timeZone, 'UTC');
   assert.equal(created.scheduleAt, '2099-12-15T12:00:00.000Z');
   assert.equal(created.effectiveAt, '2099-12-15T12:00:05.000Z');
+  await capture('upcoming-scheduled');
   await click(`[data-job="${created.id}"]`);
   await click('[data-action="edit"]');
   await heading('Edit schedule');
@@ -150,6 +174,7 @@ async function rendererJourney(js) {
   await click('[data-action="ack"]');
   await waitFor(() => js(`window.autoContinue.getJob('failure-fixture').then(job=>Boolean(job.acknowledgedAt))`), 'acknowledgment persisted');
   await waitFor(() => js(`document.querySelector('[data-action="ack"]')?.textContent.includes('Acknowledged')`), 'acknowledged UI');
+  await capture('history-acknowledged');
   assert.equal((await js(`window.autoContinue.listJobs({view:'history'})`)).unacknowledgedFailures, 1);
   await click('[data-nav="history"]');
   await click('[data-job="uncertain-fixture"]');
@@ -181,6 +206,7 @@ async function rendererJourney(js) {
   assert.equal(exactTime.visible, true, JSON.stringify(exactTime));
   assert.equal(exactTime.shortHidden, true);
   assert.ok(exactTime.relative.length > 0);
+  await capture('threads-exact-time');
   await click('#show-settled');
   assert.equal(await js(`Boolean(document.querySelector('[data-thread="thread-settled"]'))`), true);
   await click('[data-nav="settings"]');
@@ -193,6 +219,9 @@ async function rendererJourney(js) {
   assert.equal(await js(`document.body.classList.contains('dark')`), true);
   assert.equal(await js(`document.querySelector('.support button').disabled`), true);
   assert.equal(await js(`Boolean(document.querySelector('.star svg'))`), true);
+  await capture('settings-bone-outline');
+  await js(`document.querySelector('.support').scrollIntoView({block:'center'})`);
+  await capture('settings-support');
   // A settings change must be reflected in the next draft's send preview.
   await click('[data-nav="upcoming"]');
   await click('[data-action="new"]');

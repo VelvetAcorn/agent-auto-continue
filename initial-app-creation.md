@@ -2,7 +2,7 @@
 
 ## Outcome
 
-This repository now contains the v2 macOS menu-bar app described here. The implementation is deliberately small: Electron supplies the native tray, settings window, notifications, and launch-at-login support; `node-schedule` supplies durable-in-process timers; the app's own JSON files supply persistence across restarts.
+This repository now contains the v2 macOS menu-bar app described here. The implementation is deliberately small: Electron supplies the native tray, single application window, notifications, and launch-at-login support; `node-schedule` supplies durable-in-process timers; the app's own JSON files supply persistence across restarts.
 
 The original proposal was a useful starting point, but it needed correction before it could be shipped:
 
@@ -14,111 +14,67 @@ The original proposal was a useful starting point, but it needed correction befo
 
 ## App layout
 
-```
-main.js             Electron main process: tray, persistence, API client, scheduling
-preload.js          Narrow, context-isolated IPC bridge
-ui.html             Schedule window
-settings.html       Token/port/buffer settings window
-styles.css          Shared native-feeling UI styling
-lib/model.js        Pure validation and snapshot helpers
-test/model.test.js  Node test coverage for the pure helpers
-assets/icon.png     Packaged application icon
-```
-
-`continue-at.sh` and `press-continue.swift` are retained only as the legacy, accessibility-driven one-shot helper. They are not part of v2.
+The production entry point is `dashboard.html`, with `renderer/app.js` for the
+Paper Focus views and `renderer/date-time.js` for timezone-aware date controls.
+`main.js` owns Electron integration and persistence; `preload.js` exposes the
+narrow IPC bridge. Backend responsibilities are split between `lib/api-client.js`,
+`lib/job-service.js`, `lib/threads.js`, and `lib/model.js`.
+The retained `ui.html` and `settings.html` are no longer opened by the app.
+See [the README](README.md) for current usage and the legacy helper boundary.
 
 ## Local API contract
 
-The app assumes the local T3 Code contract researched for this project:
+The routes were checked against installed T3 Code Alpha 0.0.40 source maps.
+The executable request and response contract lives in
+[`lib/api-client.js`](lib/api-client.js); the dispatch payload is built by
+`buildTurnStartCommand` in [`lib/model.js`](lib/model.js). Consult those sources
+rather than a copied payload schema when changing compatibility behavior.
+Thread settlement and recency normalization live in
+[`lib/threads.js`](lib/threads.js).
 
-| Operation | Request |
-|---|---|
-| List threads | `GET http://127.0.0.1:<port>/api/orchestration/snapshot` |
-| Inspect one thread | `GET /api/orchestration/threads/<id>?turnLimit=<n>` |
-| Add a user message | `POST /api/orchestration/dispatch` |
+The API host is intentionally restricted to loopback to keep credentials and
+messages local. Requests have a ten-second timeout. Errors expose structured,
+sanitized metadata rather than raw response bodies; dispatch acceptance establishes
+delivery, not agent completion. See [the reliability model](README.md#reliability-model)
+for handling uncertain outcomes.
 
-Each request carries `Authorization: Bearer <token>`. The dispatch body is:
+### Integration verification boundary
 
-```json
-{
-  "commandId": "stable UUID for this job",
-  "threadId": "target thread ID",
-  "message": {
-    "messageId": "stable UUID for this job",
-    "role": "user",
-    "text": "Continue",
-    "attachments": []
-  },
-  "modelSelection": { "model": "current thread model", "instanceId": "current provider" },
-  "runtimeMode": "current thread mode",
-  "interactionMode": "current interaction mode",
-  "createdAt": "2026-09-19T14:00:00.000Z"
-}
-```
-
-The API host is intentionally not configurable: only the loopback port can change. Every request has a ten-second timeout and response errors are preserved in the job's `note` field without logging the token.
-
-### Required live integration check
-
-Before relying on an installed build, run the app against the target version of T3 Code and confirm all of the following:
-
-1. **Refresh threads** displays expected non-archived threads.
-2. A job one minute in the future sends exactly one message to a test thread.
-3. A manually added user message after scheduling causes the job to cancel.
-4. Quitting and relaunching before the scheduled time preserves the job.
-5. Suspending then resuming after the scheduled time sends the job once.
-
-If a server version requires an additional command discriminator in the dispatch body, add it in `runJob` and record the exact supported contract here. This repository does not claim that untested endpoints are stable or documented by a third party.
+Use the isolated Electron fixture for scheduling and dispatch-related validation;
+see [verification commands](README.md#verify-the-source). Do not send live messages
+for validation. Real-server compatibility and real macOS sleep/wake remain release
+gates; authenticated inspection must remain read-only, with delivery scenarios
+using controlled fixtures.
 
 ## Job model and delivery safeguards
 
-A pending job has the following essential fields:
+The authoritative lifecycle and recovery guidance is the
+[README reliability model](README.md#reliability-model).
+The persisted format, migration, status presentation, and dispatch guards are
+implemented in [`lib/job-service.js`](lib/job-service.js), with record validation
+in [`lib/model.js`](lib/model.js).
 
-```json
-{
-  "id": "local UUID",
-  "commandId": "dispatch UUID",
-  "messageId": "message UUID",
-  "threadId": "target thread ID",
-  "message": "Continue",
-  "scheduleAt": "ISO-8601 UTC timestamp",
-  "status": "pending"
-}
-```
+Migration accepts legacy job arrays and writes a versioned envelope. Existing
+IDs, statuses and notes are preserved; delivery certainty is separate from the
+stored status, so a legacy failure may display as unconfirmed. Legacy jobs without
+creation timestamps cannot reconstruct historical activity baselines and retain
+an unknown baseline. Corrupt or unsupported stores are not replaced.
 
-Allowed statuses are `pending`, `dispatching`, `sent`, `failed`, and `canceled`.
-
-At the scheduled time plus the configurable buffer, v2:
-
-1. atomically marks the job `dispatching`;
-2. retrieves a fresh thread snapshot;
-3. cancels if the thread is missing/archived or has newer user activity;
-4. treats an already-observed `messageId` as successfully delivered;
-5. posts the dispatch with the existing IDs; and
-6. records `sent` or `failed` and sends a native notification.
-
-On a restart, an interrupted `dispatching` job returns to `pending` with the same IDs. It is therefore checked for the existing message before any replay. This is the strongest client-side duplicate protection available without a transaction spanning the local app and T3 Code. Exactly-once delivery still relies on the server treating `commandId` idempotently.
-
-Jobs and configuration live under Electron's user-data directory, not in the repository. JSON replacement is atomic and new files are created mode `0600`. `T3_TOKEN` may be provided in the environment instead; it wins for the current process and is never persisted automatically.
+JSON replacement is atomic and new files are created mode `0600`.
+See [token setup](README.md#run-in-development) and
+[storage guidance](README.md#reliability-model) for configuration and data locations.
 
 ## UX decisions
 
-- The visible control window is the primary UI. It refreshes, filters, and schedules active threads; the tray menu mirrors its controls.
-- The app acquires a single-instance lock, so launching another copy focuses the existing control window instead of creating duplicate tray processes.
-- The scheduler defaults to five minutes ahead and includes short relative-time controls.
-- The chosen time is local time in the UI and is persisted as UTC.
-- The buffer is explicit in the schedule window, so a user does not unknowingly schedule before a quota reset.
-- Pending jobs may be canceled. Failed sends are not automatically retried: automatic retry after an unknown provider error risks duplicated or unwanted work.
+See [the README](README.md#run-in-development) for the single-window workflow and
+[the development plan](DEVELOPMENT_PLAN.md) for design decisions and review history.
 
 ## Build and verification
 
-```sh
-npm install
-npm test
-npm run build
-```
-
-The source checks cover config normalization, future-time validation, persisted-job filtering, and nested message-ID detection. `npm run build` produces an arm64 ZIP; `npm run build:dmg` produces a disk image on a host with macOS disk-image tooling, and `npm run build:all` requests both. The current machine successfully assembled and inspected the app and ZIP. Distribution outside the local Mac will require the normal Apple signing/notarization process; no Developer ID certificate is bundled with this project.
+See [build commands](README.md#build-a-macos-app) and
+[source verification](README.md#verify-the-source).
+Distribution outside the local Mac requires the normal Apple signing/notarization
+process; no Developer ID certificate is bundled with this project.
 
 ## Deliberate limits
 
