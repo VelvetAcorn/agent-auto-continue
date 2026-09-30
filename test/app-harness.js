@@ -32,7 +32,7 @@ function appHarness(initialJobs = [], { ownsInstance = true, rawJobs, extraFiles
   const context = { require: name => name === 'electron' ? electron : name === 'node:fs' ? fakeFs : name === 'node-schedule' ? { scheduleJob: () => ({ cancel() {} }) } : name === './lib/api-client' ? { ...apiModule, createApiClient: options => apiModule.createApiClient({ ...options, fetchImpl: (...args) => response(...args) }) } : name.startsWith('./lib/') ? require(path.join(__dirname, '..', name)) : require(name), __dirname: path.join(__dirname, '..'), process: { env: { T3_TOKEN: 'test-secret' }, pid: 123 }, console, Buffer };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8'), context);
   ready();
-  return { invoke: (name, ...args) => handlers[name]({}, ...args), emit: (name) => Promise.all((appEvents[name] || []).map((fn) => fn())), setResponse: fn => { response = fn; }, files, events, windows, setWriteFailure: value => { failWrite = value; }, get trayMenu() { return trayMenu; } };
+  return { invoke: (name, ...args) => handlers[name]({}, ...args), emit: (name) => { const event = { defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } }; return Promise.all((appEvents[name] || []).map((fn) => fn(event))); }, setResponse: fn => { response = fn; }, files, events, windows, setWriteFailure: value => { failWrite = value; }, get trayMenu() { return trayMenu; } };
 }
 
 module.exports = { appHarness };
