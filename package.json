@@ -22,7 +22,8 @@
     "test:electron": "env -u ELECTRON_RUN_AS_NODE ApplePersistenceIgnoreState=YES electron tools/electron-smoke.cjs && node tools/keep-awake-e2e.cjs",
     "icons": "env -u ELECTRON_RUN_AS_NODE ApplePersistenceIgnoreState=YES electron tools/build-icons.cjs",
     "lint": "eslint .",
-    "build:release": "electron-builder --mac --universal --publish never"
+    "build:release": "electron-builder --mac --universal --publish never",
+    "build:release:local": "sh tools/release-local.sh"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "^2.2.0",

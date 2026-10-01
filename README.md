@@ -123,7 +123,8 @@ All build scripts package locally without publishing releases (`--publish never`
 The default build produces an unsigned ZIP for the current architecture in `dist/`, which is the most portable artifact for local testing.
 `npm run build:dmg` creates a disk image and `npm run build:all` requests both.
 `npm run build:release` is what the release workflow runs: a universal DMG and ZIP, signed with the hardened runtime and notarized when the Apple credentials are present.
-See [docs/releasing.md](docs/releasing.md) for the release process and the secrets it needs.
+`npm run build:release:local` does the same on your own Mac using credentials from a gitignored `.env.release` file, then verifies the result.
+See [docs/releasing.md](docs/releasing.md) for the release process, the secrets it needs, and what signing and notarization mean for users.
 The menu includes **Launch at login** after the app has been installed.
 
 The app icon (`assets/icon.icns`) and menu-bar glyphs (`assets/trayTemplate.png` and, while keep-awake holds the Mac awake, `assets/trayAwakeTemplate.png`, each with an `@2x` file) are generated from the SVG sources in `assets/` and committed.
