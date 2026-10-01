@@ -156,15 +156,34 @@ function activeJobs() {
   return service?.jobs.filter((job) => service.upcoming(job)) || [];
 }
 
+// Schedules listed per item in the tray: everything upcoming, plus paused continuations waiting for the user.
+function trayJobs() {
+  return service?.jobs.filter((job) => service.upcoming(job) || job.chain?.state === 'paused') || [];
+}
+
 function trayJobLabel(job) {
   const view = service.present(job);
-  const when = view.displayStatus === 'running' ? 'agent working' : view.displayStatus === 'waiting' ? 'waiting for availability' : view.displayStatus === 'dispatching' ? 'sending' : dateLabel(view.effectiveAt);
+  const when = job.chain?.state === 'paused' ? (view.deliveryStatus === 'unconfirmed' ? 'paused · check delivery' : 'paused') : view.displayStatus === 'running' ? 'agent working' : view.displayStatus === 'waiting' ? view.deliveryLabel.toLowerCase() : view.displayStatus === 'dispatching' ? 'sending' : dateLabel(view.effectiveAt);
   return `${job.message.slice(0, 60)} · ${view.automation ? `${view.automation.progressLabel} · ` : ''}${when}`;
 }
 
-function stopFromTray(action) {
+function trayAction(action, title) {
   try { ensureStorage(); action(); }
-  catch { notify('Could not stop', 'Check local disk space and try again in the scheduler.'); }
+  catch (error) { notify(title, String(error?.message || 'Check local disk space and try again in the scheduler.').slice(0, 200)); }
+}
+
+function trayJobItem(job) {
+  const view = service.present(job);
+  const items = [{ id: `view:${job.id}`, label: 'View schedule', click: () => openDashboard({ view: service.upcoming(job) ? 'upcoming' : 'history', jobId: job.id }) }];
+  if (!job.chain) {
+    items.push({ label: 'Cancel', enabled: job.status === 'pending', click: () => trayAction(() => { if (job.status === 'pending') service.cancel(job.id); }, 'Could not cancel') });
+  } else {
+    if (job.chain.state === 'paused') {
+      items.push({ label: 'Resume continuation', enabled: view.canResume, click: () => trayAction(() => { if (service.present(job).canResume) service.resumeChain(job.id); }, 'Could not resume') });
+    }
+    items.push({ label: 'Stop continuing', click: () => trayAction(() => { if (service.present(job).canStop) service.stop(job.id); }, 'Could not stop') });
+  }
+  return { label: trayJobLabel(job), submenu: items };
 }
 
 async function rebuildMenu() {
@@ -185,19 +204,9 @@ async function rebuildMenu() {
     threadItems = [{ label: 'Refresh after checking T3 Code and Settings', enabled: false }];
   }
 
-  const pending = activeJobs();
+  const listed = trayJobs();
   const continuing = service?.jobs.filter((job) => job.chain && ['active', 'paused'].includes(job.chain.state)) || [];
-  const jobItems = pending.length ? pending.map((job) => ({
-    label: trayJobLabel(job),
-    submenu: [{ label: 'View schedule', click: () => openDashboard({ view: 'upcoming', jobId: job.id }) }, job.chain ? {
-      label: 'Stop continuing',
-      click: () => stopFromTray(() => { if (service.present(job).canStop) service.stop(job.id); })
-    } : {
-      label: 'Cancel',
-      enabled: job.status === 'pending',
-      click: () => stopFromTray(() => { if (job.status === 'pending') service.cancel(job.id); })
-    }]
-  })) : [{ label: 'No scheduled messages', enabled: false }];
+  const jobItems = listed.length ? listed.map(trayJobItem) : [{ label: 'No scheduled messages', enabled: false }];
 
   if (revision !== menuRevision) return;
   tray.setContextMenu(Menu.buildFromTemplate([
@@ -208,8 +217,8 @@ async function rebuildMenu() {
     { label: 'History', click: () => openDashboard({ view: 'history' }) },
     { label: 'Refresh threads', click: () => void rebuildMenu() },
     { label: 'Schedule from a thread', submenu: threadItems },
-    { label: `Scheduled messages (${pending.length})`, submenu: jobItems },
-    ...(continuing.length ? [{ label: `Stop all continuations (${continuing.length})`, click: () => stopFromTray(() => service.stopAll()) }] : []),
+    { label: `Scheduled messages (${listed.length})`, submenu: jobItems },
+    ...(continuing.length ? [{ label: `Stop all continuations (${continuing.length})`, click: () => trayAction(() => service.stopAll(), 'Could not stop') }] : []),
     { type: 'separator' },
     { label: 'Settings…', click: openSettings },
     {

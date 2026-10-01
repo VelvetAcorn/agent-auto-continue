@@ -96,7 +96,7 @@ For a chain, the following hold the turn back without counting it:
 | Archived, or `conversation_not_found` | The chain stops |
 | User activity since the previous turn was sent | The chain pauses (`user_activity`) with the turn still unsent |
 | `awaitingInput: true` | The chain pauses (`awaiting_input`) with the turn still unsent |
-| `busy: true`, or a certain `conversation_busy` error | The same unsent turn is checked again with the backoff above |
+| `busy: true`, or a certain `conversation_busy` error | The same unsent turn is checked again with the backoff above, shown as Waiting for the agent to finish |
 | A certain `screen_locked` error | The same unsent turn is checked again in a minute |
 | A certain `usage_limited` error, except on a timed first turn | The same unsent turn waits until the error's `resetsAt` plus the safety buffer, or backs off as above |
 | `owned_by_other_harness` | The chain stops and names the owning harness |
@@ -121,6 +121,7 @@ It never sends, takes effect at once, and works in every state:
 For a plain schedule, `stop()` is the same as `cancel()`.
 `service.stopAll()` stops every active or paused chain, leaves plain schedules alone, and resolves `{ stopped: [ids] }`.
 The Upcoming view shows Stop all whenever a continuation is running, each continuation's detail view has Stop continuing, and the tray offers Stop continuing per schedule and Stop all continuations.
+The tray lists running and paused continuations alike, with their progress and state, and offers Resume continuation on a paused one whenever Resume is allowed.
 
 ## Resuming
 
@@ -159,6 +160,7 @@ An outcome recorded for an earlier turn is ignored, so a late completion can nev
 | `service.stop(id)`, `service.stopAll()`, `service.resumeChain(id)` | Stop and resume, for the UI, tray and remote control |
 | `service.retryAfterUnlock()` | Called on `unlock-screen` so turns waiting for the unlock are checked at once |
 | `present(job).automation` | Trigger, limit, state, reason, `progressLabel`, `sentTurns`, `countedTurns`, `remainingTurns` and the full `turns` list |
+| `present(job).deliveryLabel` | For a waiting turn, the latest cause: Waiting for unlock, Waiting for the agent to finish, or Waiting for availability |
 | `present(job).displayStatus` | `waiting`, `running`, `paused`, `stopped` or `finished` for chains, otherwise the delivery status |
 | `present(job).canStop`, `canResume`, `needsAttention` | Which controls to offer |
 

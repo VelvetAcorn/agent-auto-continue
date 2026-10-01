@@ -906,3 +906,26 @@ test('T3 Code runs a continuous chain by polling completion, and waits out usage
   assert.equal(h.commands.length, 4);
   assert.equal(h.service.stop(created.id).automation.state, 'stopped');
 });
+
+test('the wait reason follows the latest cause: a busy retry after a locked send no longer reads as waiting for unlock', async () => {
+  for (const busy of ['inspect', 'prepareError']) {
+    const h = setup();
+    const created = await create(h, { turnLimit: 2 });
+    h.fake.state.submitError = new HarnessError('screen_locked', 'The Mac is locked.', {}, false);
+    await h.advance(5_000);
+    assert.equal(h.service.present(job(h, created.id)).deliveryLabel, 'Waiting for unlock');
+    h.fake.state.submitError = null;
+    if (busy === 'inspect') h.fake.state.conversations.get('conv').busy = true;
+    else h.fake.state.prepareError = new HarnessError('conversation_busy', 'The session is open in another window.');
+    await h.advance(continuation.LOCKED_RETRY_MS);
+    const waiting = h.service.present(job(h, created.id));
+    assert.equal(waiting.displayStatus, 'waiting', busy);
+    assert.equal(waiting.deliveryLabel, 'Waiting for the agent to finish', busy);
+    assert.equal(waiting.waiting.availability.reason, continuation.CONVERSATION_BUSY);
+    // Unlocking the Mac must not skip the busy backoff.
+    const inspections = h.fake.state.calls.filter(([name]) => name === 'inspectConversation').length;
+    await h.service.retryAfterUnlock();
+    assert.equal(h.fake.state.calls.filter(([name]) => name === 'inspectConversation').length, inspections, busy);
+    assert.equal(h.fake.state.submitted.length, 0);
+  }
+});

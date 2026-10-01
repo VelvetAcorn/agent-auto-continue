@@ -231,3 +231,36 @@ test('continuations are created, stopped and described over IPC and the tray', a
   assert.equal(fake.state.submitted.length, 0);
 });
 
+
+test('paused continuations appear per schedule in the tray with their state, Resume when allowed, and Stop', async () => {
+  const { createFakeHarness } = require('../tools/fake-harness.cjs');
+  const fake = createFakeHarness({ conversations: [{ id: 'conv-1', title: 'Fake conversation' }] });
+  const chain = (reasonCode, reason) => ({ limit: null, state: 'paused', reasonCode, reason, changedAt: '2026-10-01T09:00:00Z', previousTurns: 0, history: [] });
+  const base = { harness: 'fake', threadId: 'conv-1', message: 'Keep going', scheduleAt: '2026-10-01T08:00:00Z', createdAt: '2026-10-01T08:00:00Z', timeZone: 'UTC', bufferSeconds: 5, trigger: 'available', waitReason: 'availability' };
+  const jobs = [
+    { ...base, id: 'paused', commandId: 'c1', messageId: 'm1', status: 'pending', deliveryCertainty: 'not-delivered', chain: chain('user_activity', 'New user activity appeared in the session. Resume to keep continuing.') },
+    { ...base, id: 'uncertain', commandId: 'c2', messageId: 'm2', status: 'unconfirmed', deliveryCertainty: 'unknown', dispatchAttemptedAt: '2026-10-01T08:00:05Z', chain: chain('delivery_unconfirmed', 'Check delivery before resuming.') }
+  ];
+  const app = appHarness([], { rawJobs: JSON.stringify({ version: 4, jobs }), extraHarnesses: () => [fake.adapter] });
+  const settle = () => new Promise((resolve) => setImmediate(resolve));
+  await settle();
+  const section = () => app.trayMenu.find((item) => String(item.label).startsWith('Scheduled messages'));
+  const entry = (id) => section().submenu.find((item) => item.submenu.some((child) => child.id === `view:${id}`));
+  assert.equal(section().label, 'Scheduled messages (2)');
+  for (const id of ['paused', 'uncertain']) {
+    assert.match(entry(id).label, /Keep going · Turn 1 · continuous · paused/);
+    assert.ok(entry(id).submenu.some((child) => child.label === 'Stop continuing'));
+  }
+  const resume = (id) => entry(id).submenu.find((child) => child.label === 'Resume continuation');
+  assert.equal(resume('paused').enabled, true);
+  assert.equal(resume('uncertain').enabled, false, 'Resume waits for Check delivery');
+  resume('paused').click();
+  assert.equal(app.invoke('jobs:get', 'paused').automation.state, 'active');
+  await settle();
+  assert.equal(entry('paused').submenu.some((child) => child.label === 'Resume continuation'), false, 'A running chain offers Stop only');
+  entry('uncertain').submenu.find((child) => child.label === 'Stop continuing').click();
+  assert.equal(app.invoke('jobs:get', 'uncertain').automation.state, 'stopped');
+  await settle();
+  assert.equal(entry('uncertain'), undefined);
+  assert.equal(fake.state.submitted.length, 0);
+});

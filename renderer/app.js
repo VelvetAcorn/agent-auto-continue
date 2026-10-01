@@ -253,7 +253,7 @@
     return `<section class="chain" aria-label="Automatic continuation"><div class="chain-head"><span class="overline">Automatic continuation</span><strong>${escape(auto.progressLabel)}</strong></div><dl class="key-values"><dt>Start</dt><dd>${escape(triggers[auto.trigger] || auto.trigger)}</dd><dt>Turn limit</dt><dd>${auto.unlimited ? 'None · continuous until you stop it' : auto.limit}</dd><dt>Turns sent</dt><dd>${auto.sentTurns}${auto.unlimited ? '' : ` of ${auto.limit}`}</dd><dt>State</dt><dd>${escape(chainStates[auto.state] || auto.state)}</dd>${availability ? `<dt>Availability</dt><dd>${escape(availabilityLine(availability))}</dd>` : ''}</dl>${reason}<h3>Turns</h3>${turns}${omitted}</section>`;
   }
   function availabilityLine(value) {
-    const what = { available: 'Available', limited: value.resetsAt ? `Limited until ${display(value.resetsAt)}` : 'Limited, reset time unknown', unavailable: value.reason === 'screen_locked' ? 'Mac locked' : 'Unavailable', unknown: 'Unknown' }[value.state] || 'Unknown';
+    const what = { available: 'Available', limited: value.resetsAt ? `Limited until ${display(value.resetsAt)}` : 'Limited, reset time unknown', unavailable: value.reason === 'screen_locked' ? 'Mac locked' : value.reason === 'conversation_busy' ? 'Agent still working in this conversation' : 'Unavailable', unknown: 'Unknown' }[value.state] || 'Unknown';
     return `${what} · ${value.source === 'none' ? 'no source' : value.source} · checked ${display(value.checkedAt)}`;
   }
   function automationActions(job, status) {
@@ -426,7 +426,7 @@
   function route(payload) {
     if(!payload)return;
     if(payload.view==='composer'||payload.view==='compose'){openComposer(payload.threadId,payload.harness);if(payload.threadLabel&&draft())draft().threadTitle=payload.threadLabel;render('h1');}
-    else if(payload.jobId){state.selected=payload.jobId;state.returnView='history';state.view='detail';state.search='';render('h1');void refreshJobs();}
+    else if(payload.jobId){state.selected=payload.jobId;state.returnView=payload.view==='upcoming'?'upcoming':'history';state.view='detail';state.search='';render('h1');void refreshJobs();}
     else if(['upcoming','history','threads','settings'].includes(payload.view))navigate(payload.view);
   }
   if(!api){app.innerHTML='<main class="content"><h1>Open the desktop app</h1><p>This interface needs the T3 Code Auto-Continue desktop connection.</p></main>';return;}
