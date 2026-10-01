@@ -1,4 +1,11 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
-  <rect width="1024" height="1024" rx="224" fill="#087f5b"/>
-  <path d="M236 244h552v118H236zm92 210h368v118H328zm92 210h184v118H420z" fill="#fff"/>
+  <!-- macOS app icon grid: an 824px continuous-corner square (185.4px corner radius) centred on the 1024px canvas. -->
+  <defs>
+    <filter id="shadow" x="0" y="0" width="1024" height="1024" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="10" stdDeviation="5" flood-color="#000" flood-opacity="0.3"/>
+    </filter>
+  </defs>
+  <path filter="url(#shadow)" fill="#087f5b" d="M383.41 100L640.59 100C722.19 100 763 100 799.79 112.14L806.92 113.89C854.88 131.34 892.66 169.12 910.11 217.08C924 261 924 301.81 924 383.41L924 640.59C924 722.19 924 763 911.86 799.79L910.11 806.92C892.66 854.88 854.88 892.66 806.92 910.11C763 924 722.19 924 640.59 924L383.41 924C301.81 924 261 924 224.21 911.86L217.08 910.11C169.12 892.66 131.34 854.88 113.89 806.92C100 763 100 722.19 100 640.59L100 383.41C100 301.81 100 261 112.14 224.21L113.89 217.08C131.34 169.12 169.12 131.34 217.08 113.89C261 100 301.81 100 383.41 100Z"/>
+  <!-- Original 1024px artwork, scaled by 824/1024 into the shape. -->
+  <path transform="translate(100 100) scale(0.8046875)" d="M236 244h552v118H236zm92 210h368v118H328zm92 210h184v118H420z" fill="#fff"/>
 </svg>
