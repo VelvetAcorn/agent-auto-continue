@@ -14,7 +14,7 @@ const CLI = '660279f3-a100-4809-91a0-dc5991157d17';
 const WRITES = ['setComposer', 'submit', 'clearComposer', 'activate', 'openUrl'];
 
 // A home laid out like Claude Desktop 2.16120.0 and Claude Code 2.1.286 write it.
-function setup(t, { processes = async () => [], alive = () => true } = {}) {
+function setup(t, { processes = async () => [], alive = () => true, catalogue = null } = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-probes-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const registry = path.join(home, '.claude', 'sessions');
@@ -27,6 +27,14 @@ function setup(t, { processes = async () => [], alive = () => true } = {}) {
   };
   // No conversation is shown, so the interface is not inspected.
   const fake = createFakeDesktopAutomation({ bundleId: BUNDLE_ID, view: { urlSegment: 'epitaxy' } });
+  // An app bundle whose label catalogue holds `catalogue`: { <file name>: contents }.
+  if (catalogue) {
+    const bundle = path.join(home, 'Applications', 'Claude.app');
+    const dir = path.join(bundle, 'Contents', 'Resources', 'ion-dist', 'i18n');
+    fs.mkdirSync(dir, { recursive: true });
+    for (const [name, value] of Object.entries(catalogue)) fs.writeFileSync(path.join(dir, name), typeof value === 'string' ? value : JSON.stringify(value));
+    fake.state.installedPath = bundle;
+  }
   const adapter = createClaudeDesktopHarness({ home, env: {}, isAlive: alive, automation: fake.automation, isLocked: async () => false, platform: 'darwin', now: () => NOW,
     sleep: async () => {}, appPath: null, processes });
   const check = async (depth) => {
@@ -161,4 +169,29 @@ test('session files with renamed fields are a session store problem', async (t) 
   const result = await s.check('quick');
   assert.deepEqual(s.about(result, 'session_store').problems, ['1 of 1 session files lack the expected fields (most often no usable sessionId, in 1).']);
   assert.equal(result.problems[0].message, 'Claude Desktop 1.0 changed how it stores its sessions. Scheduled messages for it may fail until Agent Auto-Continue supports this version.');
+});
+
+// The English catalogue entries of Claude Desktop 2.16120.0 for the controls the harness uses.
+const ENGLISH = { iWKE8shLIt: 'Prompt', uxkiTeN6WU: 'Write your prompt to Claude', '9WRlF4R2gm': 'Send', '9PawskFnw4': 'Stop response', 'RANC4/S/j1': 'Stop response' };
+
+test('the label catalogue passes while the control message IDs resolve in English', async (t) => {
+  const s = setup(t, { catalogue: { 'en-US.json': ENGLISH, 'de-DE.json': {} } });
+  assert.deepEqual(s.about(await s.check('full'), 'label_catalogue'), { checked: true, problems: [], unchecked: [] });
+  // One of a control's IDs is enough.
+  const partly = setup(t, { catalogue: { 'en-US.json': { iWKE8shLIt: 'Prompt', '9WRlF4R2gm': 'Send', 'RANC4/S/j1': 'Stop response' } } });
+  assert.equal(partly.about(await partly.check('full'), 'label_catalogue').checked, true);
+  const quick = setup(t, { catalogue: { 'en-US.json': {} } });
+  assert.deepEqual(quick.about(await quick.check('quick'), 'label_catalogue').problems, [], 'Catalogues are read by full checks only');
+});
+
+test('regenerated message IDs are a label catalogue problem even though English labels still match', async (t) => {
+  const s = setup(t, { catalogue: { 'en-US.json': { a1b2c3d4e5: 'Prompt', f6g7h8i9j0: 'Send', '9PawskFnw4': 'Stop response' } } });
+  const result = await s.check('full');
+  assert.deepEqual(s.about(result, 'label_catalogue'), { checked: false, unchecked: [],
+    problems: ['en-US.json no longer has the message IDs of the composer control (iWKE8shLIt, uxkiTeN6WU), send control (9WRlF4R2gm).'] });
+  assert.equal(result.problems[0].message, 'Claude Desktop 1.0 changed how it stores its translated labels. Scheduled messages for it may fail until Agent Auto-Continue supports this version.');
+  const renamed = setup(t, { catalogue: { 'english.json': ENGLISH } });
+  assert.deepEqual(renamed.about(await renamed.check('full'), 'label_catalogue').problems, ['~/Applications/Claude.app/Contents/Resources/ion-dist/i18n has no English catalogue (en-US.json).']);
+  const reformatted = setup(t, { catalogue: { 'en-US.json': '[{"id":"iWKE8shLIt"}]' } });
+  assert.deepEqual(reformatted.about(await reformatted.check('full'), 'label_catalogue').problems, ['en-US.json in ~/Applications/Claude.app/Contents/Resources/ion-dist/i18n is not a JSON object of messages.']);
 });
