@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sketch 03 - Shift (keep awake) states and settings</title>
+<link rel="stylesheet" href="sketch.css">
+</head>
+<body>
+<div class="sketchbar"><span>Sketch 03 of 06 - The shift. Keep-awake is a session the user starts and ends, shown as one card in three states, plus its settings and the morning report. <a href="index.html">All sketches</a></span><button type="button" data-toggle-theme>Bone Outline</button></div>
+
+<main class="content" style="max-width:900px">
+  <div class="heading"><h1>Shift states</h1></div>
+
+  <h3>A. No shift, but work is waiting (the nudge)</h3>
+  <section class="shift off">
+    <div class="glyph" aria-hidden="true">&#9788;</div>
+    <div>
+      <h2>Two handoffs will miss their start if the Mac sleeps</h2>
+      <p>Start a shift to keep the Mac awake until they finish. Nothing else changes.</p>
+      <p class="quiet">Claude Code at 03:00 and Claude desktop at 06:30. Claude desktop also needs the screen unlocked.</p>
+    </div>
+    <button type="button" class="primary">Start shift</button>
+  </section>
+
+  <h3>B. On shift, everything fine</h3>
+  <section class="shift">
+    <div class="glyph" aria-hidden="true">&#9790;</div>
+    <div>
+      <h2>Awake until everything is done</h2>
+      <p>2 handoffs still need the Mac. Display can sleep. Ends around 07:15 if all goes to plan.</p>
+      <div class="rules"><span>Screen may lock</span><span>Battery: ends at 20%</span><span>Lid must stay open</span></div>
+    </div>
+    <button type="button">End shift</button>
+  </section>
+
+  <h3>C. On shift, something needs attention</h3>
+  <section class="shift" style="border-color:var(--amber)">
+    <div class="glyph" aria-hidden="true" style="border-color:var(--amber)">&#9888;</div>
+    <div>
+      <h2>Awake, but Claude desktop cannot run with the screen locked</h2>
+      <p>The 06:30 handoff will pause unless the Mac is unlocked. The other handoff is unaffected.</p>
+      <div class="rules"><span>Screen locked since 23:10</span><span>On battery, 61%</span></div>
+    </div>
+    <div style="display:grid;gap:8px"><button type="button">Keep display on instead</button><button type="button" class="ghost">Skip that handoff</button></div>
+  </section>
+
+  <h3>D. The morning report (shown once, on first open after the shift ends)</h3>
+  <section class="card report" aria-label="Shift report">
+    <div>
+      <h2>Good morning. The shift ended at 06:52.</h2>
+      <p>Awake for 7 h 10 m. Battery 100% to 74%.</p>
+      <ul>
+        <li>3 handoffs done, 11 turns in total.</li>
+        <li>1 paused: Claude Code asked a question at 03:41.</li>
+        <li>1 not started: Claude desktop needed the screen unlocked.</li>
+      </ul>
+      <div class="actions"><button type="button" class="primary">See what needs you</button><button type="button" class="ghost">Dismiss</button></div>
+    </div>
+    <div class="stamp" aria-hidden="true">Done</div>
+  </section>
+  <p class="help">The stamp is the one decorative moment on this screen. With reduced motion it simply appears; otherwise it lands once with a short press, no loop.</p>
+
+  <div class="heading" style="margin-top:40px"><h1>Shift settings</h1></div>
+  <div class="settings">
+    <section class="card">
+      <h2>What a shift keeps awake</h2>
+      <div class="setting-row"><div><h3>System</h3><p style="margin:0;font-size:12px">Always on during a shift. Prevents idle sleep while any handoff still needs the Mac.</p></div><span class="pill ok">Always</span></div>
+      <div class="setting-row"><div><h3>Display</h3><p style="margin:0;font-size:12px">Only needed for agents that cannot work with the screen locked. The app turns this on automatically for those handoffs.</p></div><select><option>Only when an agent needs it</option><option>Always during a shift</option><option>Never</option></select></div>
+      <div class="setting-row"><div><h3>Lid</h3><p style="margin:0;font-size:12px">macOS sleeps a closed laptop unless it is on power with an external display. The app cannot change this; it warns instead.</p></div><span class="pill quiet">Warn if closed</span></div>
+    </section>
+    <section class="card">
+      <h2>When to give up</h2>
+      <div class="setting-row"><label for="battery">On battery, end the shift at</label><select id="battery"><option>20%</option><option>35%</option><option>Never end for battery</option></select></div>
+      <div class="setting-row"><label for="quiet">If nothing has run for</label><select id="quiet"><option>2 hours</option><option>4 hours</option><option>Keep waiting</option></select></div>
+      <div class="setting-row"><label for="autostart">Start a shift automatically when a handoff needs it</label><input id="autostart" type="checkbox"></div>
+      <p class="help">If the Mac sleeps anyway, missed starts catch up on wake and the board says how late they were. The shift never restarts on its own after you end it.</p>
+    </section>
+  </div>
+</main>
+<script src="sketch.js"></script>
+</body>
+</html>

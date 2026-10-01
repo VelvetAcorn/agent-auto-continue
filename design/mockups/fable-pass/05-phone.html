@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sketch 05 - Phone pairing and remote board</title>
+<link rel="stylesheet" href="sketch.css">
+</head>
+<body>
+<div class="sketchbar"><span>Sketch 05 of 06 - Phone. Left: pairing lives in Settings. Right: the phone gets the same board, trimmed. <a href="index.html">All sketches</a></span><button type="button" data-toggle-theme>Bone Outline</button></div>
+
+<main class="content" style="max-width:1000px">
+  <div class="grid2">
+    <div>
+      <div class="heading"><h1>Phone</h1></div>
+      <div class="settings">
+        <section class="card">
+          <h2>Pair a phone</h2>
+          <p style="margin-top:0">Scan with your phone's camera, or type the words. The code expires in 5 minutes and pairs one device.</p>
+          <div class="pair">
+            <div class="qr" aria-label="Pairing QR code (sketch)" role="img"><script>document.currentScript.insertAdjacentHTML('beforebegin',Array.from({length:144},(_,n)=>`<i class="${((n*7919)%13<6)?'':'o'}"></i>`).join(''))</script></div>
+            <div>
+              <span style="font-size:11px;color:var(--muted)">Or enter these words</span>
+              <div class="code">acorn velvet paper night</div>
+              <p style="font-size:11px;margin:4px 0 12px">Works on the same Wi-Fi. Away from home, turn on the relay below.</p>
+              <button type="button" class="ghost">New code</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>Paired devices</h2>
+          <div class="device"><div>Ryan's iPhone<small>Claude app via MCP and the web board. Last used 4 min ago.</small></div><button type="button" class="ghost danger">Remove</button></div>
+          <div class="device"><div>iPad<small>Web board only. Last used 3 days ago.</small></div><button type="button" class="ghost danger">Remove</button></div>
+          <p class="help">A paired phone can view the board and pause, resume, end or create handoffs. It cannot read agent tokens, change agent settings or pair other devices.</p>
+        </section>
+
+        <section class="card">
+          <h2>Reach</h2>
+          <div class="setting-row"><div><h3>Same network</h3><p style="margin:0;font-size:12px">Direct, nothing leaves your Wi-Fi.</p></div><span class="pill ok">On</span></div>
+          <div class="setting-row"><div><h3>Relay</h3><p style="margin:0;font-size:12px">An end-to-end encrypted relay so the phone reaches the Mac from anywhere. Off by default.</p></div><input type="checkbox" aria-label="Relay"></div>
+          <div class="setting-row"><div><h3>Add to the Claude app</h3><p style="margin:0;font-size:12px">Exposes the board as an MCP connector so you can say "pause the quilla handoff" to Claude on your phone.</p></div><button type="button">Copy connector link</button></div>
+        </section>
+      </div>
+    </div>
+
+    <div>
+      <div class="heading"><h1>On the phone</h1></div>
+      <div class="phone-frame">
+        <div class="bar">agent-auto-continue on Ryan's Mac</div>
+        <div class="body">
+          <h1>Tonight</h1>
+          <div class="reach">Mac reachable, seen 12 s ago</div>
+          <section class="shift" style="padding:14px 16px;gap:12px;margin-bottom:18px;grid-template-columns:1fr auto">
+            <div><h2 style="font-size:15px">Awake until done</h2><p style="font-size:11px">2 handoffs still need the Mac.</p></div>
+            <button type="button" style="font-size:11px;padding:7px 10px">End shift</button>
+          </section>
+          <div class="section-title"><h2 style="font-size:15px">Needs you</h2></div>
+          <div class="card" style="margin-bottom:16px">
+            <div class="row needs">
+              <div class="row-top"><span class="agent"><i>CC</i>Claude Code</span><span class="pill warn">Paused</span></div>
+              <div class="row-title">Migrate billing webhooks</div>
+              <div class="why" style="font-size:11px">Asked: "Keep the legacy endpoint for 30 days?"</div>
+              <div class="row-actions"><button type="button" class="primary">Resume</button><button type="button" class="ghost">End</button></div>
+              <div class="accepted">Mac accepted "Resume" at 23:58</div>
+            </div>
+          </div>
+          <div class="section-title"><h2 style="font-size:15px">Running</h2></div>
+          <div class="card" style="margin-bottom:16px">
+            <div class="row running"><div class="row-top"><span class="agent"><i>T3</i>T3 Code</span><span class="turns">3 of 4</span></div><div class="row-title">Polish the scheduler experience</div></div>
+            <div class="row running"><div class="row-top"><span class="agent"><i>OC</i>OpenCode</span><span class="turns">turn 7</span></div><div class="row-title">Fix the flaky export test</div></div>
+          </div>
+          <div class="section-title"><h2 style="font-size:15px">Waiting</h2></div>
+          <div class="card" style="margin-bottom:16px">
+            <div class="row"><div class="row-top"><span class="agent"><i class="limited">CC</i>Claude Code</span><span class="avail limited">03:00</span></div><div class="row-title">Write release notes for 2.1</div></div>
+          </div>
+          <button type="button" class="primary full">New handoff</button>
+          <p class="help" style="text-align:center">The Mac is the source of truth. Each tap carries a request id, so a retried tap never makes two handoffs.</p>
+        </div>
+      </div>
+      <p class="note" style="margin-top:20px">When the Mac is unreachable the phone shows the last known board greyed, "Last seen 02:14", and every action button becomes "Queue for when the Mac is back" with an explicit warning that it may be stale.</p>
+    </div>
+  </div>
+</main>
+<script src="sketch.js"></script>
+</body>
+</html>

@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sketch 01 - Board (home) with several agents</title>
+<link rel="stylesheet" href="sketch.css">
+</head>
+<body>
+<div class="sketchbar"><span>Sketch 01 of 06 - Board. One list grouped by what you need to do, not by agent. <a href="index.html">All sketches</a></span><button type="button" data-toggle-theme>Bone Outline</button></div>
+
+<header class="topbar">
+  <nav aria-label="Main navigation">
+    <button type="button" class="active" aria-current="page">Board<span class="nav-count">5</span></button>
+    <button type="button">History<span class="nav-count">1</span></button>
+    <button type="button">Agents</button>
+    <button type="button">Settings</button>
+  </nav>
+  <div class="strip" aria-label="Status">
+    <span class="agents" title="Agents: T3 Code free, Claude Code limited until 03:00, OpenCode free, Codex desktop offline">
+      <i>T3</i><i class="limited">CC</i><i>OC</i><i class="offline">CX</i>
+    </span>
+    <span class="sep"></span>
+    <span class="moon">&#9790; On shift</span>
+    <span class="sep"></span>
+    <span class="phone-dot on">&#9635; Phone</span>
+    <button type="button" class="ghost" aria-label="Switch theme">&#9790;</button>
+  </div>
+</header>
+
+<main class="content">
+  <div class="heading">
+    <h1>Tonight</h1>
+    <button type="button" class="primary">&#65291; New handoff</button>
+  </div>
+  <p class="note">Heading is contextual: "Tonight" after 18:00, "Today" otherwise, "Nothing waiting" when empty. The primary action is always visible.</p>
+
+  <section class="shift" aria-label="Shift">
+    <div class="glyph" aria-hidden="true">&#9790;</div>
+    <div>
+      <h2>Awake until everything is done</h2>
+      <p>2 handoffs still need the Mac. Display can sleep. Ends around 07:15 if all goes to plan.</p>
+      <div class="rules"><span>Screen may lock</span><span>Battery: ends at 20%</span><span>Lid must stay open</span></div>
+    </div>
+    <button type="button">End shift</button>
+  </section>
+
+  <section class="section" aria-label="Needs you">
+    <div class="section-title"><h2>Needs you</h2><small>Nothing sends until you decide</small></div>
+    <div class="card">
+      <div class="row needs">
+        <div class="row-top">
+          <span class="agent"><i>CC</i>Claude Code<span class="proj">quilla</span></span>
+          <span class="pill warn">Paused after turn 2 of 5</span>
+        </div>
+        <div class="row-title">Migrate billing webhooks to the new signature scheme</div>
+        <div class="why">Claude Code asked a question: <b>"Should I keep the legacy endpoint alive for 30 days?"</b></div>
+        <div class="row-actions"><span style="font-size:11px;color:var(--muted);align-self:center">Answer in Claude Code, then</span><button type="button" class="primary">Resume</button><button type="button" class="ghost">End handoff</button></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" aria-label="Running">
+    <div class="section-title"><h2>Running</h2><small>Turns in progress right now</small></div>
+    <div class="card">
+      <div class="row running">
+        <div class="row-top">
+          <span class="agent"><i>T3</i>T3 Code<span class="proj">agent-auto-continue</span></span>
+          <span class="turns" aria-label="Turn 3 of 4"><span class="dots"><i class="done"></i><i class="done"></i><i class="now"></i><i></i></span>&nbsp;3 of 4</span>
+        </div>
+        <div class="row-title">Polish the scheduler experience</div>
+        <div class="row-preview">Continue. Summarize remaining risks and take the smallest safe next step.</div>
+        <div class="meta"><span>Turn started 23:41 (BST)</span><span>Stops when done, or if T3 Code asks you anything</span></div>
+      </div>
+      <div class="row running">
+        <div class="row-top">
+          <span class="agent"><i>OC</i>OpenCode<span class="proj">feedworks-mcp</span></span>
+          <span class="turns" aria-label="Until done, turn 7"><span class="dots"><i class="done"></i><i class="done"></i><i class="done"></i><i class="now"></i></span>&nbsp;turn 7, until done</span>
+        </div>
+        <div class="row-title">Fix the flaky export integration test</div>
+        <div class="row-preview">Continue</div>
+        <div class="meta"><span>Turn started 23:52 (BST)</span><span>No progress for 3 turns pauses it</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" aria-label="Waiting">
+    <div class="section-title"><h2>Waiting</h2><small>Soonest first</small></div>
+    <div class="card">
+      <button type="button" class="row">
+        <div class="row-top">
+          <span class="agent"><i>CC</i>Claude Code<span class="proj">quilla</span></span>
+          <span class="avail limited">Limited, resets 03:00 <small>(from Claude Code)</small></span>
+        </div>
+        <div class="row-title">Write release notes for 2.1</div>
+        <div class="row-preview">Continue</div>
+        <div class="meta"><span>Starts when Claude Code is free, 1 turn</span><span>In about 3 hours</span></div>
+      </button>
+      <button type="button" class="row">
+        <div class="row-top">
+          <span class="agent"><i class="desktop">CL</i>Claude desktop<span class="proj">Research</span></span>
+          <span class="pill">2026-10-01, 06:30 BST</span>
+        </div>
+        <div class="row-title">Summarise the competitor pricing pages</div>
+        <div class="row-preview">Pick up where you left off and finish the comparison table.</div>
+        <div class="meta"><span>At a set time, 1 turn</span><span>Needs the screen unlocked at 06:30</span></div>
+      </button>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="section-title"><h2>Done tonight</h2><small><a href="#">History</a></small></div>
+    <div class="card">
+      <button type="button" class="row">
+        <div class="row-top">
+          <span class="agent"><i>T3</i>T3 Code<span class="proj">quilla</span></span>
+          <span class="pill ok">Done, 4 turns</span>
+        </div>
+        <div class="row-title">Audit checkout edge cases before the autumn release</div>
+        <div class="meta"><span>Finished 22:58 (BST)</span><span>T3 Code reported the task complete</span></div>
+      </button>
+    </div>
+  </section>
+  <p class="help">"Done" means the agent reported the task complete. "Delivered" would only mean a message was accepted.</p>
+</main>
+<script src="sketch.js"></script>
+</body>
+</html>

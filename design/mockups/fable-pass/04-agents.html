@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sketch 04 - Agents</title>
+<link rel="stylesheet" href="sketch.css">
+</head>
+<body>
+<div class="sketchbar"><span>Sketch 04 of 06 - Agents. Harnesses are connections with capabilities, not navigation. Each card expands to its threads. <a href="index.html">All sketches</a></span><button type="button" data-toggle-theme>Bone Outline</button></div>
+
+<header class="topbar">
+  <nav aria-label="Main navigation">
+    <button type="button">Board<span class="nav-count">5</span></button>
+    <button type="button">History<span class="nav-count">1</span></button>
+    <button type="button" class="active" aria-current="page">Agents</button>
+    <button type="button">Settings</button>
+  </nav>
+  <div class="strip"><span class="agents"><i>T3</i><i class="limited">CC</i><i>OC</i><i class="offline">CX</i></span><span class="sep"></span><span class="moon">&#9790; On shift</span></div>
+</header>
+
+<main class="content">
+  <div class="heading"><h1>Agents</h1><button type="button">Add an agent</button></div>
+  <p class="note">Order: agents with a problem first, then by most recent activity. Availability text always names its source and age, so "unknown" and "stale" are honest states rather than gaps.</p>
+
+  <div class="card">
+    <button type="button" class="row">
+      <div class="row-top">
+        <span class="agent"><i>T3</i>T3 Code</span>
+        <span class="avail free">Free <small>(local API, checked just now)</small></span>
+      </div>
+      <div class="meta"><span>Local API on port 3773. 1 running, 0 waiting.</span><span>Runs with screen locked. Can report task completion.</span></div>
+    </button>
+    <button type="button" class="row">
+      <div class="row-top">
+        <span class="agent"><i class="limited">CC</i>Claude Code</span>
+        <span class="avail limited">Limited, resets 03:00 <small>(read from Claude Code, 2 min ago)</small></span>
+      </div>
+      <div class="meta"><span>Headless CLI. 1 paused, 1 waiting.</span><span>Runs with screen locked. Asks questions and permissions.</span></div>
+    </button>
+    <button type="button" class="row">
+      <div class="row-top">
+        <span class="agent"><i>OC</i>OpenCode</span>
+        <span class="avail free">Free <small>(HTTP server, checked 40 s ago)</small></span>
+      </div>
+      <div class="meta"><span>Local HTTP server. 1 running.</span><span>Runs with screen locked. Completion inferred from idle session.</span></div>
+    </button>
+    <button type="button" class="row">
+      <div class="row-top">
+        <span class="agent"><i class="desktop">CL</i>Claude desktop</span>
+        <span class="avail unknown">Availability unknown <small>(no limit signal available)</small></span>
+      </div>
+      <div class="meta"><span>Desktop app, accessibility control. 1 waiting.</span><span>Needs the screen unlocked and the window visible.</span></div>
+    </button>
+    <button type="button" class="row">
+      <div class="row-top">
+        <span class="agent"><i class="desktop">CX</i>Codex desktop</span>
+        <span class="avail offline">Not running <small>(last seen yesterday 17:20)</small></span>
+      </div>
+      <div class="meta"><span>Desktop app, accessibility control.</span><span>Needs the screen unlocked. Open the app to reconnect.</span></div>
+    </button>
+  </div>
+
+  <div class="heading" style="margin-top:36px"><h2 style="margin:0">Claude Code</h2><span class="avail limited">Limited, resets 03:00</span></div>
+  <p class="note">An expanded agent: capabilities as a small table, then its threads (the current Threads view lives here and in the composer picker).</p>
+  <div class="card" style="margin-bottom:20px">
+    <table class="caps" aria-label="Claude Code capabilities">
+      <thead><tr><th>Capability</th><th>Status</th><th>What it means for handoffs</th></tr></thead>
+      <tbody>
+        <tr><td>Continue a thread</td><td class="yes">Yes</td><td>Resumes by session id through the headless interface.</td></tr>
+        <tr><td>Report usage limit reset</td><td class="yes">Yes</td><td>"When the agent is free" uses the real reset time.</td></tr>
+        <tr><td>Report task completion</td><td class="maybe">Partly</td><td>End of turn is known. "Done" relies on the agent's own final message, so "Until done" also uses the no-progress guard.</td></tr>
+        <tr><td>Run with screen locked</td><td class="yes">Yes</td><td>The shift only needs to keep the system awake, not the display.</td></tr>
+        <tr><td>Questions and permissions</td><td class="yes">Detected</td><td>A handoff pauses and shows the question on the board.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="card">
+    <div class="list-head"><span>THREADS, MOST RECENT FIRST</span><span>Settled hidden</span></div>
+    <button type="button" class="row"><div class="row-top"><span class="row-title">Write release notes for 2.1</span><span class="pill">Waiting</span></div><div class="meta"><span>quilla</span><span>18 min ago</span></div></button>
+    <button type="button" class="row"><div class="row-top"><span class="row-title">Migrate billing webhooks to the new signature scheme</span><span class="pill warn">Paused</span></div><div class="meta"><span>quilla</span><span>3 hours ago</span></div></button>
+    <button type="button" class="row"><div class="row-top"><span class="row-title">Tidy the onboarding copy</span><span></span></div><div class="meta"><span>quilla</span><span>Yesterday</span></div></button>
+  </div>
+</main>
+<script src="sketch.js"></script>
+</body>
+</html>
