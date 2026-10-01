@@ -68,7 +68,7 @@ A `SHA256SUMS.txt` file is attached to every release if you want to verify the d
 - For T3 Code, a bearer token. Create one according to your installed T3 Code version's authentication instructions. For versions supporting the session-issue command:
 
   ```sh
-  npx t3 auth session issue --token-only --label t3code-auto-continue --ttl 365d
+  npx t3 auth session issue --token-only --label agent-auto-continue --ttl 365d
   ```
 
 ## Run in development

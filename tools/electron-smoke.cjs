@@ -267,6 +267,7 @@ async function rendererJourney(js, reducedMotion) {
   const fill = async (selector, value) => js(`(() => { const input=document.querySelector(${JSON.stringify(selector)}); input.value=${JSON.stringify(value)}; input.dispatchEvent(new Event('input',{bubbles:true})); })()`);
   const heading = expected => waitFor(() => js(`document.querySelector('h1')?.textContent === ${JSON.stringify(expected)}`), `view ${expected}`);
   await heading('New schedule');
+  assert.equal(await js('document.title'), 'Agent Auto-Continue', 'The window title uses the app name');
   await js('window.__jobsChanged = 0; window.autoContinue.onJobsChanged(() => window.__jobsChanged++); 0');
   await fill('#message', 'Fixture message from the production composer');
   await fill('#date', '2099-02-30');
