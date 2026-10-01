@@ -162,3 +162,14 @@ test('text comparison ignores trailing whitespace and non-breaking spaces only',
   assert.equal(normaliseText('a b'), 'a b');
   assert.notEqual(normaliseText(' Continue'), 'Continue');
 });
+
+test('focus is only given back after the harness itself opened a link', async () => {
+  const { fake, run } = setup({ view: { urlSegment: 'conv-1' } });
+  let evidence = null;
+  fake.state.faults.submit = () => { evidence = { uuid: 'prompt-1' }; return { ok: true, pressed: true }; };
+  // While the harness waits for evidence, the user switches to the agent app themselves.
+  await run({ confirm: async () => { fake.state.frontmost = { bundleId: BUNDLE, pid: 4242 }; return evidence; } });
+  assert.deepEqual(fake.state.opened, []);
+  assert.equal(calls(fake, 'activate').length, 0, 'The user is not pulled out of the app they chose');
+  assert.equal(fake.state.frontmost.bundleId, BUNDLE);
+});
