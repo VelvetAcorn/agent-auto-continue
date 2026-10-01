@@ -6,13 +6,15 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
   <title>Agent Auto-Continue</title>
   <link rel="stylesheet" href="styles.css">
+  <script src="renderer/icons.js" defer></script>
   <script src="renderer/date-time.js" defer></script>
+  <script src="renderer/compose.js" defer></script>
   <script src="renderer/support-star.js" defer></script>
   <script src="renderer/remote.js" defer></script>
   <script src="renderer/app.js" defer></script>
 </head>
 <body>
-  <div id="app"><main class="content"><h1>Upcoming</h1><p>Loading your schedules…</p></main></div>
+  <div id="app"><main class="main"><p class="help loading">Loading…</p></main></div>
   <div id="toast" role="status" aria-live="polite" hidden></div>
 </body>
 </html>

@@ -99,7 +99,7 @@ function fixture() {
   const injected = {
     ...electron, app: appProxy, BrowserWindow: HiddenWindow,
     ipcMain: { handle: (name, handler) => { handlers[name] = handler; electron.ipcMain.handle(name, handler); } },
-    Tray: class { setToolTip() {} setImage() {} on() {} setContextMenu() {} },
+    Tray: class { setToolTip() {} setImage() {} on() {} popUpContextMenu() {} },
     Menu: { buildFromTemplate: (value) => value }, Notification: { isSupported: () => false }
   };
   vm.runInNewContext(fs.readFileSync(path.join(root, 'main.js'), 'utf8'), {

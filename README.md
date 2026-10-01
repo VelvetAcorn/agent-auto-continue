@@ -2,7 +2,8 @@
 
 Agent Auto-Continue is a macOS menu-bar companion that schedules a user message (by default, `Continue`) for an existing agent conversation.
 It supports T3 Code threads, OpenCode sessions, Claude Code CLI sessions, Codex CLI threads, Claude Desktop Code sessions and ChatGPT app Codex threads.
-Its Paper Focus interface keeps the queue, history, conversation picker, composer and settings in one window.
+Its interface is a single screen in a menu-bar popover: pick a conversation, pick when, press Continue, with the queue underneath.
+The same screen opens as a resizable window from the popover or the menu-bar menu, and everything else lives behind the gear.
 Each harness is reached through its own local interface: T3 Code's and OpenCode's loopback HTTP APIs, Claude Code's headless mode, and the Codex app-server protocol.
 Claude Desktop and the ChatGPT app run their agents inside the app, so those two harnesses fill in and press the app's own message box and send button through macOS Accessibility; see [desktop app harnesses](docs/desktop-harnesses.md).
 It does not modify those apps, post keyboard events, or send messages to a remote service of its own.
@@ -31,24 +32,25 @@ Product names are trademarks of their respective owners and are used only to des
 
 ## What it does
 
-- Lets you choose an agent harness, then lists its conversations by most recent update with relative and exact times, hiding settled T3 Code threads by default with a Show settled option.
-- Shows which harness each schedule targets and whether the agent's turn finished.
+- Lists the conversations of every shown agent in one picker, newest first, each with its agent's mark, hiding settled T3 Code threads until asked.
+- Shows which agent each queued message targets with that agent's mark, and whether the agent's turn finished.
 - Skips a schedule without sending when the harness reports a usage limit that has not reset yet.
 - Shows upcoming schedules and local delivery history, including failed, canceled and unconfirmed outcomes.
 - Waits instead of failing when a one-off message is due while the agent is still working, the Mac is locked, or the harness is unavailable or certainly could not be reached, checking again with backoff for up to six hours; see [waiting one-off messages](docs/harnesses.md#waiting-one-off-messages).
-- Schedules a message for a chosen thread, with `+5 min`, `+30 min`, `+1 hour`, and tomorrow shortcuts.
+- Queues a message for a chosen conversation in 5 minutes, 30 minutes, an hour, tomorrow at 09:00, when the agent is free, or at a custom time.
 - For agents that report usage limits, starts as soon as the agent is available, or at a time and then once any limit has reset.
 - For agents that report when a turn finishes, sends follow-up turns up to a turn limit, or continuously until stopped, and optionally finishes when the agent's last message contains a stop phrase such as `TASK COMPLETE`; see [automatic continuations](docs/continuations.md).
-- Stops any schedule or continuation at once from its detail view, the Upcoming Stop all control, or the menu-bar tray.
-- Lists recent conversations from every connected harness in the menu-bar tray, grouped by harness, from a cache that refreshes in the background so the menu opens at once.
+- Stops any schedule or continuation at once from its row, its details, the Stop all control, or the menu-bar tray.
+- Lists recent conversations from every shown agent in the menu-bar menu, grouped by agent, from a cache that refreshes in the background so the menu opens at once.
 - Persists jobs through quitting, restarting, and sleep/wake.
 - Checks Claude Desktop and the ChatGPT app read-only at launch, when something is scheduled for them and every five minutes while it waits, so an app update that changed what the app relies on is shown on the dashboard, with the schedules it puts at risk, before they are due; see [surviving app updates](docs/desktop-harnesses.md#checking-before-schedules-fire).
-- Optionally keeps the Mac awake while scheduled work waits or runs, and shows why and for which tasks.
+- Optionally keeps the Mac awake while queued work waits or runs, with a toggle in the header whose tooltip says why and for which tasks.
 - Snapshots a configurable post-time safety buffer per job (5 seconds by default).
 - Checks the conversation before dispatching. It cancels a job if the conversation is missing, archived, or has newer user activity.
 - Uses stable command/message IDs and marks interrupted or ambiguous dispatches as unconfirmed for reconciliation without automatic resending.
 - Keeps the token in the app's macOS application-data directory (permissions `0600`) or accepts `T3_TOKEN` only for the current launch.
 - Optionally lets a phone or AI agent control the schedule through a token-protected REST API and MCP server, on this Mac or over Tailscale only.
+- Lets you choose which agents appear, and in what order, from the Agents section of Settings.
 
 ## Install
 
@@ -78,17 +80,22 @@ npm install
 npm start
 ```
 
-On launch, the app opens its control window. Enter the T3 Code bearer token in **Settings** if it is not already configured. The default server address is fixed to `http://127.0.0.1:3773`; Settings only permits changing the port, so the app cannot be pointed at a remote host.
-The **Agent harnesses** card in Settings shows what each harness supports, including whether it works while the screen is locked, and holds the OpenCode port and password and optional CLI executable paths.
+On launch, the app waits in the menu bar. Click the icon to open the popover, or right-click it for the menu.
+A first launch opens Settings so you can enter the T3 Code bearer token and check the other agents. The default server address is fixed to `http://127.0.0.1:3773`; Settings only permits changing the port, so the app cannot be pointed at a remote host.
+The **Agents** section of Settings lists every harness with its status, a Check button, an info tip with what it supports, including whether it works while the screen is locked, and its own fields: the OpenCode port and password and optional CLI executable paths.
 The CLIs are found automatically in common install locations.
+Use the arrows to arrange the agents and the Show box to hide ones you do not use; hidden agents are not checked and do not appear in the header or the picker.
 
-Choose **New schedule** (initially five minutes ahead), choose the agent harness, select a conversation, enter a message, then choose an ISO date (`yyyy-mm-dd`), 24-hour time and timezone.
-Quick times include +5 minutes, +30 minutes, +1 hour and tomorrow at 09:00.
-The preview includes the safety buffer; daylight-saving gaps are rejected and repeated local times require choosing an offset.
-Upcoming shows saved schedules immediately; select one to edit or cancel it before sending starts.
-History keeps outcomes and lets you acknowledge delivery problems, check uncertain delivery, or prepare another schedule.
-Use **Load more** for older records; search applies to the records currently loaded.
-The menu-bar controls open the relevant view in the same window.
+The popover is one screen.
+Choose a conversation from the picker, which lists every shown agent's conversations newest first.
+Choose when: 5 min, 30 min, 1 hour, Tomorrow 9:00, When free (for agents that report usage limits) or Custom for an ISO date (`yyyy-mm-dd`), 24-hour time and timezone.
+Choose how far for agents that report when a turn finishes: Once, Up to a number of turns, or Until done.
+The message is `Continue` unless you hover the message line and press Edit.
+The sentence under the Continue button says exactly what will happen; daylight-saving gaps are rejected and repeated local times ask which occurrence to use.
+The queue sits underneath. Hover a row for Edit and Cancel, or Stop for a running continuation; click a row for its details.
+Recent outcomes follow the queue, with Resume and Check where they apply, and All history opens the full log with filters and Load more.
+The laptop toggle in the header turns keep-awake on and off; its tooltip explains why the Mac is awake.
+The expand control opens the same screen as a resizable window, and the window's collapse control returns to the menu bar; the choice is remembered.
 Only one copy may run at a time.
 
 Settings offers light, Bone Outline dark and system appearance with reduced-motion support.

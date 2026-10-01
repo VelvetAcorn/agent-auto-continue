@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sketch 02 - App window, trimmed</title>
+<link rel="stylesheet" href="sketch.css">
+</head>
+<body>
+<div class="sketchbar"><span>Sketch 02 of 02 - App window. The same one-screen idea in a small standalone window: compose on the left, queue on the right, settings as a sheet. <a href="index.html">All sketches</a></span><span><button type="button" data-state="custom">Custom time</button> <button type="button" data-state="settings">Settings</button> <button type="button" data-state="hover">Hover</button> <button type="button" data-state="tip">Awake tip</button> <button type="button" data-state="empty">Empty</button> <button type="button" data-toggle-theme>Bone Outline</button></span></div>
+<div class="desk" style="padding-bottom:40px">
+<div class="window">
+  <div class="titlebar">
+    <div class="lights"><i></i><i></i><i></i></div>
+    <div class="title">Agent Auto-Continue</div>
+    <div class="tools">
+      <div class="agents" title="T3 Code free · Claude Code limited until 03:00 · OpenCode free · Codex free">
+        <span class="badge" title="T3 Code"><svg><use href="#i-t3"/></svg><i></i></span><span class="badge" title="Claude Code"><svg><use href="#i-claude"/></svg><i class="limited"></i></span><span class="badge" title="OpenCode"><svg><use href="#i-opencode"/></svg><i></i></span><span class="badge" title="Codex"><svg><use href="#i-openai"/></svg><i></i></span>
+      </div>
+      <span class="sep"></span><span class="tipwrap"><button class="icon-btn awake on" type="button" aria-pressed="true" aria-label="Keep the Mac awake"><svg><use href="#i-awake"/></svg></button><span class="tip" role="tooltip"><b>Keeping the Mac awake</b>2 queued items still need it. The display can still sleep. Click to let the Mac sleep as usual.</span></span><button class="icon-btn" type="button" title="Settings"><svg><use href="#i-gear"/></svg></button>
+    </div>
+  </div>
+
+  <div class="body">
+    <div class="left">
+      <div class="compose">
+        <button class="pick" type="button">
+          <span class="badge" title="Claude Code"><svg><use href="#i-claude"/></svg><i class="limited"></i></span>
+          <span class="t"><b>Write release notes for 2.1</b><small>Claude Code · quilla · 18 min ago</small></span>
+          <span class="chev">▾</span>
+        </button>
+
+        <div class="lbl"><span>When</span></div>
+        <div class="seg">
+          <button type="button">5 min</button><button type="button">30 min</button><button type="button">1 hour</button><button type="button">Tomorrow 9:00</button><button type="button" class="active">When free</button><button type="button">Custom…</button>
+        </div>
+        <div class="hint">Claude Code is limited until 03:00 <a href="#">check again</a></div>
+        <div class="custom">
+          <div class="two"><input type="text" value="2026-10-02" aria-label="Date"><input type="text" value="06:30" aria-label="Time"></div>
+          <small>Europe/London · <a href="#">change</a></small>
+        </div>
+
+        <div class="lbl"><span>How far</span></div>
+        <div class="seg">
+          <button type="button">Once</button><button type="button" class="active">Up to</button><input class="num" type="text" value="3" aria-label="Turns"><button type="button">Until done</button>
+        </div>
+
+        <div class="lbl"><span>Message</span></div>
+        <div class="msg"><span>Continue</span><button class="ghost" type="button">Edit</button></div>
+
+        <div class="go">
+          <button class="primary" type="button">Continue</button>
+          <small>When Claude Code is free, around 03:00 · up to 3 turns</small>
+        </div>
+      </div>
+    </div>
+
+    <div class="right">
+      <div class="queue">
+        <div class="qhead"><span class="overline">Queued<span class="n"> · 3</span></span><button class="ghost" type="button">Stop all</button></div>
+        <div class="empty"><b>Nothing queued</b><small>Pick a conversation and press Continue.</small></div>
+        <div class="q running"><span class="badge sm" title="T3 Code"><svg><use href="#i-t3"/></svg><i></i></span><span class="t"><b>Polish the scheduler experience</b><small><span class="turns"><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span>Running turn 3 of 4 · started 23:41</small></span><span class="acts"><button class="ghost" type="button">Stop</button></span></div>
+        <div class="q" data-hov><span class="badge sm" title="OpenCode"><svg><use href="#i-opencode"/></svg><i></i></span><span class="t"><b>Fix the flaky export integration test</b><small>In 25 min · once</small></span><span class="acts"><button class="ghost" type="button">Edit</button><button class="x" type="button" title="Cancel">×</button></span></div>
+        <div class="q"><span class="badge sm" title="Codex"><svg><use href="#i-openai"/></svg><i></i></span><span class="t"><b>Summarise the competitor pricing pages</b><small>Tomorrow 06:30 · until done</small></span><span class="acts"><button class="ghost" type="button">Edit</button><button class="x" type="button" title="Cancel">×</button></span></div>
+        <details class="recent" open>
+          <summary><span class="overline">Recent</span><small>1 needs a look</small></summary>
+          <div class="q"><span class="badge sm" title="T3 Code"><svg><use href="#i-t3"/></svg><i></i></span><span class="t"><b>Audit checkout edge cases before the autumn release</b><small>Done 22:58 · 4 turns</small></span><span class="pill ok">Done</span></div>
+          <div class="q"><span class="badge sm" title="Claude Code"><svg><use href="#i-claude"/></svg><i class="limited"></i></span><span class="t"><b>Migrate billing webhooks to the new signature scheme</b><small>Paused 21:12 · Claude Code asked a question</small></span><button class="ghost" type="button" style="font-size:11px;padding:3px 7px">Resume</button></div>
+          <div class="q"><span class="badge sm" title="OpenCode"><svg><use href="#i-opencode"/></svg><i></i></span><span class="t"><b>Refactor the sync worker</b><small>Failed 20:40 · OpenCode was not running</small></span><span class="pill failed">Failed</span></div>
+          <a class="more" href="#">All history</a>
+        </details>
+      </div>
+    </div>
+  </div>
+
+  <!-- Settings sheet -->
+  <div class="sheet">
+    <div class="panel">
+      <div class="side">
+        <button type="button" class="active">Agents</button>
+        <button type="button">Keep awake</button>
+        <button type="button">Remote control</button>
+        <button type="button">Appearance</button>
+        <button type="button">Advanced</button>
+        <button type="button">Support</button>
+      </div>
+      <div class="main">
+        <h2 style="margin-bottom:6px">Agents</h2>
+        <div class="agent" style="padding-left:0"><span class="badge" title="T3 Code"><svg><use href="#i-t3"/></svg><i></i></span><span class="t"><b>T3 Code</b><small><span class="ok-dot">●</span> Connected on port 3773</small><div class="fields"><label>Token<input type="password" value="••••••••••••" placeholder="Paste a bearer token"></label><label>Port<input type="number" value="3773"></label></div></span><button class="info" type="button" title="Works while locked · confirms delivery · reports when a turn finishes">ⓘ</button></div>
+        <div class="agent" style="padding-left:0"><span class="badge" title="Claude Code"><svg><use href="#i-claude"/></svg><i class="limited"></i></span><span class="t"><b>Claude Code</b><small><span class="warn-dot">●</span> Limited until 03:00 · claude on PATH</small></span><button class="info" type="button">ⓘ</button></div>
+        <div class="agent" style="padding-left:0"><span class="badge" title="OpenCode"><svg><use href="#i-opencode"/></svg><i></i></span><span class="t"><b>OpenCode</b><small><span class="ok-dot">●</span> Connected on port 4096 · no password · <a href="#">Edit</a></small></span><button class="info" type="button">ⓘ</button></div>
+        <div class="agent" style="padding-left:0"><span class="badge" title="Codex"><svg><use href="#i-openai"/></svg><i></i></span><span class="t"><b>Codex</b><small><span class="ok-dot">●</span> codex on PATH</small></span><button class="info" type="button">ⓘ</button></div>
+        <div class="agent" style="padding-left:0"><span class="badge round" title="Claude Desktop"><svg><use href="#i-claude"/></svg><i class="off"></i></span><span class="t"><b>Claude Desktop</b><small><span class="off-dot">●</span> Needs Accessibility permission</small></span><button class="mini" type="button">Allow</button></div>
+        <div class="agent" style="padding-left:0"><span class="badge round" title="ChatGPT"><svg><use href="#i-openai"/></svg><i class="off"></i></span><span class="t"><b>ChatGPT</b><small><span class="off-dot">●</span> Not installed</small></span></div>
+        <div class="foot"><button type="button" class="primary">Done</button></div>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+<script src="icons.js"></script>
+<script src="sketch.js"></script>
+</body>
+</html>

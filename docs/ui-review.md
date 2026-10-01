@@ -2,7 +2,9 @@
 
 Prepared 2026-10-01 for [issue #6](https://github.com/VelvetAcorn/agent-auto-continue/issues/6).
 This is a review and a set of prototypes to agree a direction.
-No product UI was changed.
+No product UI was changed by the review itself.
+The direction chosen afterwards was the one-screen menu-bar rail sketched in `design/mockups/simple/`, which replaced the Upcoming, History, Threads and Settings views described below, so the findings here document the interface that was replaced.
+The capture tool `tools/ui-review-capture.cjs` drove that earlier interface and was retired with it; `tools/electron-smoke.cjs` now captures the current screens when `T3_SMOKE_EVIDENCE_DIR` is set.
 Two pre-existing tooling problems found along the way were fixed in separate commits (see [Tooling fixes](#tooling-fixes)).
 
 ## Contents
@@ -21,7 +23,7 @@ Two pre-existing tooling problems found along the way were fixed in separate com
 ## How the review was run
 
 The real app was driven end to end.
-[`tools/ui-review-capture.cjs`](../tools/ui-review-capture.cjs) runs the production `main.js`, `preload.js` and renderer the same way as the existing smoke fixture.
+`tools/ui-review-capture.cjs` (since retired) ran the production `main.js`, `preload.js` and renderer the same way as the existing smoke fixture.
 It uses in-memory storage and a fake T3 Code API, so no real messages can be sent.
 The fake API serves 11 realistic threads across 3 projects, 7 upcoming jobs and 69 history records.
 Those cover long titles, an untitled thread, an unknown settlement state, a missing timestamp, three timezones, a 30-second buffer, a 45-minute catch-up and a legacy record.

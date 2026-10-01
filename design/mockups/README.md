@@ -69,6 +69,19 @@ They load `features.css`, a self-contained copy of the production tokens with th
 Agent names, capabilities and availability sources are illustrative; each integration's real capabilities must be verified before implementation.
 
 `fable-pass/` holds the independent concept sketches and written suggestions from a Fable 5.1 design pass, kept for reference and credit.
+
+## Simple direction (issue #6, October 2026)
+
+`simple/` holds the one-screen direction agreed after the UI review: pick a conversation, pick when, press Continue, with the queue underneath and everything else behind a gear.
+`01-rail.html` is a 380 px menu-bar popover and `02-app.html` is the same screen as a small standalone window with settings as a sheet.
+Each page takes `?theme=dark` and `?s=custom,picker,settings,empty,hover,tip` and has buttons in its top strip for the same states.
+`icons.js` holds the vendor marks (Claude, OpenAI, OpenCode, T3) recoloured to the ink colour, taken from the owners' own published assets; shipping them in the app still needs each owner's brand terms checked.
+Render the shots in `simple/shots/` with:
+
+```sh
+env -u ELECTRON_RUN_AS_NODE npx electron design/mockups/simple/capture.cjs
+```
+
 Ideas adopted from it are credited in the review.
 
 ### Screenshots

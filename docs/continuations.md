@@ -154,7 +154,7 @@ For a plain schedule, `stop()` is the same as `cancel()`.
 Remote control calls the same methods: `POST /v1/runs/{id}/stop`, `POST /v1/runs/stop-all` and `POST /v1/runs/{id}/resume`, or the MCP tools `stop_run`, `stop_all_runs` and `resume_run`.
 `POST /v1/jobs` and `schedule_message` accept `trigger`, `turnLimit`, `continuous` and `stopPhrase`, with the same validation and capability checks as the composer, and `PATCH /v1/jobs/{id}` and `edit_job` accept `stopPhrase`.
 Refusals such as stopping an ended chain or resuming while delivery is unconfirmed carry error code `invalid_state` and answer `409`; see [remote control](remote-control.md#continuations).
-The Upcoming view shows Stop all whenever a continuation is running, each continuation's detail view has Stop continuing, and the tray offers Stop continuing per schedule and Stop all continuations.
+The queue shows Stop all whenever a continuation is running, each running row and its details offer Stop, and the tray offers Stop continuing per schedule and Stop all continuations.
 The tray lists running and paused continuations alike, with their progress and state, and offers Resume continuation on a paused one whenever Resume is allowed.
 A paused continuation whose delivery is unconfirmed also offers Check delivery and Mark as not delivered, which asks for confirmation first.
 
@@ -204,10 +204,10 @@ An outcome recorded for an earlier turn is ignored, so a late completion can nev
 `activeWork()` includes every active chain, including the moment between one turn finishing and the next being sent, and excludes paused chains, which wait for the user.
 Keep-awake tracks it through `lib/active-work-source.js`: a `waiting` turn keeps the Mac awake while it waits, when its next check falls within the keep-awake time limit, and its task names the cause, such as the usage limit or the locked screen, and the turn progress.
 A send already in flight stays in `activeWork()` as `sending` even if its chain is stopped meanwhile.
-Upcoming lists active chains, and History lists paused, stopped and finished ones.
+The queue lists active chains, and Recent and History list paused, stopped and finished ones.
 A paused chain counts toward the History attention badge until it is resumed, stopped or acknowledged.
 
 IPC adds `jobs:stop`, `jobs:stop-all`, `jobs:resume` and `jobs:mark-not-delivered`.
 `schedule:create` and `jobs:edit` accept `trigger`, `turnLimit`, `continuous` and `stopPhrase`.
 `harnesses:list` adds `automation: { whenAvailable, multipleTurns, stopPhrase }` to each harness, each `{ supported, reason }`, so the UI explains disabled modes in the app's own words.
-The window has no stop phrase field or Mark as not delivered button yet; both are planned with the interface redesign.
+The window offers the stop phrase under How far when Up to or Until done is chosen, shows it in the continuation's details, and offers Mark as not delivered, with a confirmation, in the details of an unconfirmed delivery.

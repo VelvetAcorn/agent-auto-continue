@@ -1,6 +1,7 @@
 'use strict';
 
-const { app, BrowserWindow, Menu, Notification, Tray, clipboard, dialog, ipcMain, nativeImage, powerMonitor, powerSaveBlocker, shell } = require('electron');
+const electron = require('electron');
+const { app, BrowserWindow, Menu, Notification, Tray, clipboard, dialog, ipcMain, nativeImage, powerMonitor, powerSaveBlocker, shell } = electron;
 const { execFile } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
 const fs = require('node:fs');
@@ -8,7 +9,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { clearTimeout, setInterval, setTimeout } = require('node:timers');
 const schedule = require('node-schedule');
-const { normaliseConfig, validateSettingsInput } = require('./lib/model');
+const { arrangeAgents, normaliseConfig, validateAgentsInput, validateLayoutInput, validateSettingsInput } = require('./lib/model');
 const { createApiClient, toErrorInfo } = require('./lib/api-client');
 const { RemoteControl } = require('./lib/remote');
 const { registerRemoteIpc } = require('./lib/remote/ipc');
@@ -27,6 +28,11 @@ const { connectionLabel, conversationMenuItems, createConversationCache } = requ
 
 const APP_NAME = 'Agent Auto-Continue';
 const DEFAULT_CONFIG = { t3Token: '', httpPort: 3773, bufferSeconds: 5 };
+// The rail is a frameless popover under the menu-bar icon; its height follows the content.
+const RAIL_WIDTH = 380;
+const RAIL_MIN_HEIGHT = 360;
+const RAIL_MAX_HEIGHT = 760;
+const WINDOW_SIZE = { width: 880, height: 620, minWidth: 640, minHeight: 480 };
 const TURN_POLL_MS = 30_000;
 // While desktop-app schedules are pending, their apps' versions are checked this often.
 const COMPATIBILITY_TICK_MS = 5 * 60_000;
@@ -48,6 +54,9 @@ let t3WorkSource;
 let keepAwake;
 let trayKeepAwakeKey = '';
 let remote;
+let quitting = false;
+let firstRun = false;
+let trayMenu;
 
 const ownsInstance = app.requestSingleInstanceLock();
 if (!ownsInstance) app.quit();
@@ -76,6 +85,7 @@ function loadState() {
   // The fs module is injected so that the smoke fixture's in-memory storage applies here too.
   migrateLegacyStorage({ fs, appData: app.getPath('appData'), userData: app.getPath('userData') });
   const raw = readJson(dataPath('config.json'), DEFAULT_CONFIG);
+  firstRun = raw === DEFAULT_CONFIG;
   config = { ...normaliseConfig(raw), harnesses: normaliseHarnessSettings(harnesses.list(), raw?.harnesses) };
   service = new JobService({
     jobs: readJson(dataPath('jobs.json'), []), bufferSeconds: config.bufferSeconds, api, harnesses,
@@ -124,7 +134,12 @@ function ensureStorage() {
 
 function publicSettings() {
   return { storageError, httpPort: config.httpPort, bufferSeconds: config.bufferSeconds, hasStoredToken: Boolean(config.t3Token), usingEnvironmentToken: Boolean(process.env.T3_TOKEN),
-    harnesses: publicHarnessSettings(harnesses.list(), config.harnesses, process.env) };
+    harnesses: publicHarnessSettings(harnesses.list(), config.harnesses, process.env),
+    agents: arrangeAgents(harnesses.list().map((adapter) => adapter.id), config.agents), layout: config.layout };
+}
+// Harnesses the interface shows, in the configured order; the tray lists conversations from these.
+function shownHarnesses() {
+  return arrangeAgents(harnesses.list().map((adapter) => adapter.id), config.agents).filter((item) => !item.hidden).map((item) => item.id);
 }
 
 function token() {
@@ -135,7 +150,8 @@ const api = createApiClient({ getConfig: () => config, getToken: token });
 // Adapters read their settings lazily so a Settings change applies to the next operation.
 const harnesses = createHarnesses({ api, clientVersion: app.getVersion?.(), getSettings: (id) => resolveHarnessSettings(harnesses.get(id), config.harnesses?.[id], process.env) });
 // The tray's conversations from every harness, refreshed in the background so opening the menu never waits.
-const trayConversations = createConversationCache({ harnesses, onChange: () => void rebuildMenu() });
+// Hidden agents stay out of the menu, like the header and the picker.
+const trayConversations = createConversationCache({ harnesses: { list: () => harnesses.list().filter((adapter) => shownHarnesses().includes(adapter.id)) }, onChange: () => void rebuildMenu() });
 
 function harnessFor(id) {
   return harnesses.get(id === undefined || id === null || id === '' ? DEFAULT_HARNESS : id);
@@ -249,12 +265,40 @@ function openSettings() {
   openDashboard({ view: 'settings' });
 }
 
-function openDashboard(route) {
+// Places the rail under the menu-bar icon, kept inside the display's work area.
+function positionRail() {
+  const bounds = tray?.getBounds?.();
+  const display = bounds && electron.screen?.getDisplayNearestPoint?.({ x: bounds.x, y: bounds.y });
+  if (!bounds || !display || !dashboardWindow?.getSize) return;
+  const [width, height] = dashboardWindow.getSize();
+  const area = display.workArea;
+  const x = Math.round(Math.min(Math.max(area.x, bounds.x + bounds.width / 2 - width / 2), area.x + area.width - width));
+  const y = Math.round(Math.min(Math.max(area.y, bounds.y + bounds.height + 4), area.y + area.height - height));
+  dashboardWindow.setPosition(x, y, false);
+}
+
+function showDashboard() {
+  if (!dashboardWindow || dashboardWindow.isDestroyed()) return;
+  if (dashboardWindow.isMinimized?.()) dashboardWindow.restore();
+  if (config.layout === 'rail') positionRail();
+  dashboardWindow.show?.();
+  dashboardWindow.focus();
+}
+
+function hideDashboard() {
+  if (dashboardWindow && !dashboardWindow.isDestroyed()) dashboardWindow.hide?.();
+}
+
+// The rail opens and closes from the menu-bar icon; the window layout simply opens.
+function toggleDashboard() {
+  if (config.layout === 'rail' && dashboardWindow && !dashboardWindow.isDestroyed() && dashboardWindow.isVisible?.()) hideDashboard();
+  else openDashboard();
+}
+
+function openDashboard(route, { show = true } = {}) {
   if (route) pendingNavigation = route;
   if (dashboardWindow && !dashboardWindow.isDestroyed()) {
-    if (dashboardWindow.isMinimized?.()) dashboardWindow.restore();
-    dashboardWindow.show?.();
-    dashboardWindow.focus();
+    if (show) showDashboard();
     if (dashboardReady && pendingNavigation) {
       dashboardWindow.webContents.send('app:navigate', pendingNavigation);
       pendingNavigation = undefined;
@@ -262,12 +306,14 @@ function openDashboard(route) {
     return;
   }
   dashboardReady = false;
-  pendingNavigation ||= { view: 'upcoming' };
+  pendingNavigation ||= { view: 'home' };
+  const rail = config.layout === 'rail';
+  const options = rail
+    ? { width: RAIL_WIDTH, height: 520, minWidth: RAIL_WIDTH, maxWidth: RAIL_WIDTH, minHeight: RAIL_MIN_HEIGHT, maxHeight: RAIL_MAX_HEIGHT, resizable: false, frame: false, alwaysOnTop: true, skipTaskbar: true, fullscreenable: false, minimizable: false, maximizable: false, hiddenInMissionControl: true }
+    : { ...WINDOW_SIZE };
   dashboardWindow = new BrowserWindow({
-    width: 1180,
-    height: 800,
-    minWidth: 620,
-    minHeight: 560,
+    ...options,
+    show: false,
     title: APP_NAME,
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true }
   });
@@ -280,7 +326,35 @@ function openDashboard(route) {
     pendingNavigation = undefined;
   });
   dashboardWindow.loadFile(path.join(__dirname, 'dashboard.html'));
-  dashboardWindow.on('closed', () => { dashboardWindow = undefined; dashboardReady = false; });
+  if (rail) {
+    // A popover closes when it loses focus or when Command-W is pressed; the app keeps running in the tray.
+    dashboardWindow.on('blur', () => { if (!dashboardWindow?.webContents.isDevToolsOpened?.()) hideDashboard(); });
+    dashboardWindow.on('close', (event) => { if (!quitting) { event.preventDefault?.(); hideDashboard(); } });
+  }
+  const created = dashboardWindow;
+  dashboardWindow.on('closed', () => { if (dashboardWindow === created) { dashboardWindow = undefined; dashboardReady = false; } });
+  if (show) showDashboard();
+}
+
+// Switching layouts rebuilds the window, because frame and size limits are fixed at creation.
+function setLayout(layout) {
+  const next = { ...normaliseConfig({ ...config, layout }), harnesses: config.harnesses };
+  saveConfig(next);
+  config = next;
+  const previous = dashboardWindow;
+  dashboardWindow = undefined;
+  dashboardReady = false;
+  if (previous && !previous.isDestroyed()) { previous.removeAllListeners?.('close'); previous.destroy?.(); }
+  openDashboard({ view: 'home' });
+  void rebuildMenu();
+}
+
+// The renderer reports its content height so the rail never shows empty space or a cut-off queue.
+function fitRail(height) {
+  if (config.layout !== 'rail' || !dashboardWindow || dashboardWindow.isDestroyed() || !dashboardWindow.setContentSize) return;
+  const clamped = Math.round(Math.min(RAIL_MAX_HEIGHT, Math.max(RAIL_MIN_HEIGHT, Number(height) || RAIL_MIN_HEIGHT)));
+  dashboardWindow.setContentSize(RAIL_WIDTH, clamped, false);
+  positionRail();
 }
 
 async function activeThreads(options) {
@@ -354,7 +428,7 @@ async function rebuildMenu() {
   const conversations = trayConversations.snapshot();
   const threadItems = conversationMenuItems(conversations, {
     schedule: (conversation) => openScheduleWindow(conversation.id, conversation.title, conversation.harness),
-    showAll: () => openDashboard({ view: 'threads' })
+    showAll: () => openDashboard({ view: 'picker' })
   });
 
   const listed = trayJobs();
@@ -362,12 +436,15 @@ async function rebuildMenu() {
   const jobItems = listed.length ? listed.map(trayJobItem) : [{ label: 'No scheduled messages', enabled: false }];
 
   if (revision !== menuRevision) return;
-  tray.setContextMenu(Menu.buildFromTemplate([
+  // The menu is shown on right-click only. With a context menu attached, macOS would open it on
+  // every click and the icon could no longer toggle the rail.
+  trayMenu = Menu.buildFromTemplate([
     { label: APP_NAME, enabled: false },
     { label: connectionLabel(conversations), enabled: false },
     ...keepAwakeTrayItems(keepAwake?.snapshot()),
     { type: 'separator' },
-    { label: 'Open scheduler', click: () => openDashboard({ view: 'upcoming' }) },
+    { label: 'Open', click: () => openDashboard({ view: 'home' }) },
+    { label: config.layout === 'rail' ? 'Open as a window' : 'Back to the menu bar', click: () => setLayout(config.layout === 'rail' ? 'window' : 'rail') },
     { label: 'History', click: () => openDashboard({ view: 'history' }) },
     { label: 'Refresh conversations', click: () => void trayConversations.refresh({ force: true }) },
     { label: 'Schedule from a conversation', submenu: threadItems },
@@ -381,7 +458,7 @@ async function rebuildMenu() {
     },
     { type: 'separator' },
     { label: 'Quit', click: () => app.quit() }
-  ]));
+  ]);
 }
 
 ipcMain.handle('support:open', () => shell.openExternal('https://ko-fi.com/velvetacorn'));
@@ -391,6 +468,7 @@ ipcMain.handle('settings:save', (_event, incoming) => {
   const input = validateSettingsInput(incoming);
   const next = { ...normaliseConfig({ ...config, httpPort: input.httpPort, bufferSeconds: input.bufferSeconds }), harnesses: applyHarnessSettingsInput(harnesses.list(), config.harnesses, incoming.harnesses) };
   if (input.t3Token) next.t3Token = input.t3Token;
+  if (incoming.agents !== undefined) next.agents = validateAgentsInput(incoming.agents, harnesses.list().map((adapter) => adapter.id));
   saveConfig(next);
   config = next;
   service.bufferSeconds = config.bufferSeconds;
@@ -465,6 +543,11 @@ ipcMain.handle('dashboard:open-settings', () => {
   openSettings();
   return { ok: true };
 });
+ipcMain.handle('layout:get', () => ({ layout: config.layout }));
+// The reply goes out before the window is rebuilt, so the renderer's call settles instead of dying with its window.
+const LAYOUT_SWITCH_DELAY_MS = 100;
+ipcMain.handle('layout:set', (_event, layout) => { ensureStorage(); const next = validateLayoutInput(layout); setTimeout(() => setLayout(next), LAYOUT_SWITCH_DELAY_MS); return { layout: next }; });
+ipcMain.handle('window:fit', (_event, height) => { fitRail(height); return { ok: true }; });
 ipcMain.handle('keep-awake:get', () => requireKeepAwake().snapshot());
 ipcMain.handle('keep-awake:configure', (_event, incoming) => {
   ensureStorage();
@@ -492,16 +575,19 @@ app.whenReady().then(() => {
   }
   tray = new Tray(makeTrayIcon());
   tray.setToolTip(APP_NAME);
-  // Opening the menu shows the cached conversations and refreshes stale harnesses in the background.
-  tray.on('click', () => { void trayConversations.refresh(); tray.popUpContextMenu(); });
+  // Left-click toggles the rail (or opens the window); the menu is on right-click, where opening it
+  // shows the cached conversations and refreshes stale harnesses in the background.
+  tray.on('click', () => toggleDashboard());
+  tray.on('right-click', () => { void trayConversations.refresh(); if (trayMenu) tray.popUpContextMenu(trayMenu); });
   void trayConversations.refresh();
   if (!storageError) service.schedulePending();
   remote = createRemoteControl();
   void remote.start();
   // The first keep-awake publish also builds the tray menu.
   startKeepAwake();
-  openDashboard();
-  if (!token()) openSettings();
+  // The window layout opens at launch; the rail waits in the menu bar unless setup is still needed.
+  openDashboard(undefined, { show: config.layout === 'window' });
+  if (firstRun) openSettings();
   // Turns that were running before a restart are checked straight away, then every 30 seconds.
   if (!storageError) void service.pollTurns().catch(() => {});
   setInterval(() => { if (!storageError) void service.pollTurns().catch(() => {}); }, TURN_POLL_MS).unref?.();
@@ -510,6 +596,7 @@ app.whenReady().then(() => {
   // Give supervised agent turns a bounded chance to stop cleanly before quitting.
   let harnessesStopped = false;
   app.on('before-quit', (event) => {
+    quitting = true;
     if (harnessesStopped) return;
     event.preventDefault();
     harnessesStopped = true;

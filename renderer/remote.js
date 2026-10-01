@@ -57,7 +57,7 @@
 
   function render(ctx) {
     const { escape } = ctx;
-    if (!local.state) return '<section class="card"><span class="overline">Remote control</span><p>Loading remote control…</p></section>';
+    if (!local.state) return '<p class="help">Loading remote control…</p>';
     const state = local.state;
     if (state.loadError) return `<section class="card"><span class="overline">Remote control</span><h2>Control from your phone</h2><div class="notice" role="alert"><div><strong>Remote control settings need attention</strong><p>${escape(state.loadError)}</p></div></div></section>`;
     const d = draft();
@@ -71,13 +71,20 @@
     if (ctx.isVisible()) ctx.render();
   }
 
+  // One line for the collapsed Settings row.
+  function summary() {
+    const state = local.state;
+    if (!state || state.loadError) return 'Phone and MCP access';
+    if (!state.enabled) return 'Off';
+    const devices = state.tokens.length;
+    return `${state.running ? 'On' : 'Not listening'} · ${devices} ${devices === 1 ? 'device' : 'devices'}`;
+  }
+
   function bind(ctx) {
     const { $, api, perform, toast } = ctx;
-    const settings = document.querySelector('.settings');
-    if (!ctx.isVisible() || !settings || document.getElementById('remote-section')) return;
-    const anchor = document.getElementById('theme')?.closest('.card');
-    const markup = `<div id="remote-section" class="remote-section">${render(ctx)}</div>`;
-    if (anchor) anchor.insertAdjacentHTML('beforebegin', markup); else settings.insertAdjacentHTML('beforeend', markup);
+    const slot = document.getElementById('remote-slot');
+    if (!ctx.isVisible() || !slot || document.getElementById('remote-section')) return;
+    slot.innerHTML = `<div id="remote-section" class="remote-section">${render(ctx)}</div>`;
     document.querySelectorAll('#remote-section [data-action^="remote-"]').forEach((button) => { button.onclick = () => action(ctx, button.dataset.action, button); });
     const form = $('#remote-form');
     if (!form) return;
@@ -132,5 +139,5 @@
   // The plaintext token must not outlive the Settings visit.
   function leave() { local.reveal = null; local.confirmRevoke = null; local.draft = null; }
 
-  window.RemoteSettings = { bind, load, leave };
+  window.RemoteSettings = { bind, load, leave, summary };
 })();
