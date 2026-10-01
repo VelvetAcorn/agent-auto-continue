@@ -21,6 +21,7 @@
     "check:syntax": "node tools/check-syntax.cjs",
     "test:electron": "env -u ELECTRON_RUN_AS_NODE ApplePersistenceIgnoreState=YES electron tools/electron-smoke.cjs && node tools/keep-awake-e2e.cjs",
     "icons": "env -u ELECTRON_RUN_AS_NODE ApplePersistenceIgnoreState=YES electron tools/build-icons.cjs",
+    "dmg-background": "env -u ELECTRON_RUN_AS_NODE ApplePersistenceIgnoreState=YES electron tools/build-dmg-background.cjs",
     "lint": "eslint .",
     "build:release": "electron-builder --mac --universal --publish never",
     "build:release:local": "sh tools/release-local.sh"
@@ -46,6 +47,13 @@
     "productName": "Agent Auto-Continue",
     "artifactName": "${name}-${version}-${arch}.${ext}",
     "icon": "assets/icon.icns",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "VelvetAcorn",
+        "repo": "agent-auto-continue"
+      }
+    ],
     "mac": {
       "category": "public.app-category.developer-tools",
       "target": [
@@ -57,6 +65,32 @@
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
       "notarize": true
+    },
+    "dmg": {
+      "artifactName": "Agent-Auto-Continue.${ext}",
+      "title": "${productName}",
+      "sign": true,
+      "writeUpdateInfo": false,
+      "background": "build/background.png",
+      "window": {
+        "width": 640,
+        "height": 400
+      },
+      "iconSize": 112,
+      "iconTextSize": 13,
+      "contents": [
+        {
+          "x": 170,
+          "y": 212,
+          "type": "file"
+        },
+        {
+          "x": 470,
+          "y": 212,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
     },
     "files": [
       "main.js",

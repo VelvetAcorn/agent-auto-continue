@@ -46,26 +46,40 @@ jobs:
           fi
       - name: Build, sign and notarize
         run: npm run build:release
+      # The DMG keeps one name across releases, so
+      # https://github.com/VelvetAcorn/agent-auto-continue/releases/latest/download/Agent-Auto-Continue.dmg
+      # always serves the newest one. electron-builder signs it (dmg.sign); Apple notarizes it here.
       - name: Notarize and staple the disk image
         run: |
-          dmg="$(ls dist/*.dmg)"
+          dmg=dist/Agent-Auto-Continue.dmg
           xcrun notarytool submit "$dmg" --apple-id "$APPLE_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
           xcrun stapler staple "$dmg"
       - name: Verify what will be published
         run: |
           app="$(ls -d dist/mac-universal/*.app)"
+          dmg=dist/Agent-Auto-Continue.dmg
+          version="$(node -p "require('./package.json').version")"
+          zip="dist/agent-auto-continue-$version-universal.zip"
           codesign --verify --deep --strict --verbose=2 "$app"
           spctl --assess --type execute --verbose=2 "$app"
           xcrun stapler validate "$app"
-          xcrun stapler validate dist/*.dmg
+          codesign --verify --verbose=2 "$dmg"
+          spctl --assess --type open --context context:primary-signature --verbose=2 "$dmg"
+          xcrun stapler validate "$dmg"
+          # The updater reads its feed from the app and the release; both must name the versioned ZIP.
+          test -f "$app/Contents/Resources/app-update.yml"
+          test -f "$zip" && test -f "$zip.blockmap"
+          grep -q "path: agent-auto-continue-$version-universal.zip" dist/latest-mac.yml
+          grep -q "version: $version" dist/latest-mac.yml
       - name: Write checksums
         run: |
           cd dist
-          shasum -a 256 *.dmg *.zip > SHA256SUMS.txt
+          shasum -a 256 *.dmg *.zip latest-mac.yml *.blockmap > SHA256SUMS.txt
           cat SHA256SUMS.txt
+      # latest-mac.yml and the blockmap are what installed copies read to find and download the update.
       - name: Publish the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/*.dmg dist/*.zip dist/SHA256SUMS.txt \
+          gh release create "$GITHUB_REF_NAME" dist/Agent-Auto-Continue.dmg dist/*.zip dist/*.blockmap dist/latest-mac.yml dist/SHA256SUMS.txt \
             --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes --verify-tag

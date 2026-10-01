@@ -26,6 +26,7 @@ Product names are trademarks of their respective owners and are used only to des
 | `lib/`, `renderer/` | Backend services and production UI |
 | `lib/remote/` | Optional remote control REST API and MCP server |
 | `assets/` | Application artwork |
+| `build/` | Packaging resources: entitlements and the disk image background |
 | `test/`, `tools/` | Automated checks and Electron smoke fixture |
 | `docs/` | Development plan, implementation reference, harness adapters and future backlog |
 | `design/mockups/` | Standalone design prototypes |
@@ -43,6 +44,7 @@ Product names are trademarks of their respective owners and are used only to des
 - Stops any schedule or continuation at once from its row, its details, the Stop all control, or the menu-bar tray.
 - Lists recent conversations from every shown agent in the menu-bar menu, grouped by agent, from a cache that refreshes in the background so the menu opens at once.
 - Persists jobs through quitting, restarting, and sleep/wake.
+- Keeps itself up to date from GitHub Releases, downloading in the background and installing on the next quit or when you choose Restart, never in the middle of a send.
 - Checks Claude Desktop and the ChatGPT app read-only at launch, when something is scheduled for them and every five minutes while it waits, so an app update that changed what the app relies on is shown on the dashboard, with the schedules it puts at risk, before they are due; see [surviving app updates](docs/desktop-harnesses.md#checking-before-schedules-fire).
 - Optionally keeps the Mac awake while queued work waits or runs, with a toggle in the header whose tooltip says why and for which tasks.
 - Snapshots a configurable post-time safety buffer per job (5 seconds by default).
@@ -54,9 +56,32 @@ Product names are trademarks of their respective owners and are used only to des
 
 ## Install
 
-Download the latest disk image from the [releases page](https://github.com/VelvetAcorn/agent-auto-continue/releases) and drag Agent Auto-Continue into Applications.
-Each release is a universal binary for Apple Silicon and Intel, signed with a Developer ID and notarized by Apple, so macOS opens it without warnings.
+1. Download [Agent-Auto-Continue.dmg](https://github.com/VelvetAcorn/agent-auto-continue/releases/latest/download/Agent-Auto-Continue.dmg).
+   That link always serves the newest release; older versions are on the [releases page](https://github.com/VelvetAcorn/agent-auto-continue/releases).
+2. Open the disk image and drag Agent Auto-Continue onto the Applications folder in the same window.
+3. Open Agent Auto-Continue from Applications.
+   The first time, macOS says it was downloaded from the Internet and asks whether to open it; choose **Open**.
+   This prompt appears once for every downloaded app and does not come back.
+
+If you open the app straight from the disk image or from Downloads instead, it offers to move itself into Applications.
+Choose **Move to Applications** and it moves, then opens again from there.
+A copy opened straight from Downloads may stay behind there; it is safe to delete.
+Choose **Not Now** and it keeps running where it is; it does not ask again for that copy unless it is running from the disk image or from the temporary location macOS uses for freshly downloaded apps, because a copy there cannot update itself.
+If an older version is already in Applications, the new one offers to replace it, quitting the older copy first if it is running.
+Your settings and schedules are kept either way.
+
+Each release is a universal binary for Apple Silicon and Intel, signed with a Developer ID and notarized by Apple, and the disk image is signed and notarized too, so macOS opens it without "unidentified developer" or "damaged" warnings.
 A `SHA256SUMS.txt` file is attached to every release if you want to verify the download.
+
+### Updates
+
+The app keeps itself up to date from [GitHub Releases](https://github.com/VelvetAcorn/agent-auto-continue/releases).
+It checks a minute after launch and then every four hours, and downloads a new version in the background.
+When the download is ready, a quiet **Update ready** line appears at the top of the menu-bar popover, with **Restart** beside it; the menu-bar menu offers **Restart to Update** too.
+Nothing restarts on its own: the update installs the next time you quit the app, or right away if you choose Restart.
+If a message is being sent, an agent the app started is still working, or a schedule is due within five minutes, Restart asks first and suggests waiting.
+**Check for Updates…** in the menu-bar menu and the **Updates** section of Settings check on demand.
+A copy running from the disk image or from the temporary download location cannot update itself, so there those controls offer the move to Applications instead.
 
 ## Requirements
 
@@ -144,6 +169,7 @@ The menu includes **Launch at login** after the app has been installed.
 
 The app icon (`assets/icon.icns`) and menu-bar glyphs (`assets/trayTemplate.png` and, while keep-awake holds the Mac awake, `assets/trayAwakeTemplate.png`, each with an `@2x` file) are generated from the SVG sources in `assets/` and committed.
 After editing `assets/icon.svg`, `assets/trayTemplate.svg` or `assets/trayAwakeTemplate.svg`, run `npm run icons` on macOS and commit the regenerated files.
+The disk image window background (`build/background.png` and `build/background@2x.png`) is drawn by `tools/build-dmg-background.cjs`; after changing it or the icon positions in `build.dmg` in `package.json`, run `npm run dmg-background` and commit the regenerated files.
 
 ## Keep awake
 
@@ -210,8 +236,10 @@ npm run check:syntax  # every script, including nested lib directories
 
 ## Privacy
 
-The app has no telemetry, analytics, crash reporting, or update checks.
-The only connections it opens are to the agent's local HTTP API on the loopback interface, plus the Ko-fi page if you choose to open it in your browser.
+The app has no telemetry, analytics or crash reporting.
+The only connections it opens are to the agent's local HTTP API on the loopback interface, to GitHub to check for and download updates, plus the Ko-fi page if you choose to open it in your browser.
+An update check asks GitHub for the repository's latest release, like opening the releases page in a browser; it sends nothing about you, your agents or your schedules.
+Development builds never check.
 Remote control is off by default; when you turn it on, the app listens only on the loopback interface and on any private address you explicitly choose, never on a public or all-interface address.
 The bearer token and schedules are stored in the app's macOS application-data directory with owner-only permissions and never leave the machine.
 

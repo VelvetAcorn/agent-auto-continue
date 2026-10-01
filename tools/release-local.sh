@@ -1,6 +1,6 @@
 #!/bin/sh
-# Builds, signs and notarizes the universal app on this Mac using the credentials in
-# .env.release, then verifies the result the same way the release workflow does.
+# Builds, signs and notarizes the universal app and its disk image on this Mac using the
+# credentials in .env.release, then verifies the result the same way the release workflow does.
 # This is a rehearsal for the release workflow, not a replacement for it.
 set -eu
 cd "$(dirname "$0")/.."
@@ -33,8 +33,18 @@ echo "Building, signing and notarizing with team $APPLE_TEAM_ID. Signing takes a
 npm run build:release
 
 app="dist/mac-universal/Agent Auto-Continue.app"
-echo "Verifying $app"
+dmg="dist/Agent-Auto-Continue.dmg"
+echo "Notarizing and stapling $dmg. This is another quiet wait."
+xcrun notarytool submit "$dmg" --apple-id "$APPLE_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
+xcrun stapler staple "$dmg"
+
+echo "Verifying $app and $dmg"
 codesign --verify --deep --strict --verbose=2 "$app"
 spctl --assess --type execute --verbose=2 "$app"
 xcrun stapler validate "$app"
+codesign --verify --verbose=2 "$dmg"
+spctl --assess --type open --context context:primary-signature --verbose=2 "$dmg"
+xcrun stapler validate "$dmg"
+test -f "$app/Contents/Resources/app-update.yml"
+test -f dist/latest-mac.yml
 echo "Rehearsal passed. The artifacts in dist/ are signed and notarized."
