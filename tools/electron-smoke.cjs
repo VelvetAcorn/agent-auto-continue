@@ -357,15 +357,16 @@ async function continuationJourney(js) {
   await js(`window.autoContinue.saveSettings({httpPort:3773,bufferSeconds:0})`);
   await waitFor(() => js(`window.autoContinue.getSettings().then(settings=>settings.bufferSeconds===0)`), 'zero buffer for fast turns');
 
-  // T3 Code reports neither limits nor completion, so automatic modes are shown disabled with the reason.
+  // T3 Code reports completion but not usage limits: turn limits are offered, auto-start is disabled with the reason.
   await click('[data-nav="upcoming"]');
   await click('[data-action="new"]');
   await heading('New schedule');
+  await waitFor(() => js(`document.querySelector('#turn-help').textContent.includes('T3 Code reports when each turn finishes')`), 'T3 automation support loaded');
   assert.equal(await js(`document.querySelector('[data-trigger="available"]').disabled`), true);
-  assert.equal(await js(`document.querySelector('#turn-limit').disabled && document.querySelector('#continuous').disabled`), true);
+  assert.equal(await js(`document.querySelector('#wait-if-limited').disabled`), true);
+  assert.equal(await js(`document.querySelector('#turn-limit').disabled || document.querySelector('#continuous').disabled`), false);
   assert.match(await js(`document.querySelector('#trigger-help').textContent`), /T3 Code does not report usage limits/);
-  assert.match(await js(`document.querySelector('#turn-help').textContent`), /only one message can be sent safely/);
-  await capture('composer-t3-automation-disabled');
+  await capture('composer-t3-automation');
 
   // Auto-start with a turn limit of 3 while the fake agent is at a usage limit.
   fake.state.availability = { state: 'limited', resetsAt: new Date(Date.now() + 3000).toISOString(), reason: 'Five-hour limit', source: 'reported' };

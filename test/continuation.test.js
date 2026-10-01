@@ -66,7 +66,7 @@ test('turn limit input: default 1, whole numbers only, zero and negatives reject
   assert.throws(() => continuation.validateAutomation({ continuous: 'yes' }), /continuous/);
 });
 
-test('modes a harness cannot support are rejected with the reason, and T3 keeps single timed messages', async () => {
+test('modes a harness cannot support are rejected with the reason, and T3 offers turn limits but not auto-start', async () => {
   const blind = setup({ capabilities: { canDetectUsageLimit: false, canReportResetTime: false, canDetectCompletion: false } });
   await assert.rejects(create(blind), /does not report usage limits/);
   await assert.rejects(create(blind, { trigger: 'time', whenISO: iso(MIN), turnLimit: 3 }), /does not report when the agent finishes a turn/);
@@ -75,8 +75,9 @@ test('modes a harness cannot support are rejected with the reason, and T3 keeps 
   assert.equal(single.chain, null, 'A timed single message stays a plain schedule');
   const support = continuation.automationSupport(createT3Harness({ api: {} }));
   assert.equal(support.whenAvailable.supported, false);
-  assert.equal(support.multipleTurns.supported, false);
+  assert.equal(support.multipleTurns.supported, true);
   assert.match(support.whenAvailable.reason, /T3 Code does not report usage limits/);
+  assert.match(support.multipleTurns.reason, /T3 Code reports when each turn finishes/);
   assert.equal(blind.fake.state.submitted.length, 0);
 });
 
@@ -700,4 +701,208 @@ test('a locked Mac never fails or counts a turn: the chain waits for unlock and 
   await h.service.retryAfterUnlock();
   assert.equal(h.fake.state.submitted.length, 1, 'Unlock retries at once');
   assert.equal(job(h, created.id).messageId, created.messageId, 'The undelivered turn keeps its IDs');
+});
+
+// Replaces one adapter method with a call the test releases by hand.
+function hold(h, method) {
+  const original = h.service.adapterFor({ harness: 'fake' });
+  const gate = {};
+  gate.reached = new Promise((resolve) => { gate.arrive = resolve; });
+  gate.result = new Promise((resolve, reject) => { gate.release = resolve; gate.fail = reject; });
+  h.service.harnesses = { has: () => true, get: () => ({ ...original, [method]: async (...args) => { gate.arrive(); const value = await gate.result; return value === undefined ? original[method](...args) : value; } }) };
+  return gate;
+}
+
+test('a continuation stopped while its message is being submitted still counts as active work until the send settles', async () => {
+  const h = setup();
+  const created = await create(h, { turnLimit: 3 });
+  const submit = hold(h, 'submitTurn');
+  h.set(5_000);
+  const run = h.service.run(created.id);
+  await submit.reached;
+  h.service.stop(created.id);
+  assert.equal(job(h, created.id).status, 'dispatching');
+  assert.deepEqual(h.service.activeWork().map((item) => [item.jobId, item.phase]), [[created.id, 'sending']], 'Keep-awake must not let the Mac sleep mid-send');
+  submit.release();
+  await run;
+  assert.equal(h.fake.state.submitted.length, 1);
+  assert.deepEqual(h.service.activeWork().map((item) => item.phase), ['running']);
+});
+
+test('a stop that lands during pre-send checks cancels quietly even when the check then reports a limit or an error', async () => {
+  // A timed chain reads availability in the dispatch phase.
+  const probing = setup();
+  const timed = await create(probing, { trigger: 'time', whenISO: iso(MIN), turnLimit: 2 });
+  const probe = hold(probing, 'probeAvailability');
+  probing.set(MIN + 5_000);
+  const run = probing.service.run(timed.id);
+  await probe.reached;
+  probing.service.stop(timed.id);
+  probe.release({ state: 'limited', resetsAt: iso(3 * HOUR), source: 'reported', checkedAt: iso(MIN) });
+  await run;
+  const stopped = probing.service.present(job(probing, timed.id));
+  assert.equal(stopped.status, 'canceled');
+  assert.equal(stopped.automation.state, 'stopped');
+  assert.equal(stopped.needsAttention, false, 'Stopping is not a failure that needs a look');
+  assert.equal(probing.notifications.length, 0);
+
+  // Preparing the send fails after the user stopped the chain.
+  const preparing = setup();
+  const created = await create(preparing, { turnLimit: 2 });
+  const prepare = hold(preparing, 'prepareTurn');
+  preparing.set(5_000);
+  const sending = preparing.service.run(created.id);
+  await prepare.reached;
+  preparing.service.stop(created.id);
+  prepare.fail(new HarnessError('process_failed', 'The agent could not start.'));
+  await sending;
+  const canceled = preparing.service.present(job(preparing, created.id));
+  assert.equal(canceled.status, 'canceled');
+  assert.equal(canceled.needsAttention, false);
+  assert.equal(preparing.notifications.filter(([title]) => /failed/i.test(title)).length, 0);
+  assert.equal(preparing.fake.state.submitted.length, 0);
+});
+
+test('restart after a stop that landed before the send guard leaves a final, re-schedulable record', async () => {
+  const h = setup();
+  const created = await create(h, { turnLimit: 3 });
+  const record = { ...job(h, created.id), status: 'dispatching', dispatchAttemptedAt: null, chain: continuation.halt(job(h, created.id).chain, 'stopped', 'stopped_by_user', 'Stopped by you.', iso(0)) };
+  const restarted = setup({ jobs: { version: 4, jobs: [record] } });
+  restarted.service.recover();
+  restarted.service.schedulePending();
+  const view = restarted.service.present(restarted.service.get(created.id));
+  assert.equal(view.status, 'canceled');
+  assert.equal(view.automation.state, 'stopped');
+  assert.equal(restarted.armedTimers().length, 0);
+  assert.equal(restarted.service.scheduleAgain(created.id).turnLimit, 3);
+  await restarted.advance(HOUR);
+  assert.equal(restarted.fake.state.submitted.length, 0);
+});
+
+test('a send refused at a usage limit waits for the reset with the same unsent turn instead of pausing', async () => {
+  const h = setup();
+  const created = await create(h, { continuous: true });
+  // Availability reads unknown, so the send is attempted and the agent refuses it.
+  h.fake.state.availability = { state: 'unknown', source: 'none' };
+  h.fake.state.submitError = new HarnessError('usage_limited', 'Usage limit reached. Resets in 2 hours.', { resetsAt: iso(2 * HOUR) });
+  await h.advance(5_000);
+  const waiting = h.service.present(job(h, created.id));
+  assert.equal(waiting.status, 'pending');
+  assert.equal(waiting.automation.state, 'active');
+  assert.equal(waiting.automation.sentTurns, 0);
+  assert.equal(waiting.dispatchAttemptedAt, null);
+  assert.equal(waiting.displayStatus, 'waiting');
+  assert.equal(waiting.nextAttemptAt, iso(2 * HOUR + 5_000));
+  assert.equal(h.service.activeWork()[0].phase, 'waiting');
+  h.fake.state.submitError = null;
+  await h.advance(2 * HOUR - 10_000);
+  assert.equal(h.fake.state.submitted.length, 0);
+  await h.advance(10_000);
+  assert.equal(h.fake.state.submitted.length, 1);
+  assert.equal(job(h, created.id).messageId, created.messageId, 'The undelivered turn keeps its IDs');
+
+  // Without a reset time, it backs off instead.
+  const again = setup();
+  const second = await create(again, { turnLimit: 2 });
+  again.fake.state.submitError = new HarnessError('usage_limited', 'Usage limit reached.');
+  await again.advance(5_000);
+  assert.equal(Date.parse(job(again, second.id).nextAttemptAt) - again.now, MIN);
+  assert.equal(job(again, second.id).chain.state, 'active');
+});
+
+// A T3 Code thread served by a fake loopback API: completion is polled through
+// latestTurn, and T3 Code reports no account usage limits.
+function t3Setup() {
+  let clock = start;
+  const timers = [], commands = [], notifications = [];
+  const thread = { id: 'thread', title: 'T3 thread', projectId: 'p', messages: [], activities: [], modelSelection: { model: 'm', instanceId: 'i' }, runtimeMode: 'full-access', interactionMode: 'default', latestTurn: null, session: null };
+  const api = {
+    fetchThread: async () => JSON.parse(JSON.stringify(thread)),
+    fetchSnapshot: async () => ({ threads: [thread], projects: [] }),
+    dispatch: async (command) => {
+      commands.push(command);
+      thread.messages.push({ id: command.message.messageId, role: 'user', text: command.message.text, createdAt: new Date(clock).toISOString() });
+      thread.latestTurn = { turnId: `t-${commands.length}`, state: 'running', requestedAt: command.createdAt, startedAt: command.createdAt, completedAt: null };
+      return { sequence: commands.length };
+    }
+  };
+  const service = new JobService({ harnesses: createHarnessRegistry([createT3Harness({ api, now: () => clock })]), now: () => clock, persist: () => {}, notify: (...args) => notifications.push(args),
+    scheduleTimer: (date, callback) => { const timer = { date, callback, canceled: false, fired: false, cancel() { this.canceled = true; } }; timers.push(timer); return timer; } });
+  return {
+    service, thread, commands, notifications, get now() { return clock; },
+    async advance(ms) {
+      clock += ms;
+      for (let guard = 0; guard < 50; guard++) {
+        const due = timers.filter((timer) => !timer.canceled && !timer.fired && timer.date.valueOf() <= clock);
+        if (!due.length) break;
+        for (const timer of due) { timer.fired = true; timer.callback(); }
+        await settle();
+      }
+      await settle();
+    },
+    // Ends T3 Code's latest turn, then lets the 30-second poll see it.
+    async end(state, lastError) {
+      thread.latestTurn = { ...thread.latestTurn, state, completedAt: new Date(clock).toISOString() };
+      thread.session = lastError ? { status: 'error', lastError } : null;
+      await service.pollTurns();
+    }
+  };
+}
+
+test('T3 Code runs a continuous chain by polling completion, and waits out usage limits with or without a reset time', async () => {
+  const h = t3Setup();
+  await assert.rejects(h.service.create({ harness: 't3', threadId: 'thread', message: 'Continue', timeZone: 'UTC', trigger: 'available' }), /does not report usage limits/);
+  const created = await h.service.create({ harness: 't3', threadId: 'thread', message: 'Continue', timeZone: 'UTC', trigger: 'time', whenISO: iso(MIN), continuous: true });
+  assert.equal(created.automation.unlimited, true);
+  await h.advance(MIN + 5_000);
+  assert.equal(h.commands.length, 1);
+  assert.equal(h.service.present(h.service.get(created.id)).displayStatus, 'running');
+  await h.advance(10 * MIN);
+  await h.service.pollTurns();
+  assert.equal(h.commands.length, 1, 'Nothing more is sent while T3 Code reports the turn running');
+
+  // Turn 1 completes; turn 2 is a new command with new IDs after the buffer.
+  await h.end('completed');
+  await h.advance(5_000);
+  assert.equal(h.commands.length, 2);
+  assert.notEqual(h.commands[1].commandId, h.commands[0].commandId);
+  assert.notEqual(h.commands[1].message.messageId, h.commands[0].message.messageId);
+  assert.equal(h.service.get(created.id).chain.state, 'active', 'Our own T3 message is not user activity');
+
+  // Turn 2 fails at a usage limit that states its reset time.
+  await h.advance(10 * MIN);
+  await h.end('error', "You've hit your usage limit · resets 11pm (UTC)");
+  const limited = h.service.present(h.service.get(created.id));
+  assert.equal(limited.automation.state, 'active');
+  assert.equal(limited.displayStatus, 'waiting');
+  const resetsAt = Date.parse(limited.automation.turns[1].usageLimit.resetsAt);
+  assert.ok(resetsAt > h.now);
+  assert.equal(limited.nextAttemptAt, new Date(resetsAt + 5_000).toISOString(), 'Reset time plus the safety buffer');
+  assert.equal(limited.automation.turns[1].counted, false);
+  await h.advance(resetsAt - h.now);
+  assert.equal(h.commands.length, 2, 'Nothing is sent before the reset plus buffer');
+  await h.advance(5_000);
+  assert.equal(h.commands.length, 3);
+
+  // Turn 3 fails at a usage limit without a reset time: the next turn waits 15 minutes.
+  await h.advance(10 * MIN);
+  await h.end('error', 'Usage limit reached for this model.');
+  const unknownReset = h.service.get(created.id);
+  assert.equal(unknownReset.chain.state, 'active');
+  assert.equal(Date.parse(unknownReset.nextAttemptAt) - h.now, continuation.LIMIT_RETRY_MS);
+  await h.advance(continuation.LIMIT_RETRY_MS - 1_000);
+  assert.equal(h.commands.length, 3);
+  await h.advance(1_000);
+  assert.equal(h.commands.length, 4);
+
+  // A third limited turn in a row pauses the chain instead of retrying forever.
+  await h.advance(10 * MIN);
+  await h.end('error', 'Usage limit reached for this model.');
+  const paused = h.service.present(h.service.get(created.id));
+  assert.equal(paused.automation.state, 'paused');
+  assert.equal(paused.automation.reasonCode, 'repeated_limits');
+  assert.equal(paused.automation.countedTurns, 1, 'Only the completed turn counts');
+  await h.advance(2 * HOUR);
+  assert.equal(h.commands.length, 4);
+  assert.equal(h.service.stop(created.id).automation.state, 'stopped');
 });

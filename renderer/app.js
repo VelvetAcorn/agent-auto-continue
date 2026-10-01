@@ -49,7 +49,8 @@
   // What a harness supports automatically; until metadata loads, nothing automatic is offered.
   function support(id) {
     const label = harnessLabel(id);
-    return harnessInfo(id)?.automation || { whenAvailable: { supported: false, reason: `${label} does not report usage limits, so the app cannot tell when it becomes available.` }, multipleTurns: { supported: false, reason: `${label} does not report when the agent finishes a turn, so only one message can be sent safely.` } };
+    const loading = { supported: false, reason: `Checking what ${label} supports…` };
+    return harnessInfo(id)?.automation || { whenAvailable: loading, multipleTurns: loading };
   }
   // Keeps a draft within what its harness supports, for example after choosing another harness.
   function fitDraft(d) {

@@ -77,6 +77,7 @@ When the limit is reached, the chain finishes even if the last turn did not end 
 
 A pending turn of a chain reads the harness's availability before it is sent, while the job is still `pending`, so an interrupted read never looks like an interrupted send.
 Only a known block holds the turn back, matching the job service's pre-dispatch rule.
+Harnesses that cannot report usage limits, such as T3 Code, skip this read; a turn that ended at a usage limit still waits until its reported reset plus the safety buffer, or 15 minutes.
 
 | Availability reading | Result |
 | --- | --- |
@@ -97,6 +98,7 @@ For a chain, the following hold the turn back without counting it:
 | `awaitingInput: true` | The chain pauses (`awaiting_input`) with the turn still unsent |
 | `busy: true`, or a certain `conversation_busy` error | The same unsent turn is checked again with the backoff above |
 | A certain `screen_locked` error | The same unsent turn is checked again in a minute |
+| A certain `usage_limited` error, except on a timed first turn | The same unsent turn waits until the error's `resetsAt` plus the safety buffer, or backs off as above |
 | `owned_by_other_harness` | The chain stops and names the owning harness |
 | Any other certain failure | The job fails and the chain pauses (`send_failed`) |
 | Uncertain delivery | The job becomes unconfirmed and the chain pauses (`delivery_unconfirmed`) |
@@ -112,7 +114,7 @@ It never sends, takes effect at once, and works in every state:
 | When | Effect |
 | --- | --- |
 | Waiting, scheduled or paused before sending | The unsent turn is canceled and its timer cleared |
-| During an availability read or pre-send checks | Sending is abandoned when the check returns |
+| During an availability read or pre-send checks | Sending is abandoned when the check returns, and the turn is canceled even if the check then fails |
 | After the send guard is persisted | That send completes, and nothing further is sent |
 | While a turn is running | The turn keeps running in the agent, and nothing further is sent |
 
@@ -141,7 +143,7 @@ At startup, `recover()` sends nothing:
 
 | Stored state | Result |
 | --- | --- |
-| `dispatching` without `dispatchAttemptedAt` | Nothing was submitted, so the turn returns to `pending` |
+| `dispatching` without `dispatchAttemptedAt` | Nothing was submitted, so the turn returns to `pending`, or is canceled if the chain was stopped |
 | `dispatching` with `dispatchAttemptedAt` | Unconfirmed, and the chain pauses |
 | A finished turn whose follow-up was not written | The follow-up is computed now |
 | A delivered turn with no tracked outcome | The chain pauses (`turn_unknown`) |
@@ -161,6 +163,7 @@ An outcome recorded for an earlier turn is ignored, so a late completion can nev
 | `present(job).canStop`, `canResume`, `needsAttention` | Which controls to offer |
 
 `activeWork()` includes every active chain, including the moment between one turn finishing and the next being sent, and excludes paused chains, which wait for the user.
+A send already in flight stays in `activeWork()` as `sending` even if its chain is stopped meanwhile.
 Upcoming lists active chains, and History lists paused, stopped and finished ones.
 A paused chain counts toward the History attention badge until it is resumed, stopped or acknowledged.
 
