@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <rect x="34" y="34" width="196" height="196" rx="40" fill="#34303A"/>
+  <rect x="22" y="22" width="196" height="196" rx="40" fill="#F8F6F1" stroke="#34303A" stroke-width="8"/>
+  
+  <circle cx="64" cy="120" r="11" fill="#34303A"/>
+  <circle cx="98" cy="120" r="13" fill="#34303A"/>
+  <circle cx="134" cy="120" r="15" fill="#34303A"/>
+  <polygon points="155.84,96 203.84,120 155.84,144" fill="#796B98" stroke="#34303A" stroke-width="8" stroke-linejoin="round"/>
+
+</svg>
