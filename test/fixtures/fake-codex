@@ -112,6 +112,8 @@ function onMessage(message) {
       thread.turns.push(turn);
       save(state);
       if (mode === 'crash') process.exit(3);
+      if (mode === 'hang-start') return;
+      if (mode === 'malformed-start') return reply({ turn: {} });
       reply({ turn: { ...turn, items: [] } });
       send({ method: 'turn/started', params: { threadId: thread.id, turn } });
       setTimeout(() => void runTurn(thread.id, turn.id), 20);

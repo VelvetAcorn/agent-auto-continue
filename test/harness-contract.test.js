@@ -218,6 +218,14 @@ test('uncertain submission becomes unconfirmed and reconciliation uses the persi
   fake.state.conversations.get('conv').messages.push({ id: `fake-${job.messageId}`, role: 'user', createdAt: iso(70_000) });
   const confirmed = await h.service.reconcile(job.id);
   assert.equal(confirmed.deliveryStatus, 'sent');
+  assert.equal(confirmed.turn.state, 'running');
+  assert.equal(confirmed.turn.turnId, null);
+  assert.equal(h.service.activeWork()[0].phase, 'running');
+  const restored = service([fake.adapter], h.stored);
+  fake.state.turn = { state: 'completed', turnId: 'recovered-turn' };
+  await restored.service.pollTurns();
+  assert.equal(restored.service.get(job.id).turn.state, 'completed');
+  assert.deepEqual(restored.service.activeWork(), []);
   assert.equal(h.service.get(job.id).note, 'Message confirmed in Fake Agent');
   assert.equal(fake.state.submitted.length, 0);
 });
@@ -258,4 +266,44 @@ test('user activity in a non-T3 conversation cancels the schedule', async () => 
   await h.service.run(job.id);
   assert.equal(h.service.get(job.id).status, 'canceled');
   assert.equal(fake.state.submitted.length, 0);
+});
+
+test('running polls persist changed outcome fields and skip identical normalized outcomes', async () => {
+  const fake = createFakeHarness({ conversations: [{ id: 'conv' }] });
+  const h = service([fake.adapter]);
+  const job = await h.service.create(input('fake'));
+  h.setClock(70_000);
+  await h.service.run(job.id);
+  let changes = 0;
+  h.service.onChange = () => { changes++; };
+  fake.state.turn = { state: 'running', turnId: 'turn-1', usageLimit: { message: 'Retrying', resetsAt: iso(3_600_000) }, error: { code: 'retry', message: 'Waiting' } };
+  await h.service.pollTurns();
+  assert.equal(changes, 1);
+  assert.equal(h.stored.jobs[0].turn.usageLimit.resetsAt, iso(3_600_000));
+  assert.equal(h.stored.jobs[0].turn.error.code, 'retry');
+  fake.state.turn.usageLimit.resetsAt = iso(3_600_000).replace('Z', '+00:00');
+  await h.service.pollTurns();
+  assert.equal(changes, 1);
+  fake.state.turn = { state: 'running', turnId: 'new-turn' };
+  await h.service.pollTurns();
+  assert.equal(changes, 2);
+  assert.equal(h.stored.jobs[0].turn.turnId, 'new-turn');
+  assert.equal(h.stored.jobs[0].turn.usageLimit, null);
+  assert.equal(h.stored.jobs[0].turn.error, null);
+});
+
+test('reconciliation restores turn tracking after interrupted dispatch recovery', async () => {
+  const fake = createFakeHarness({ conversations: [{ id: 'conv' }] });
+  const h = service([fake.adapter]);
+  const job = await h.service.create(input('fake'));
+  h.service.patch(h.service.get(job.id), { status: 'dispatching' });
+  fake.state.conversations.get('conv').messages.push({ id: job.messageId, role: 'user', createdAt: iso(70_000) });
+  const restored = service([fake.adapter], h.stored);
+  restored.service.recover();
+  await restored.service.reconcile(job.id);
+  assert.equal(restored.stored.jobs[0].turn.state, 'running');
+  assert.equal(restored.service.activeWork().length, 1);
+  fake.state.turn = { state: 'completed' };
+  await restored.service.pollTurns();
+  assert.deepEqual(restored.service.activeWork(), []);
 });

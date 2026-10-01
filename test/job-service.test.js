@@ -112,6 +112,8 @@ test('crash recovery reconciles message presence without any new POST', async ()
   h.setThread({ ...thread(), messages: [{ id: 'message', role: 'user', createdAt: iso(0) }] });
   await h.service.reconcile('job');
   assert.equal(h.service.get('job').status, 'sent');
+  assert.equal(h.service.get('job').turn, undefined);
+  assert.deepEqual(h.service.activeWork(), []);
   assert.equal(h.calls, 0);
 });
 

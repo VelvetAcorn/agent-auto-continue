@@ -235,3 +235,28 @@ test('a Claude Code job goes from schedule to delivered and completed through th
   assert.equal(service.get(job.id).turn.state, 'completed');
   assert.equal(s.log().length, 1);
 });
+
+test('concurrent prepared submissions reserve the session until completion', async () => {
+  const s = setup();
+  const adapter = s.make();
+  const state = await adapter.inspectConversation({ conversationId: SESSION });
+  const first = turn();
+  const second = turn({ messageId: 'second', deliveryKey: 'second' });
+  const a = adapter.prepareTurn(first, state);
+  const b = adapter.prepareTurn(second, state);
+  const pending = adapter.submitTurn(first, a.plan);
+  await assert.rejects(adapter.submitTurn(second, b.plan), (error) => error.code === 'conversation_busy' && !error.deliveryUncertain);
+  await (await pending).completion;
+  assert.equal(s.log().length, 1);
+  assert.equal((await (await adapter.submitTurn(second, b.plan)).completion).state, 'completed');
+});
+
+test('failed starts release the session reservation', async () => {
+  const s = setup({ mode: 'no-auth' });
+  const adapter = s.make();
+  const state = await adapter.inspectConversation({ conversationId: SESSION });
+  const { plan } = adapter.prepareTurn(turn(), state);
+  await assert.rejects(adapter.submitTurn(turn(), plan), { code: 'missing_credentials' });
+  s.env.FAKE_CLAUDE_MODE = 'complete';
+  assert.equal((await (await adapter.submitTurn(turn(), plan)).completion).state, 'completed');
+});

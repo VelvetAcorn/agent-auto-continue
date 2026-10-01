@@ -291,3 +291,52 @@ test('a Codex job goes from schedule to delivered and completed through the job 
   assert.equal(service.get(owned.id).error.code, 'owned_by_other_harness');
   assert.equal(service.get(owned.id).deliveryCertainty, 'not-delivered');
 });
+
+test('concurrent prepared submissions reserve the conversation until completion', async () => {
+  const s = setup();
+  const adapter = s.make({ transport: 'daemon' });
+  const state = await adapter.inspectConversation({ conversationId: THREAD });
+  const first = turn();
+  const second = turn({ messageId: 'second', deliveryKey: 'second' });
+  const a = adapter.prepareTurn(first, state);
+  const b = adapter.prepareTurn(second, state);
+  const pending = adapter.submitTurn(first, a.plan);
+  await assert.rejects(adapter.submitTurn(second, b.plan), (error) => error.code === 'conversation_busy' && !error.deliveryUncertain);
+  await (await pending).completion;
+  assert.equal(s.log().filter((entry) => entry.method === 'turn/start').length, 1);
+  assert.equal((await (await adapter.submitTurn(second, b.plan)).completion).state, 'completed');
+  await adapter.shutdown();
+});
+
+test('unsuccessful starts close the client and release reservations while retaining uncertainty', async () => {
+  for (const mode of ['hang-start', 'malformed-start', 'crash', 'reject']) {
+    const s = setup({ mode });
+    const adapter = s.make({ requestTimeoutMs: 2000 });
+    const state = await adapter.inspectConversation({ conversationId: THREAD });
+    const { plan } = adapter.prepareTurn(turn(), state);
+    await assert.rejects(adapter.submitTurn(turn(), plan), (error) => error.deliveryUncertain === (mode !== 'reject'));
+    const pid = s.log().filter((entry) => entry.start).at(-1).pid;
+    assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
+    assert.notEqual((await adapter.checkTurn(turn())).state, 'running');
+    s.env.FAKE_CODEX_MODE = 'complete';
+    const saved = s.state();
+    for (const item of saved.threads[THREAD].turns) item.status = 'completed';
+    fs.writeFileSync(s.env.FAKE_CODEX_STATE, JSON.stringify(saved));
+    const next = turn({ deliveryKey: 'next', messageId: 'next' });
+    assert.equal((await (await adapter.submitTurn(next, plan)).completion).state, 'completed');
+    await adapter.shutdown();
+  }
+});
+
+test('the run deadline supervises turn/start before its RPC timeout', async () => {
+  const s = setup({ mode: 'hang-start' });
+  const adapter = s.make({ requestTimeoutMs: 5000, maxTurnMs: 50 });
+  const state = await adapter.inspectConversation({ conversationId: THREAD });
+  const { plan } = adapter.prepareTurn(turn(), state);
+  const began = Date.now();
+  await assert.rejects(adapter.submitTurn(turn(), plan), (error) => error.code === 'process_failed' && error.deliveryUncertain);
+  assert.ok(Date.now() - began < 4000);
+  const pid = s.log().filter((entry) => entry.start).at(-1).pid;
+  assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
+  await adapter.shutdown();
+});
