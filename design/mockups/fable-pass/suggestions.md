@@ -1,7 +1,7 @@
 # agent-auto-continue: UI and UX direction for issues #2 to #6
 
 Prepared 2026-09-30 as a design proposal.
-It reads the shipped Paper / Focus renderer, the four prototypes in `design/mockups/`, the accepted decisions in `docs/development-plan.md`, and the five open issues.
+It reads the shipped Paper / Focus renderer, the four prototypes in `design/mockups/`, and the five open issues.
 Concept sketches sit beside this file; open `index.html` for the list.
 Nothing here is implemented, and nothing in the repository was changed.
 

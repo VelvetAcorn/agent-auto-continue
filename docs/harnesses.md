@@ -328,7 +328,7 @@ The on-disk and protocol details below are internal to each tool unless stated o
 
 ### T3 Code (`t3`)
 
-The adapter uses T3 Code's loopback orchestration API as before; see [the implementation reference](implementation-review.md#local-api-contract).
+The adapter uses T3 Code's loopback orchestration API as before; the client lives in `lib/api-client.js`.
 Delivery evidence is the `{sequence}` acceptance response or the stable message ID in the thread.
 `awaitingInput` follows T3 Code 0.0.40's own open-request accounting of `approval.*` and `user-input.*` activities.
 Completion was derived from the T3 Code 0.0.40 server sources and has not yet been observed against a live T3 Code turn.

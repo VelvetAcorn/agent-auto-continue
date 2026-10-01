@@ -155,7 +155,7 @@ Harnesses that report completion also record whether the agent's turn finished, 
 See [agent harness adapters](docs/harnesses.md) for each harness's delivery evidence.
 New user activity since schedule creation cancels the job; settling a thread only filters the picker.
 Archived threads are always excluded from the picker, while unknown states remain visible.
-See [migration details](docs/implementation-review.md#job-model-and-delivery-safeguards) for legacy activity-baseline limits.
+Jobs saved by older versions without a creation time skip this check, because earlier activity cannot be told apart from new activity.
 Saved schedules retain their UTC instant and buffer when settings or the system timezone change.
 Missed pending schedules catch up after restart or wake and record lateness.
 
@@ -167,7 +167,7 @@ Acknowledgment clears an attention badge without deleting history or sending any
 
 The renderer uses queue/history, edit/cancel, acknowledgment, reconciliation and job-change APIs.
 Corrupt, unreadable, or unsupported local schedule files are preserved; the app pauses scheduling and shows a storage error instead of overwriting them.
-See [the development plan](docs/development-plan.md) for accepted decisions, prototype review, and remaining release gates.
+See [the roadmap](docs/roadmap.md) for feature status and [the UI review](docs/ui-review.md) for open design decisions.
 
 ## Verify the source
 
