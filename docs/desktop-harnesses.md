@@ -37,7 +37,7 @@ The shared engine is `lib/desktop/ui-delivery.js`, and every send follows the sa
 4. Set the message text through the Accessibility value of the verified message box and read it back.
 5. Press the verified send button with an Accessibility press action.
 6. Wait for the app's own persisted record of the new message.
-7. Bring back the app that was in front before the deep link, if the target app took the front.
+7. If the harness opened the deep link and the target app took the front, bring back the app that was in front before.
 
 No synthetic keystrokes or clipboard pastes are used anywhere, so input cannot land in whichever window happens to have focus.
 Every write re-locates the conversation, the message box and the send button in the same Accessibility pass, and aborts if any of them does not match.
@@ -86,6 +86,7 @@ Delivery is confirmed when the transcript gains a typed prompt with exactly the 
 The text match is the evidence because the app assigns the prompt's own ID; the same text typed by hand in the same session at the same moment would also match.
 The job service cancels a schedule when new user activity appears before it runs, which keeps that window small.
 A session open in a Claude Code process other than Claude Desktop, such as `claude --resume` in a terminal, is refused, because Claude Desktop would become a second writer.
+A live process that does not report its entrypoint counts as another process too.
 The Claude Code harness in turn hides and refuses every session Claude Desktop owns.
 A session whose working folder no longer exists is canceled, because Claude Desktop cannot continue it either.
 
@@ -103,7 +104,8 @@ The app runs a private `codex app-server` child and holds each open thread's wri
 The shared app-server daemon does not load the app's threads, so sending through the daemon or a private server would create a second writer.
 
 The content area's URL is `app://-/index.html` for every thread, so the harness verifies the open thread by the content area's title, which is the thread name.
-Threads without a name, and threads whose name another unarchived desktop thread shares, are refused rather than guessed.
+Threads without a name, and threads whose name any other listed thread shares, archived or not and whatever created it, are refused rather than guessed.
+Only the most recent 100 threads of each kind are listed, so a much older twin is not seen.
 The message box is an `AXTextArea` described as `Do anything`, whose value includes the placeholder text while empty.
 The send button is labelled `Send` or `Send message`, and a `Stop` button near the message box means a turn is running.
 The app ships no readable message catalogue, so these labels are English only, and another interface language fails safely with an unsupported-version error before anything is typed.
@@ -120,6 +122,7 @@ Reads use a private server that never loads a thread for writing.
 | Writer ownership | The thread's writer lock holder, which must be the desktop app or nobody |
 
 Delivery is confirmed when a turn that started no earlier than five seconds before the send attempt contains a user message with exactly the scheduled text.
+A turn without a start time is never evidence, because it could be any earlier turn with the same text.
 Threads with originator `Codex Desktop`, and older top-level threads with no originator and source `vscode`, belong to this harness, and the Codex harness refuses them.
 A lock holder that cannot be determined counts as busy.
 
