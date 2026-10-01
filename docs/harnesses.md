@@ -277,17 +277,21 @@ Functions accept `{ home, env }` so tests can point them at fixtures.
 | Export | Returns |
 | --- | --- |
 | `claudePaths(options)` | `{ configDir, projectsDir, sessionsDir, desktopDir }` |
+| `readDesktopCodeSessionStore(options)` | `{ found, files, sessions, unrecognised, drift }`, where `drift` is a hint when the session files no longer look like the known store |
 | `readDesktopCodeSessions(options)` | Claude Desktop Code sessions as `{ sessionId, cliSessionId, cwd, originCwd, title, archived, createdAt, lastActivityAt }` |
 | `desktopOwnedCliSessionIds(options)` | A `Set` of lowercase CLI session IDs that Claude Desktop owns, archived or not |
-| `readLiveSessions(options)`, `readLiveSession(cliSessionId, options)` | Live registry entries `{ pid, status, waitingFor, entrypoint, kind, hostSessionId, name, updatedAt }` for alive processes only; `status` is `idle`, `busy`, `waiting`, `blocked` or `unknown` |
+| `readLiveRegistry(options)` | `{ found, pids, sessions, unidentified }` for alive processes only; `sessions` maps a CLI session ID to the entry that refuses most firmly, and `unidentified` lists live entries that name no session |
+| `readLiveSessions(options)`, `readLiveSession(cliSessionId, options)` | Live registry entries `{ pid, status, state, drift, waitingFor, entrypoint, kind, hostSessionId, name, updatedAt }`; `state` is `busy`, `waiting`, `idle`, `starting` or `unrecognised`, and `drift` says what changed when unrecognised |
 | `readClaudePlanUsage(options)` | The newest plan-usage sample `{ sampledAt, org, fiveHourPct, sevenDayPct }` or `null`; pass `org` to filter |
 | `findTranscriptPath(cliSessionId, options)` | The transcript path or `null` |
 | `readHumanPrompts(file)` | Typed prompts `{ uuid, timestamp, text }`, excluding tool results, meta, synthetic, compact-summary and sidechain records |
-| `scanTranscript(file, promptUuid)` | Working directory, permission mode, latest human prompt time, whether `promptUuid` is present, and the records after it |
+| `scanTranscript(file, promptUuid)` | Working directory, permission mode, latest human prompt time, whether `promptUuid` is present, the records after it, whether Claude Desktop wrote to the session (`desktopOwned`) and a format-change hint (`drift`) |
+| `transcriptDrift(records)` | A hint when transcript records no longer look like the known format, or an empty string |
 | `turnOutcomeAfter(file, promptUuid, { running, now })` | A turn outcome for the turn after `promptUuid` |
 | `listTranscripts`, `summariseTranscript`, `recentLimitSignal`, `isHumanPrompt` | Listing and usage-limit helpers |
 
-Pass `isAlive` in `options` to replace the process liveness check in tests.
+Pass `isAlive` in `options` to replace the process liveness check in tests, and `now` to fix the clock.
+Claude Desktop's compatibility probes, which read these files without changing anything, are in `lib/harnesses/claude-desktop-probes.js`.
 
 `lib/harnesses/codex-reader.js` exports `createReader({ executable, env, home, transport, detectDaemon, requestTimeoutMs })` (also named `createCodexReader`).
 The reader offers `listThreads()`, `listAllThreads({ archived, sourceKinds })`, `readThread(id)`, `recentTurns(id, limit)`, `rateLimits()`, `account()`, `turnOutcome(turn, limit)`, `threadWriter(threadId)`, `selectTransport()`, `open()`, `withClient()` and `close()`.
@@ -366,7 +370,10 @@ Claude Code records an interruption (Esc or SIGINT) as a user record reading `[R
 Discovery reads transcripts under `$CLAUDE_CONFIG_DIR/projects` or `~/.claude/projects`, newest 150 first, using the head and tail of each file for the title and working directory.
 Titles prefer a user rename, then Claude's generated title, then the first typed prompt.
 Sessions owned by Claude Desktop are hidden, and sending to one fails with `owned_by_other_harness`.
+A session is Claude Desktop's when its store lists it or when its transcript has messages whose `entrypoint` is `claude-desktop`, so a changed Desktop store cannot expose them.
 Sessions open in any live Claude process, from the registry in `sessions/<pid>.json`, fail with `conversation_busy`, because a second writer would fork the conversation.
+A live registry entry that names no session could hold any session, so every send refuses with `app_version_unsupported` for the `live_registry` contact point.
+A transcript whose records no longer look like the known format refuses with `app_version_unsupported` for the `transcript` contact point, because new user activity could not be seen.
 Exit that Claude Code session after scheduling so the turn can resume it.
 
 Completion comes from the supervised process's final `result` event, or from the transcript after a restart.
@@ -422,7 +429,9 @@ The outcome is then `interrupted` with error code `approval_required`.
 The adapter was built against Claude Desktop 2.16120.0 and covers its Code sessions; sending in the real app awaits the owner's check.
 It opens a session with `claude://code/continue?session=local_<uuid>`, sets the message through Accessibility and presses send; it never starts `claude` itself.
 Discovery, activity, busy state, delivery evidence, completion and usage limits come from `claude-sessions.js`.
+A Stop button near the message box is a second busy signal, independent of the live registry.
 Delivery is confirmed by a typed prompt with exactly the scheduled text in the session transcript, written after the send attempt.
+An unrecognised live status, transcript format or session store refuses with `app_version_unsupported` before anything is typed, and `checkCompatibility()` probes all three and the label catalogue.
 Usage limits are inferred from Claude Desktop's plan-usage samples, without a reset time.
 Chat conversations are not supported; [desktop-harnesses.md](desktop-harnesses.md) explains why and lists every detail.
 

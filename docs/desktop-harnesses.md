@@ -144,23 +144,56 @@ Discovery and evidence come from local files, read through `lib/harnesses/claude
 | --- | --- |
 | Sessions, titles, folders, archive state | `~/Library/Application Support/Claude/claude-code-sessions/<account>/<org>/local_<uuid>.json` |
 | User activity and delivery evidence | The session's Claude Code transcript, `~/.claude/projects/<encoded cwd>/<cliSessionId>.jsonl` |
-| Busy and waiting-for-input state | The live registry `~/.claude/sessions/<pid>.json`, status `busy`, `waiting` or `blocked` |
+| Busy and waiting-for-input state | The live registry `~/.claude/sessions/<pid>.json`, status `busy` or `shell` (working) and `waiting` or `blocked` (waiting), and a Stop button near the message box |
 | Completion and usage-limit outcomes | Transcript records after the delivered prompt |
 | Usage limits before sending | `plan-usage-history.json` samples under 20 minutes old, as inferred state without a reset time |
 
-Busy and waiting-for-input state come only from the registry status, and an unknown status never blocks.
+Busy and waiting-for-input state come from the registry status.
+Claude Code 2.1.286 knows the statuses `busy`, `shell`, `idle` and `waiting`, and its own interface shows `shell`, a running shell command, as working.
+A process that started less than 30 seconds ago and has not reported a status yet counts as working.
 The job service refuses a busy session with `conversation_busy` and a waiting one with `awaiting_input`, and the harness checks the registry again right before typing and before pressing send.
+A Stop button near the message box is a second, independent busy signal, so a session where Claude is responding is refused even if the registry says otherwise.
 
 Delivery is confirmed when the transcript gains a typed prompt with exactly the scheduled text, written no earlier than five seconds before the send attempt.
 The text match is the evidence because the app assigns the prompt's own ID; the same text typed by hand in the same session at the same moment would also match.
 The job service cancels a schedule when new user activity appears before it runs, which keeps that window small.
 A session open in a Claude Code process other than Claude Desktop, such as `claude --resume` in a terminal, is refused, because Claude Desktop would become a second writer.
 A live process that does not report its entrypoint counts as another process too.
-The Claude Code harness in turn hides and refuses every session Claude Desktop owns.
+The Claude Code harness in turn hides and refuses every session Claude Desktop owns, whether the store lists it or its transcript records name Claude Desktop as their entrypoint.
 A session whose working folder no longer exists is canceled, because Claude Desktop cannot continue it either.
 
 The labels are localised by reading Claude Desktop's own message catalogue, `Contents/Resources/ion-dist/i18n/<locale>.json` inside the app wherever it is installed, for the language of the content area.
-The message IDs used are `iWKE8shLIt` (`Prompt`), `uxkiTeN6WU` (`Write your prompt to Claude`) and `9WRlF4R2gm` (`Send`), and English is always included as a fallback.
+The message IDs used are `iWKE8shLIt` (`Prompt`), `uxkiTeN6WU` (`Write your prompt to Claude`), `9WRlF4R2gm` (`Send`), and `9PawskFnw4` and `RANC4/S/j1` (both `Stop response`), and English is always included as a fallback.
+The two stop IDs are the accessible labels of the stop buttons beside the app's message boxes, as the app's code shows.
+`Queue` is not used as a busy signal, because the same message also labels unrelated parts of the app.
+
+### When Claude Desktop or Claude Code changes
+
+Claude Desktop runs its own copy of Claude Code, so an update of either can change the files the harness reads.
+Each change below refuses before anything is typed with `app_version_unsupported` and its contact point, and is logged and shown like any other app change.
+
+- `live_registry`: a live entry of the session with a status Claude Code 2.1.286 does not know, or with none after the 30-second startup grace, refuses the send.
+  A live entry that names no session could hold any session, so it refuses every send.
+  When several processes hold one session, the entry that refuses most firmly wins.
+- `transcript`: a transcript whose newest message is recorded under an unknown record type, whose recent user and assistant records mostly lack `message.role`, `message.content` or a parseable `timestamp`, whose records mostly have no `type`, or which has 100 or more records and no message, refuses the send.
+  Otherwise the check for user activity since scheduling would silently stop working.
+- `session_store`: session files found only at another folder depth, no usable session at all, or a clear majority of files without `sessionId`, `cliSessionId` or `cwd` fail listing and sending.
+  A scheduled session whose whole store has disappeared fails the same way instead of being canceled as gone.
+  A missing store only means there are no Code sessions, and a single odd file or a session created moments ago is skipped.
+
+`checkCompatibility()` adds four read-only probes from `lib/harnesses/claude-desktop-probes.js`:
+
+- the session store, in quick and full checks;
+- the live registry, in quick and full checks, which also compares it with the process table: when interactive Claude Code processes have run for over a minute and none has a registry entry, the registry moved;
+- the head and tail of the three most recently active sessions' transcripts, in full checks;
+- the English label catalogue inside the app, in full checks, where a control none of whose message IDs resolve is a `label_catalogue` problem, because other interface languages would silently lose their labels.
+
+The probe of the process table reads only process IDs, ages and flags, and leaves out headless runs (`-p` or `--print`) and this app's own children, because they need not register.
+A missing registry with nothing running, a missing or empty session store, and sessions without transcripts are unchecked rather than problems.
+
+The thresholds were calibrated read-only on 2026-10-01 against the files on the development Mac, without reading message contents into any output.
+All 666 transcripts, 79 of them top-level, pass the format check; sessions without any message had at most 11 records, and no run of records without a message was longer than 26.
+All 16 Code session files parse, the transcript `entrypoint` markers and the store agree on all 12 Desktop sessions with transcripts, every live registry entry had a known status and an entrypoint, and every composer, send and stop message ID resolves in the installed app's English catalogue.
 
 ## ChatGPT desktop app, Codex threads (`codex-desktop`)
 
