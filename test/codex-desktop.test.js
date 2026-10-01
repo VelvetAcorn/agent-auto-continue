@@ -22,7 +22,7 @@ function fakeReader() {
   const createReader = ({ executable }) => {
     state.executables.push(executable);
     return {
-      listThreads: async () => state.threads,
+      listThreads: async ({ archived = false } = {}) => state.threads.filter((item) => Boolean(item.archived) === archived),
       readThread: async (id) => { const found = state.threads.find((item) => item.id === id); if (!found) throw Object.assign(new Error('missing'), { code: 'conversation_not_found' }); return found; },
       recentTurns: async (id) => state.turns.get(id) || [],
       rateLimits: async () => state.limits,
@@ -140,4 +140,19 @@ test('an undated earlier turn with the same text does not make an unproven send 
   // The press is reported, but the app never records the message.
   fake.state.faults.submit = () => ({ ok: true, pressed: true });
   await assert.rejects(adapter.submitTurn(turn(), { threadId: THREAD, name: 'Update live Ko-fi account' }), (error) => error.code === 'timeout' && error.deliveryUncertain === true);
+});
+
+test('the title must be unique across every thread the app could show, not only unarchived desktop ones', async () => {
+  const { adapter, reader } = setup();
+  const state = await adapter.inspectConversation({ conversationId: THREAD });
+  const name = 'Update live Ko-fi account';
+  for (const twin of [
+    { id: '01a0f499-0000-7000-8000-000000000003', name, originator: 'codex_cli_rs', source: 'cli', cwd: '/work/app', updatedAt: 1790806000 },
+    { id: '01a0f499-0000-7000-8000-000000000004', name, originator: 'Codex Desktop', source: 'vscode', cwd: '/work/app', updatedAt: 1790806000, archived: true }
+  ]) {
+    reader.state.threads.push(twin);
+    await assert.rejects(adapter.prepareTurn(turn(), state), /same name/, `${twin.source}${twin.archived ? ' archived' : ''} twin`);
+    reader.state.threads.pop();
+  }
+  assert.equal((await adapter.prepareTurn(turn(), state)).plan.name, name);
 });
