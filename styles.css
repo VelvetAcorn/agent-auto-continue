@@ -284,7 +284,7 @@ label.field{display:block;font-size:11px;font-weight:600;margin:10px 0 6px}
 .star-text span{display:block}
 
 /* ---------- Toast and motion ---------- */
-#toast{position:fixed;bottom:14px;left:50%;transform:translateX(-50%);max-width:calc(100vw - 28px);padding:10px 14px;background:var(--surface);border:2px solid var(--outline);border-radius:11px;box-shadow:3px 3px var(--shadow);z-index:20;font-size:12px;line-height:1.6}
+#toast{position:fixed;bottom:14px;left:50%;transform:translateX(-50%);width:max-content;max-width:calc(100vw - 28px);padding:10px 14px;background:var(--surface);border:2px solid var(--outline);border-radius:11px;box-shadow:3px 3px var(--shadow);z-index:20;font-size:12px;line-height:1.6}
 #toast button{font-size:11px;margin-left:8px}
 #toast[hidden],[hidden]{display:none!important}
 .motion-off *{animation:none!important;transition:none!important}
