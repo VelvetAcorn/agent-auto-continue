@@ -21,10 +21,7 @@ jobs:
       - run: npm ci
       - run: npm test
       - name: Check production JavaScript
-        run: |
-          node --check main.js
-          node --check preload.js
-          for file in lib/*.js renderer/*.js; do node --check "$file"; done
+        run: npm run check:syntax
   package:
     name: Package macOS app
     runs-on: macos-latest
@@ -36,6 +33,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run test:electron
+      # Packaging only. The build scripts pass --publish never, so CI never tries to publish a release.
       - run: npm run build
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'

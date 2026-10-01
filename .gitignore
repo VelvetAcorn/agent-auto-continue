@@ -1,6 +1,11 @@
 .DS_Store
 *.png
+# Generated app and tray icons are committed on purpose.
 !assets/*.png
+# Design review evidence and prototype screenshots are committed on purpose.
+!docs/ui-review/screens/*.png
+!design/mockups/screenshots/*.png
+!design/mockups/fable-pass/shots/*.png
 dist/
 node_modules/
 .npm/
@@ -8,6 +13,7 @@ main.npm.js
 *.log
 config.json
 jobs.json
+remote-control.json
 
 # Compiled legacy Swift helpers
 .build/

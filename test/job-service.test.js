@@ -38,7 +38,7 @@ test('create snapshots baseline and buffer; editing preserves original baseline 
   assert.equal(edited.commandId, job.commandId);
   assert.equal(edited.messageId, job.messageId);
   assert.equal(edited.activitySince, job.activitySince);
-  assert.equal(h.stored.version, 2);
+  assert.equal(h.stored.version, 4);
 });
 
 test('obsolete edited and canceled timer callbacks never dispatch', async () => {
@@ -112,6 +112,11 @@ test('crash recovery reconciles message presence without any new POST', async ()
   h.setThread({ ...thread(), messages: [{ id: 'message', role: 'user', createdAt: iso(0) }] });
   await h.service.reconcile('job');
   assert.equal(h.service.get('job').status, 'sent');
+  // The reconciled turn cannot be matched to a T3 turn, so the first poll closes it as unknown.
+  assert.equal(h.service.get('job').turn.state, 'running');
+  await h.service.pollTurns();
+  assert.equal(h.service.get('job').turn.state, 'unknown');
+  assert.deepEqual(h.service.activeWork(), []);
   assert.equal(h.calls, 0);
 });
 
@@ -183,7 +188,7 @@ test('confirmed missing and archived threads cancel without dispatch; settled al
 
 
 test('migration refuses unknown versions and invalid persisted records instead of dropping data', () => {
-  assert.throws(() => migrateJobs({ version: 3, jobs: [legacy()] }), /unsupported format/);
+  assert.throws(() => migrateJobs({ version: 5, jobs: [legacy()] }), /unsupported format/);
   assert.throws(() => migrateJobs([legacy(), { id: 'broken' }]), /invalid records/);
 });
 
@@ -240,4 +245,34 @@ test('confirmed pre-dispatch failures remain eligible for a draft after restart'
   const restored = harness(h.stored);
   assert.equal(restored.service.scheduleAgain('job').message, 'Continue');
   assert.equal(h.calls + restored.calls, 0);
+});
+
+test('a delivery confirmed long after its send is not tracked as a running turn, so it never keeps the Mac awake', async () => {
+  const now = Date.parse('2026-10-01T09:00:00.000Z');
+  const job = { id: 'old', harness: 't3', commandId: 'c', messageId: 'm', threadId: 'thread', message: 'Continue', scheduleAt: '2026-08-01T10:00:00.000Z', createdAt: '2026-08-01T09:00:00.000Z', timeZone: 'UTC', bufferSeconds: 5,
+    status: 'sent', deliveryCertainty: 'delivered', dispatchAttemptedAt: '2026-08-01T10:00:05.000Z', confirmedAt: '2026-10-01T08:59:00.000Z', lastReconciledAt: '2026-10-01T08:59:00.000Z',
+    turn: { state: 'running', turnId: null, completedAt: null, error: null, usageLimit: null, updatedAt: '2026-10-01T08:59:00.000Z' } };
+  const recent = { ...job, id: 'recent', dispatchAttemptedAt: '2026-10-01T08:30:00.000Z', dispatchedAt: '2026-10-01T08:30:01.000Z' };
+  const service = new JobService({ jobs: { version: 4, jobs: [job, recent] }, api: { fetchSnapshot: async () => ({ threads: [], projects: [] }), fetchThread: async () => ({ id: 'thread', messages: [] }) }, now: () => now });
+  assert.deepEqual(service.activeWork().map((work) => [work.jobId, work.phase]), [['recent', 'running']]);
+  await service.pollTurns();
+  assert.equal(service.get('old').turn.state, 'unknown');
+  assert.equal(service.get('old').turn.error.code, 'tracking_expired');
+  assert.notEqual(service.get('recent').turn.error?.code, 'tracking_expired', 'a recent send is still followed through the harness');
+});
+
+test('schedule times are judged by the service clock, not the wall clock', async () => {
+  const at = (iso) => {
+    const h = harness();
+    h.service.now = () => Date.parse(iso);
+    return h.service;
+  };
+  // A clock behind the wall clock accepts a time that is already past in real life.
+  const early = await at('2020-01-01T00:00:00Z').create({ ...input(), whenISO: '2020-01-01T00:01:00Z' });
+  assert.equal(early.scheduleAt, '2020-01-01T00:01:00.000Z');
+  // A clock ahead of it refuses a time that is still to come in real life, when creating and when editing.
+  const late = at('2100-01-01T00:00:00Z');
+  await assert.rejects(late.create({ ...input(), whenISO: '2099-12-31T23:59:00Z' }), /must be in the future/);
+  const job = await late.create({ ...input(), whenISO: '2100-01-01T00:05:00Z' });
+  assert.throws(() => late.edit(job.id, { ...input(), whenISO: '2099-12-31T23:59:00Z' }), /must be in the future/);
 });

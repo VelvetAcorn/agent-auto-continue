@@ -4,35 +4,7 @@ const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const fs = require('node:fs');
 const path = require('node:path');
-
-function appHarness(initialJobs = [], { ownsInstance = true, rawJobs } = {}) {
-  const handlers = {}, files = new Map(), events = [], windows = [];
-  let trayMenu, failWrite = false;
-  let ready, response = () => new Response('<!doctype html><html>test-secret</html>', { headers: { 'content-type': 'text/html' } });
-  files.set('/fixture/jobs.json', rawJobs ?? JSON.stringify(initialJobs));
-  class Window {
-    static getAllWindows() { return windows; }
-    constructor(options) {
-      this.options = options; this.listeners = {}; this.loaded = false; windows.push(this);
-      this.webContents = { send: (...args) => events.push(args), once: (name, callback) => { this.listeners[name] = callback; } };
-    }
-    finishLoad() { this.loaded = true; this.listeners['did-finish-load']?.(); }
-    removeMenu() {} loadFile(file) { this.file = file; } on() {} focus() {} isDestroyed() { return false; }
-  }
-  const electron = {
-    app: { requestSingleInstanceLock: () => ownsInstance, quit() {}, on() {}, whenReady: () => ({ then: fn => { ready = fn; } }), getPath: () => '/fixture', getLoginItemSettings: () => ({ openAtLogin: false }) },
-    ipcMain: { handle: (name, fn) => { handlers[name] = fn; } }, BrowserWindow: Window,
-    Menu: { buildFromTemplate: value => value }, Notification: { isSupported: () => false },
-    Tray: class { setToolTip() {} on() {} setContextMenu(menu) { trayMenu = menu; } },
-    nativeImage: { createFromPath: () => ({ setTemplateImage() {} }) }, powerMonitor: { on() {} }
-  };
-  const fakeFs = { readFileSync: name => { if (!files.has(name)) throw Object.assign(new Error('missing'), { code: 'ENOENT' }); return files.get(name); }, mkdirSync() {}, writeFileSync: (name, value) => { if (failWrite) throw new Error('Disk full'); files.set(name, value); }, renameSync: (from, to) => { files.set(to, files.get(from)); files.delete(from); } };
-  const apiModule = require('../lib/api-client');
-  const context = { require: name => name === 'electron' ? electron : name === 'node:fs' ? fakeFs : name === 'node-schedule' ? { scheduleJob: () => ({ cancel() {} }) } : name === './lib/api-client' ? { ...apiModule, createApiClient: options => apiModule.createApiClient({ ...options, fetchImpl: (...args) => response(...args) }) } : name.startsWith('./lib/') ? require(path.join(__dirname, '..', name)) : require(name), __dirname: path.join(__dirname, '..'), process: { env: { T3_TOKEN: 'test-secret' }, pid: 123 }, console, Buffer };
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8'), context);
-  ready();
-  return { invoke: (name, ...args) => handlers[name]({}, ...args), setResponse: fn => { response = fn; }, files, events, windows, setWriteFailure: value => { failWrite = value; }, get trayMenu() { return trayMenu; } };
-}
+const { appHarness } = require('./app-harness');
 
 test('dashboard IPC shows friendly HTML error and acknowledgment clears historical alert after restart', async () => {
   const job = { id: 'job', commandId: 'command', messageId: 'message', threadId: 'thread', message: 'Continue', scheduleAt: '2026-01-01T00:00:00Z', status: 'failed', note: 'Unexpected token \'<\', "<!doctype "... is not valid JSON' };
@@ -77,6 +49,7 @@ test('preload exposes narrow job events with working listener cleanup', () => {
   assert.equal(calls, 1);
   assert.equal(listeners.size, 0);
   assert.equal(bridge.listJobs({ view: 'history' })[0], 'jobs:list');
+  assert.deepEqual(bridge.openPermissionSettings('https://evil.example'), ['harnesses:open-permission-settings'], 'The permission bridge forwards no URL');
 });
 
 
@@ -133,7 +106,7 @@ test('settings persistence failure leaves active configuration unchanged', () =>
 
 
 test('corrupt and future-version schedule files are preserved and block scheduling visibly', () => {
-  for (const rawJobs of ['{"jobs":', JSON.stringify({ version: 3, jobs: [] }), JSON.stringify([{ id: 'invalid-record' }])]) {
+  for (const rawJobs of ['{"jobs":', JSON.stringify({ version: 5, jobs: [] }), JSON.stringify([{ id: 'invalid-record' }])]) {
     const app = appHarness([], { rawJobs });
     assert.equal(app.files.get('/fixture/jobs.json'), rawJobs);
     const state = app.invoke('jobs:list');
@@ -143,4 +116,195 @@ test('corrupt and future-version schedule files are preserved and block scheduli
     assert.equal(app.files.get('/fixture/jobs.json'), rawJobs);
     assert.equal(app.windows.length, 1, 'The recovery message remains accessible in the app');
   }
+});
+
+test('the production registry is described over IPC without touching any harness', () => {
+  const app = appHarness();
+  const { harnesses, defaultHarness } = app.invoke('harnesses:list');
+  assert.equal(defaultHarness, 't3');
+  assert.equal(harnesses.map((item) => item.id).join(), 't3,opencode,claude-code,claude-desktop,codex,codex-desktop');
+  for (const item of harnesses) {
+    assert.equal(item.capabilities.requiresUnlockedScreen, item.kind === 'desktop-app', item.id);
+    assert.equal(typeof item.capabilities.canDetectCompletion, 'boolean');
+  }
+  assert.equal(harnesses.find((item) => item.id === 'opencode').settings.map((setting) => setting.key).join(), 'port,password');
+});
+
+test('the permission IPC opens only the fixed Accessibility pane, whatever the renderer passes', async () => {
+  const { ACCESSIBILITY_SETTINGS_URL } = require('../lib/desktop/mac-automation');
+  const app = appHarness();
+  await app.invoke('harnesses:open-permission-settings');
+  await app.invoke('harnesses:open-permission-settings', 'https://evil.example', { url: 'file:///etc/passwd' });
+  assert.deepEqual(app.opened, [ACCESSIBILITY_SETTINGS_URL, ACCESSIBILITY_SETTINGS_URL]);
+  assert.equal(ACCESSIBILITY_SETTINGS_URL, 'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility');
+});
+
+test('conversations, schedules and connection checks are routed to the chosen harness', async () => {
+  const { createFakeHarness } = require('../tools/fake-harness.cjs');
+  const fake = createFakeHarness({ conversations: [{ id: 'conv-1', title: 'Fake conversation', projectName: 'Repo' }] });
+  const app = appHarness([], { extraHarnesses: () => [fake.adapter] });
+  const listed = await app.invoke('dashboard:threads', { harness: 'fake', showSettled: true });
+  assert.equal(listed.online, true);
+  assert.equal(JSON.stringify(listed.threads.map((thread) => [thread.harness, thread.id])), JSON.stringify([['fake', 'conv-1']]));
+  assert.equal((await app.invoke('connection:check', 'fake')).online, true);
+  fake.state.connectionError = new (require('../lib/harnesses/errors').HarnessError)('connection_refused', 'Fake is not running.');
+  assert.equal((await app.invoke('connection:check', 'fake')).error.code, 'connection_refused');
+  const unknown = await app.invoke('dashboard:threads', { harness: 'nope' });
+  assert.equal(unknown.online, false);
+  assert.equal(unknown.errorInfo.code, 'unknown_harness');
+  const job = await app.invoke('schedule:create', { harness: 'fake', threadId: 'conv-1', message: 'Continue', whenISO: '2099-01-01T12:00:00Z', timeZone: 'UTC' });
+  assert.equal(job.harness, 'fake');
+  assert.equal(job.harnessLabel, 'Fake Agent');
+  assert.equal(JSON.parse(app.files.get('/fixture/jobs.json')).version, 4);
+  assert.equal(JSON.parse(app.files.get('/fixture/jobs.json')).jobs[0].harness, 'fake');
+  assert.equal((await app.invoke('harnesses:availability', 'fake')).availability.state, 'available');
+  assert.equal((await app.invoke('harnesses:availability', 't3')).availability.state, 'unknown');
+  app.windows[0].finishLoad();
+  await app.invoke('dashboard:schedule-thread', 'conv-1', 'fake');
+  assert.equal(JSON.stringify(app.events.at(-1)[1]), JSON.stringify({ view: 'composer', threadId: 'conv-1', threadLabel: 'Fake conversation', harness: 'fake' }));
+  assert.equal(fake.state.submitted.length, 0);
+});
+
+test('a desktop app change is checked on scheduling, logged, shown as a risk and copied for a bug report', async () => {
+  const { createFakeHarness } = require('../tools/fake-harness.cjs');
+  const healthy = { appVersion: '2.0', verifiedVersion: '1.0', problems: [], checked: ['app_path', 'composer_label'], unchecked: [] };
+  const fake = createFakeHarness({ id: 'desk', label: 'Desk App', kind: 'desktop-app', compatibility: healthy, conversations: [{ id: 'conv-1', title: 'Secret project plan' }] });
+  const app = appHarness([], { extraHarnesses: () => [fake.adapter] });
+  assert.equal(app.invoke('harnesses:compatibility').length, 0, 'Nothing is checked before it is needed');
+  await assert.rejects(app.invoke('harnesses:check-compatibility', 't3'), /no compatibility check/);
+  fake.state.compatibility = { ...healthy, problems: [{ contactPoint: 'composer_label', message: 'Desk App 2.0 changed how its message box is labelled. Scheduled messages for it may fail until Agent Auto-Continue supports this version.', hint: 'No "Prompt" text area.' }], checked: ['app_path'] };
+  const job = await app.invoke('schedule:create', { harness: 'desk', threadId: 'conv-1', message: 'Continue the secret plan', whenISO: '2099-01-01T12:00:00Z', timeZone: 'UTC' });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(fake.state.calls.filter((call) => call[0] === 'checkCompatibility').map((call) => call[1].depth), ['full'], 'Scheduling checks the app once');
+  const [state] = app.invoke('harnesses:compatibility');
+  assert.deepEqual([state.harness, state.label, state.appVersion, state.ok, state.problems[0].contactPoint], ['desk', 'Desk App', '2.0', false, 'composer_label']);
+  assert.match(app.invoke('jobs:get', job.id).risk.message, /changed how its message box is labelled/);
+  assert.equal(app.invoke('jobs:get', job.id).status, 'pending', 'A risk never cancels a schedule');
+  assert.ok(app.events.some((event) => event[0] === 'compatibility:changed'));
+  assert.equal(JSON.parse(app.files.get('/fixture/compatibility.json')).harnesses.desk.problems[0].contactPoint, 'composer_label');
+  const log = JSON.parse(app.files.get('/fixture/diagnostics.json'));
+  assert.deepEqual(log.entries.map((entry) => [entry.harness, entry.appVersion, entry.contactPoint]), [['desk', '2.0', 'composer_label']]);
+  assert.equal(app.invoke('diagnostics:copy').ok, true);
+  assert.match(app.clipboard[0], /Agent Auto-Continue diagnostics[\s\S]*- desk: Desk App 2\.0, verified 1\.0[\s\S]*composer_label/);
+  assert.doesNotMatch(app.clipboard[0] + app.files.get('/fixture/diagnostics.json'), /secret|Secret/, 'Neither message text nor titles reach diagnostics');
+  fake.state.compatibility = healthy;
+  assert.equal((await app.invoke('harnesses:check-compatibility', 'desk'))[0].ok, true);
+  assert.equal(app.invoke('jobs:get', job.id).risk, null);
+});
+
+test('harness settings are validated, persisted and never returned in clear text', () => {
+  const app = appHarness([], { env: { T3_TOKEN: 'test-secret', OPENCODE_SERVER_PASSWORD: '' } });
+  app.invoke('settings:save', { httpPort: 3773, bufferSeconds: 5, harnesses: { opencode: { port: 4555, password: 'oc-secret' }, 'claude-code': { executable: '/opt/claude' } } });
+  const saved = JSON.parse(app.files.get('/fixture/config.json'));
+  assert.equal(JSON.stringify(saved.harnesses), JSON.stringify({ opencode: { port: 4555, password: 'oc-secret' }, 'claude-code': { executable: '/opt/claude' } }));
+  const shown = app.invoke('settings:get');
+  assert.equal(JSON.stringify(shown.harnesses.opencode.password), JSON.stringify({ hasStoredValue: true, usingEnvironment: false }));
+  assert.equal(shown.harnesses.opencode.port.value, 4555);
+  assert.doesNotMatch(JSON.stringify(shown), /oc-secret/);
+  assert.throws(() => app.invoke('settings:save', { httpPort: 3773, bufferSeconds: 5, harnesses: { opencode: { port: 70000 } } }), /port/);
+  assert.throws(() => app.invoke('settings:save', { httpPort: 3773, bufferSeconds: 5, harnesses: { unknown: {} } }), /Unknown/);
+  app.invoke('settings:save', { httpPort: 3773, bufferSeconds: 5, harnesses: { opencode: { password: '' } } });
+  assert.equal(JSON.parse(app.files.get('/fixture/config.json')).harnesses.opencode.password, 'oc-secret', 'A blank secret keeps the stored value');
+});
+
+test('continuations are created, stopped and described over IPC and the tray', async () => {
+  const { createFakeHarness } = require('../tools/fake-harness.cjs');
+  const fake = createFakeHarness({ conversations: [{ id: 'conv-1', title: 'Fake conversation' }] });
+  const app = appHarness([], { extraHarnesses: () => [fake.adapter] });
+  const described = app.invoke('harnesses:list').harnesses;
+  assert.equal(described.find((item) => item.id === 't3').automation.whenAvailable.supported, false);
+  assert.match(described.find((item) => item.id === 't3').automation.whenAvailable.reason, /T3 Code does not report usage limits/);
+  assert.equal(described.find((item) => item.id === 'fake').automation.multipleTurns.supported, true);
+  await assert.rejects(async () => app.invoke('schedule:create', { harness: 't3', threadId: 'thread', message: 'Continue', timeZone: 'UTC', trigger: 'available' }), /does not report usage limits/);
+  fake.state.availability = { state: 'limited', resetsAt: '2099-01-01T00:00:00Z', source: 'reported' };
+  const first = await app.invoke('schedule:create', { harness: 'fake', threadId: 'conv-1', message: 'Continue', timeZone: 'UTC', trigger: 'available', continuous: true });
+  const second = await app.invoke('schedule:create', { harness: 'fake', threadId: 'conv-1', message: 'Continue', timeZone: 'UTC', trigger: 'time', whenISO: '2099-01-01T12:00:00Z', turnLimit: 4 });
+  assert.equal(first.automation.unlimited, true);
+  assert.equal(second.automation.limit, 4);
+  const settle = () => new Promise((resolve) => setImmediate(resolve));
+  const stopItem = () => app.trayMenu.find((item) => String(item.label).startsWith('Stop all continuations'));
+  await settle();
+  assert.equal(stopItem().label, 'Stop all continuations (2)');
+  const perJob = app.trayMenu.find((item) => String(item.label).startsWith('Scheduled messages')).submenu;
+  assert.ok(perJob.every((item) => item.submenu.some((entry) => entry.label === 'Stop continuing')));
+  assert.equal(app.invoke('jobs:stop', first.id).automation.state, 'stopped');
+  await settle();
+  assert.equal(stopItem().label, 'Stop all continuations (1)');
+  stopItem().click();
+  assert.equal(app.invoke('jobs:get', second.id).automation.state, 'stopped');
+  await settle();
+  assert.equal(stopItem(), undefined);
+  assert.equal(JSON.stringify(app.invoke('jobs:stop-all')), JSON.stringify({ stopped: [] }));
+  assert.throws(() => app.invoke('jobs:resume', first.id), /Only paused/);
+  assert.equal(fake.state.submitted.length, 0);
+});
+
+
+test('paused continuations appear per schedule in the tray with their state, Resume when allowed, and Stop', async () => {
+  const { createFakeHarness } = require('../tools/fake-harness.cjs');
+  const fake = createFakeHarness({ conversations: [{ id: 'conv-1', title: 'Fake conversation' }] });
+  const chain = (reasonCode, reason) => ({ limit: null, state: 'paused', reasonCode, reason, changedAt: '2026-10-01T09:00:00Z', previousTurns: 0, history: [] });
+  const base = { harness: 'fake', threadId: 'conv-1', message: 'Keep going', scheduleAt: '2026-10-01T08:00:00Z', createdAt: '2026-10-01T08:00:00Z', timeZone: 'UTC', bufferSeconds: 5, trigger: 'available', waitReason: 'availability' };
+  const jobs = [
+    { ...base, id: 'paused', commandId: 'c1', messageId: 'm1', status: 'pending', deliveryCertainty: 'not-delivered', chain: chain('user_activity', 'New user activity appeared in the session. Resume to keep continuing.') },
+    { ...base, id: 'uncertain', commandId: 'c2', messageId: 'm2', status: 'unconfirmed', deliveryCertainty: 'unknown', dispatchAttemptedAt: '2026-10-01T08:00:05Z', chain: chain('delivery_unconfirmed', 'Check delivery before resuming.') }
+  ];
+  const app = appHarness([], { rawJobs: JSON.stringify({ version: 4, jobs }), extraHarnesses: () => [fake.adapter] });
+  const settle = () => new Promise((resolve) => setImmediate(resolve));
+  await settle();
+  const section = () => app.trayMenu.find((item) => String(item.label).startsWith('Scheduled messages'));
+  const entry = (id) => section().submenu.find((item) => item.submenu.some((child) => child.id === `view:${id}`));
+  assert.equal(section().label, 'Scheduled messages (2)');
+  for (const id of ['paused', 'uncertain']) {
+    assert.match(entry(id).label, /Keep going · Turn 1 · continuous · paused/);
+    assert.ok(entry(id).submenu.some((child) => child.label === 'Stop continuing'));
+  }
+  const resume = (id) => entry(id).submenu.find((child) => child.label === 'Resume continuation');
+  assert.equal(resume('paused').enabled, true);
+  assert.equal(resume('uncertain').enabled, false, 'Resume waits for Check delivery');
+  resume('paused').click();
+  assert.equal(app.invoke('jobs:get', 'paused').automation.state, 'active');
+  await settle();
+  assert.equal(entry('paused').submenu.some((child) => child.label === 'Resume continuation'), false, 'A running chain offers Stop only');
+  entry('uncertain').submenu.find((child) => child.label === 'Stop continuing').click();
+  assert.equal(app.invoke('jobs:get', 'uncertain').automation.state, 'stopped');
+  await settle();
+  assert.equal(entry('uncertain'), undefined);
+  assert.equal(fake.state.submitted.length, 0);
+});
+
+test('keep-awake IPC is opt-in, persists settings, shows the tray state and releases on stop and quit', async () => {
+  const pending = { id: 'pending', commandId: 'command', messageId: 'message', threadId: 'thread', threadTitle: 'Night shift', message: 'Continue', scheduleAt: new Date(Date.now() + 3_600_000).toISOString(), status: 'pending', bufferSeconds: 5 };
+  const app = appHarness([pending]);
+  app.setResponse(async () => new Response(JSON.stringify({ threads: [], projects: [] }), { headers: { 'content-type': 'application/json' } }));
+  assert.equal(app.invoke('keep-awake:get').state, 'off');
+  assert.equal(app.blockers.size, 0, 'Nothing is held until the user opts in');
+  const settings = { enabled: true, keepDisplayOn: false, powerSource: 'any', batteryFloorPercent: 20, maxHours: 8, includeRunningAgents: false };
+  assert.throws(() => app.invoke('keep-awake:configure', { ...settings, maxHours: 0 }), /Time limit/);
+  const armed = app.invoke('keep-awake:configure', settings);
+  assert.equal(armed.state, 'armed');
+  assert.deepEqual(armed.tasks.map((task) => [task.id, task.label, task.state]), [['job:pending', 'Night shift', 'waiting']]);
+  assert.deepEqual([...app.blockers.values()], ['prevent-app-suspension']);
+  assert.deepEqual(JSON.parse(app.files.get('/fixture/config.json')).keepAwake, settings);
+  assert.ok(app.events.some(([channel, snapshot]) => channel === 'keep-awake:changed' && snapshot.state === 'armed'));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(app.trayTooltip, 'T3 Code Auto-Continue · Keeping Mac awake');
+  assert.ok(app.trayMenu.find((item) => item.label === 'Keeping Mac awake · 1 task'));
+  app.trayMenu.find((item) => item.label === 'Let Mac sleep now').click();
+  assert.equal(app.invoke('keep-awake:get').state, 'ended');
+  assert.equal(app.blockers.size, 0);
+  assert.equal(app.invoke('keep-awake:resume').state, 'armed');
+  assert.equal(app.blockers.size, 1);
+  app.invoke('jobs:cancel', 'pending');
+  assert.equal(app.invoke('keep-awake:get').state, 'releasing', 'Canceling the last task starts the release grace');
+  assert.equal(app.invoke('keep-awake:stop').state, 'off');
+  assert.equal(app.blockers.size, 0);
+
+  const restarted = appHarness([{ ...pending, id: 'second' }], { config: { httpPort: 3773, bufferSeconds: 5, keepAwake: settings } });
+  assert.equal(restarted.invoke('keep-awake:get').state, 'armed', 'A saved opt-in resumes after restart');
+  assert.equal(restarted.blockers.size, 1);
+  restarted.powerEvents.suspend();
+  await restarted.powerEvents.resume();
+  await restarted.emit('will-quit');
+  assert.equal(restarted.blockers.size, 0, 'Quitting releases the assertion');
 });

@@ -1,23 +1,29 @@
 {
   "name": "t3code-auto-continue",
   "version": "2.0.0",
-  "description": "Menu-bar helper that schedules a 'Continue' turn for T3 Code threads",
+  "description": "Menu-bar helper that schedules a 'Continue' turn for T3 Code, OpenCode, Claude Code and Codex conversations",
   "main": "main.js",
   "author": "T3 Code users",
   "license": "MIT",
   "scripts": {
-    "start": "electron .",
-    "build": "electron-builder --mac zip",
-    "build:dmg": "electron-builder --mac dmg",
-    "build:all": "electron-builder",
+    "start": "env -u ELECTRON_RUN_AS_NODE electron .",
+    "build": "electron-builder --mac zip --publish never",
+    "build:dmg": "electron-builder --mac dmg --publish never",
+    "build:all": "electron-builder --publish never",
     "test": "node --test",
-    "test:electron": "electron tools/electron-smoke.cjs",
-    "icons": "electron tools/build-icons.cjs"
+    "check:syntax": "node tools/check-syntax.cjs",
+    "test:electron": "env -u ELECTRON_RUN_AS_NODE electron tools/electron-smoke.cjs && node tools/keep-awake-e2e.cjs",
+    "icons": "env -u ELECTRON_RUN_AS_NODE electron tools/build-icons.cjs"
   },
   "dependencies": {
-    "node-schedule": "^2.1.1"
+    "@modelcontextprotocol/server": "^2.2.0",
+    "node-schedule": "^2.1.1",
+    "qrcode-generator": "^2.0.4",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@modelcontextprotocol/client": "^2.2.0",
+    "@modelcontextprotocol/sdk": "^1.31.0",
     "electron": "^33.2.0",
     "electron-builder": "^24.13.3"
   },
@@ -38,7 +44,7 @@
       "settings.html",
       "dashboard.html",
       "styles.css",
-      "assets/trayTemplate*.png",
+      "assets/tray*Template*.png",
       "lib/**/*.js",
       "renderer/**/*.js",
       "package.json"

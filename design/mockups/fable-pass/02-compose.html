@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sketch 02 - New handoff</title>
+<link rel="stylesheet" href="sketch.css">
+</head>
+<body>
+<div class="sketchbar"><span>Sketch 02 of 06 - New handoff. Three questions (which, when, how far) and one plain-language plan. Click the segmented controls. <a href="index.html">All sketches</a></span><button type="button" data-toggle-theme>Bone Outline</button></div>
+
+<header class="topbar">
+  <nav aria-label="Main navigation">
+    <button type="button">Board<span class="nav-count">5</span></button>
+    <button type="button">History<span class="nav-count">1</span></button>
+    <button type="button">Agents</button>
+    <button type="button">Settings</button>
+  </nav>
+  <div class="strip"><span class="agents"><i>T3</i><i class="limited">CC</i><i>OC</i><i class="offline">CX</i></span><span class="sep"></span><span class="moon">&#9790; On shift</span></div>
+</header>
+
+<main class="content">
+  <button type="button" class="ghost back">&larr; Back to board</button>
+  <div class="heading"><h1>New handoff</h1></div>
+
+  <section class="card panel" aria-label="Handoff composer">
+    <form onsubmit="return false">
+
+      <label class="field" style="margin-top:0">Which thread</label>
+      <button type="button" class="picker">
+        <span class="agent"><i class="limited">CC</i></span>
+        <span class="title">Write release notes for 2.1<small>Claude Code, quilla, updated 18 min ago</small></span>
+        <span aria-hidden="true">&#8964;</span>
+      </button>
+      <div class="inline-avail">
+        <span class="avail limited">Claude Code is limited, resets at 03:00 <small>(read from Claude Code, checked 2 min ago)</small></span>
+        <button type="button" class="ghost" style="font-size:11px;padding:4px 8px">Check again</button>
+      </div>
+      <p class="note" style="margin-top:10px">The picker opens a full-height list grouped by agent, most recent first, with the same availability dot. Agents that cannot continue this kind of thread are greyed with a reason.</p>
+
+      <label class="field" for="message">Message</label>
+      <textarea id="message">Continue</textarea>
+
+      <label class="field">When</label>
+      <div class="seg" role="radiogroup" aria-label="When to start">
+        <button type="button" class="active" data-show="free">When the agent is free</button>
+        <button type="button" data-show="time">At a time</button>
+        <button type="button" data-show="now">Right away</button>
+      </div>
+      <div data-pane="free">
+        <p class="help">Starts as soon as Claude Code reports it is free again. If the reset time cannot be read, this waits and shows "unknown" on the board rather than guessing.</p>
+      </div>
+      <div data-pane="time" hidden>
+        <div class="chips" aria-label="Quick times" style="margin-top:12px"><button type="button">+30 min</button><button type="button">+1 hour</button><button type="button">Tomorrow, 06:00</button><button type="button">After the next reset</button></div>
+        <div class="two"><label class="field">Date, yyyy-mm-dd<input value="2026-10-01"></label><label class="field">Time, 24-hour<input value="06:00"></label></div>
+        <label class="field">Timezone<input value="Europe/London"></label>
+      </div>
+      <div data-pane="now" hidden>
+        <p class="help">Sends immediately, then applies the turn rules below. Use this to hand an already-running thread to the shift before you leave.</p>
+      </div>
+
+      <label class="field">How far</label>
+      <div class="stack">
+        <div class="seg" role="radiogroup" aria-label="Turn limit">
+          <button type="button" data-show="limit">Up to</button>
+          <button type="button" class="active" data-show="done">Until done</button>
+        </div>
+        <div data-pane="limit" hidden><div class="stepper" aria-label="Number of turns"><button type="button" aria-label="Fewer">&minus;</button><input inputmode="numeric" value="1" aria-label="Turns"><button type="button" aria-label="More">+</button></div> <span style="font-size:12px">turns</span></div>
+        <div data-pane="done"><span style="font-size:12px;color:var(--muted)">Keeps continuing while the agent reports progress</span></div>
+      </div>
+      <p class="help">Default is 1 turn. Any whole number works; 0 means never send. "Until done" adds a no-progress guard so it cannot loop forever.</p>
+
+      <details open>
+        <summary style="font-size:12px;font-weight:600">Stop and ask me if</summary>
+        <div class="stops">
+          <label><input type="checkbox" checked disabled> The agent asks a question</label>
+          <label><input type="checkbox" checked disabled> The agent requests permission</label>
+          <label><input type="checkbox" checked disabled> Delivery cannot be confirmed</label>
+          <label><input type="checkbox" checked> 3 turns pass with no visible progress</label>
+          <label><input type="checkbox"> A turn takes longer than 45 minutes</label>
+          <label><input type="checkbox"> The thread is touched by someone else</label>
+        </div>
+        <p class="help">The first three are always on; they are the reasons this app never blindly resends.</p>
+      </details>
+
+      <section class="plan" aria-label="Plan">
+        <p class="lede">When Claude Code is free, around <em>03:00</em>, send "Continue" to <em>Write release notes for 2.1</em> and keep going until Claude Code says it is done. Stop and wait for you if it asks anything.</p>
+        <ul>
+          <li>The shift keeps the Mac awake for this; the screen can lock because Claude Code runs headless.</li>
+          <li>Counts a turn only after delivery is confirmed. Failed or unconfirmed sends never count and never repeat.</li>
+        </ul>
+        <details><summary>Scheduling rules</summary>Your own new message in this thread cancels the handoff. Times stay fixed if the system timezone changes. Missed starts catch up when the app wakes and show how late they were.</details>
+      </section>
+
+      <button type="submit" class="primary full">Hand off</button>
+    </form>
+  </section>
+</main>
+<script src="sketch.js"></script>
+</body>
+</html>

@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sketch 06 - Menu bar icon states and tray menu</title>
+<link rel="stylesheet" href="sketch.css">
+</head>
+<body>
+<div class="sketchbar"><span>Sketch 06 of 06 - Menu bar. The icon answers "is anything happening and does it need me" without opening anything. The menu is short. <a href="index.html">All sketches</a></span><button type="button" data-toggle-theme>Bone Outline</button></div>
+
+<main class="content" style="max-width:1000px">
+  <div class="heading"><h1>Menu bar</h1></div>
+
+  <h3>Icon states (template image, monochrome, 18 px)</h3>
+  <div class="icons">
+    <figure><div class="box"><svg viewBox="0 0 18 18"><path fill="currentColor" d="M2 3h14v3H2zM4 8h10v3H4zM6 13h6v3H6z"/></svg></div>Idle, nothing waiting</figure>
+    <figure><div class="box"><svg viewBox="0 0 18 18"><path fill="currentColor" d="M2 3h14v3H2zM4 8h10v3H4zM6 13h6v3H6z"/><circle cx="14.5" cy="13.5" r="3.5" fill="var(--surface)" stroke="currentColor" stroke-width="1.5"/><path d="M14.5 11.5v2h1.5" stroke="currentColor" stroke-width="1.2" fill="none"/></svg></div>Waiting for a time or a reset</figure>
+    <figure><div class="box"><svg viewBox="0 0 18 18"><path fill="currentColor" d="M2 3h14v3H2zM4 8h10v3H4zM6 13h6v3H6z"/><path d="M11 12l3 2-3 2z" fill="currentColor" stroke="var(--surface)" stroke-width="1"/></svg></div>A turn is running</figure>
+    <figure><div class="box"><svg viewBox="0 0 18 18"><path fill="currentColor" d="M2 3h14v3H2zM4 8h10v3H4zM6 13h6v3H6z"/><path d="M12.5 9a4 4 0 1 0 4 4 3 3 0 0 1-4-4z" fill="currentColor" stroke="var(--surface)" stroke-width="1"/></svg></div>On shift (moon)</figure>
+    <figure><div class="box" style="color:var(--amber)"><svg viewBox="0 0 18 18"><path fill="currentColor" d="M2 3h14v3H2zM4 8h10v3H4zM6 13h6v3H6z"/><circle cx="14" cy="4" r="3.5" fill="currentColor" stroke="var(--surface)" stroke-width="1.5"/></svg></div>Needs you (the only coloured state)</figure>
+    <figure><div class="box" style="opacity:.5"><svg viewBox="0 0 18 18"><path fill="currentColor" d="M2 3h14v3H2zM4 8h10v3H4zM6 13h6v3H6z"/></svg></div>All agents offline (dimmed)</figure>
+  </div>
+  <p class="note">macOS template images are monochrome, so state comes from a small overlay glyph rather than colour. Only "needs you" uses a tinted, non-template icon. A live countdown title next to the icon ("03:00") is optional and off by default.</p>
+
+  <div class="grid3">
+    <div>
+      <h3>On shift, one handoff paused</h3>
+      <div class="menubar"><span class="icon open"><svg viewBox="0 0 18 18"><path fill="currentColor" d="M2 3h14v3H2zM4 8h10v3H4zM6 13h6v3H6z"/></svg></span><span>Wed 23:58</span></div>
+      <div class="traymenu" role="menu">
+        <span class="stat"><b>On shift, awake until done</b>2 running, 1 waiting, 1 needs you</span>
+        <hr>
+        <div class="item"><span>&#9888; Migrate billing webhooks<br><small>Claude Code asked a question</small></span><span class="k">Open &rsaquo;</span></div>
+        <div class="item"><span>&#9654; Polish the scheduler experience<br><small>T3 Code, turn 3 of 4</small></span><span class="k">&rsaquo;</span></div>
+        <div class="item"><span>&#9654; Fix the flaky export test<br><small>OpenCode, turn 7, until done</small></span><span class="k">&rsaquo;</span></div>
+        <div class="item"><span>&#9711; Write release notes for 2.1<br><small>Claude Code, when free, about 03:00</small></span><span class="k">&rsaquo;</span></div>
+        <hr>
+        <div class="item"><span>New handoff&hellip;</span><span class="k">&#8984;N</span></div>
+        <div class="item"><span>Pause everything</span></div>
+        <div class="item"><span>End shift</span></div>
+        <hr>
+        <div class="item"><span>Open board</span><span class="k">&#8984;O</span></div>
+        <div class="item"><span>Settings&hellip;</span></div>
+        <div class="item"><span>Quit</span></div>
+      </div>
+    </div>
+    <div>
+      <h3>Idle, nothing waiting</h3>
+      <div class="menubar"><span class="icon open"><svg viewBox="0 0 18 18"><path fill="currentColor" d="M2 3h14v3H2zM4 8h10v3H4zM6 13h6v3H6z"/></svg></span><span>Wed 14:02</span></div>
+      <div class="traymenu" role="menu">
+        <span class="stat"><b>Nothing waiting</b>T3 Code and OpenCode free. Claude Code limited until 15:00.</span>
+        <hr>
+        <div class="item"><span>New handoff&hellip;</span><span class="k">&#8984;N</span></div>
+        <div class="item"><span>Recent threads</span><span class="k">&rsaquo;</span></div>
+        <hr>
+        <div class="item"><span>Open board</span><span class="k">&#8984;O</span></div>
+        <div class="item"><span>Settings&hellip;</span></div>
+        <div class="item"><span>Quit</span></div>
+      </div>
+      <p class="note" style="margin-top:14px">"Recent threads" is a submenu of at most 8 threads across agents, each prefixed with its agent. The current 100-item submenu goes away.</p>
+    </div>
+    <div>
+      <h3>Handoff submenu</h3>
+      <div class="traymenu" role="menu" style="margin-top:38px">
+        <span class="stat"><b>Migrate billing webhooks</b>Claude Code, quilla. Paused after turn 2 of 5.<br>"Should I keep the legacy endpoint alive for 30 days?"</span>
+        <hr>
+        <div class="item"><span>Open in Claude Code</span></div>
+        <div class="item"><span>Resume</span></div>
+        <div class="item"><span>Skip this turn</span></div>
+        <div class="item danger"><span>End handoff</span></div>
+        <hr>
+        <div class="item"><span>Show on board</span></div>
+      </div>
+      <p class="note" style="margin-top:14px">Every menu entry uses the same verbs as the window: Resume, End handoff, End shift. Nothing in the tray says "schedule" or "message".</p>
+    </div>
+  </div>
+
+  <h3 style="margin-top:36px">Notifications (macOS, same voice)</h3>
+  <div class="card" style="padding:18px 22px;font-size:12px;line-height:1.8">
+    <div><b>Claude Code needs you</b> - It asked "Should I keep the legacy endpoint alive for 30 days?" The handoff is paused.</div>
+    <div><b>Handoff done</b> - "Audit checkout edge cases" finished after 4 turns in T3 Code.</div>
+    <div><b>Shift ended</b> - Battery reached 20%. 1 handoff is still waiting; plug in and start a shift to continue.</div>
+    <div><b>Started late</b> - The Mac slept anyway. "Write release notes" started at 07:12, 4 h 12 m late.</div>
+  </div>
+</main>
+<script src="sketch.js"></script>
+</body>
+</html>

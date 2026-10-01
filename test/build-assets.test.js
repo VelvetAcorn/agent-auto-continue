@@ -43,8 +43,11 @@ test('every literal build.files entry exists', () => {
   }
 });
 
-test('the menu-bar template image is 18px with a 36px Retina representation', () => {
-  assert.ok(build.files.includes('assets/trayTemplate*.png'));
-  assert.deepEqual(pngSize(fs.readFileSync(path.join(root, 'assets/trayTemplate.png'))), { width: 18, height: 18 });
-  assert.deepEqual(pngSize(fs.readFileSync(path.join(root, 'assets/trayTemplate@2x.png'))), { width: 36, height: 36 });
+test('the menu-bar template images are 18px with a 36px Retina representation', () => {
+  assert.ok(build.files.includes('assets/tray*Template*.png'));
+  // The idle glyph, and the keep-awake glyph with its dot.
+  for (const glyph of ['trayTemplate', 'trayAwakeTemplate']) {
+    assert.deepEqual(pngSize(fs.readFileSync(path.join(root, `assets/${glyph}.png`))), { width: 18, height: 18 });
+    assert.deepEqual(pngSize(fs.readFileSync(path.join(root, `assets/${glyph}@2x.png`))), { width: 36, height: 36 });
+  }
 });
