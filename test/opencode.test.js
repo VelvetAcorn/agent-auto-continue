@@ -42,7 +42,10 @@ function fakeServer({ password } = {}) {
       if (url.pathname === '/global/health') return json({ healthy: true, version: '1.18.34' });
       if (url.pathname === '/project') return json(state.projects);
       if (url.pathname === '/project/current') return json(state.projects.find((project) => project.worktree === url.searchParams.get('directory')) || state.projects[0]);
-      if (url.pathname === '/session/status') return json(state.status);
+      if (url.pathname === '/session/status') {
+        const directory = url.searchParams.get('directory') || '/work/scratch';
+        return json(Object.fromEntries(Object.entries(state.status).filter(([id]) => state.sessions[id]?.directory === directory)));
+      }
       if (url.pathname === '/permission') return json(state.permissions);
       if (url.pathname === '/question') return json(state.questions);
       if (url.pathname === '/session') {
@@ -220,4 +223,45 @@ test('an OpenCode job is scheduled, delivered once and completed through the job
   await service.pollTurns();
   assert.equal(service.get(job.id).turn.state, 'completed');
   assert.equal(server.state.requests.filter((request) => request.method === 'POST').length, 1);
+});
+
+test('directory-scoped status keeps a delivered turn active before its first reply', async (t) => {
+  const server = await fakeServer();
+  t.after(server.close);
+  const adapter = adapterFor(server);
+  let clock = Date.now() + 60_000;
+  const service = new JobService({ harnesses: createHarnessRegistry([adapter]), now: () => clock, persist: () => {}, scheduleTimer: () => ({ cancel() {} }) });
+  const job = await service.create({ harness: 'opencode', threadId: S2, message: 'Continue', whenISO: new Date(clock + 60_000).toISOString(), timeZone: 'UTC' });
+  clock += 120_000;
+  await service.run(job.id);
+  const sent = service.get(job.id);
+  server.state.status[S2] = { type: 'busy' };
+  await service.pollTurns();
+  assert.equal(service.get(job.id).turn.state, 'running');
+  assert.equal(service.activeWork()[0].jobId, job.id);
+  server.state.status[S2] = { type: 'retry', message: 'Rate limit reached', next: 4_102_444_800_000 };
+  await service.pollTurns();
+  assert.equal(service.get(job.id).turn.usageLimit.resetsAt, '2100-01-01T00:00:00.000Z');
+  assert.equal(service.activeWork().length, 1);
+  delete server.state.status[S2];
+  server.state.sessions[S2].messages.push({ info: { id: 'msg_reply', role: 'assistant', parentID: sent.deliveryKey, time: { completed: clock } }, parts: [] });
+  await service.pollTurns();
+  assert.equal(service.get(job.id).turn.state, 'completed');
+  assert.equal(service.activeWork().length, 0);
+});
+
+test('discovery and availability merge status from the default and every project instance', async (t) => {
+  const server = await fakeServer();
+  t.after(server.close);
+  server.state.projects.push({ id: 'another', worktree: '/work/another' });
+  server.state.sessions.ses_another = { id: 'ses_another', projectID: 'another', directory: '/work/another', title: 'Another', time: { created: 1, updated: 2 }, messages: [] };
+  server.state.status = { [S1]: { type: 'busy' }, [S2]: { type: 'busy' }, ses_another: { type: 'retry', message: 'Rate limit reached', next: 4_102_444_800_000 } };
+  const adapter = adapterFor(server);
+  const list = await adapter.listConversations();
+  assert.equal(list.find((item) => item.id === S1).state, 'working');
+  assert.equal(list.find((item) => item.id === S2).state, 'working');
+  assert.equal(list.find((item) => item.id === 'ses_another').state, 'retrying');
+  assert.equal((await adapter.probeAvailability()).resetsAt, '2100-01-01T00:00:00.000Z');
+  server.state.status = { [S1]: { type: 'retry', message: 'Rate limit reached', next: 4_102_444_800_000 } };
+  assert.equal((await adapter.probeAvailability()).state, 'limited');
 });

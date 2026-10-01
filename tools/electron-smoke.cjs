@@ -15,6 +15,8 @@ const files = new Map();
 const windows = [];
 const failures = [];
 let offline = false;
+let fakeOffline = false;
+let t3Reads = 0;
 let dispatches = 0;
 const externalUrls = [];
 let menu;
@@ -39,6 +41,7 @@ const fakeFs = {
 };
 async function fixtureFetch(url, options = {}) {
   if (options.method === 'POST') { dispatches++; throw new Error('Dispatch is prohibited in the smoke fixture.'); }
+  t3Reads++;
   if (offline) return new Response('<!doctype html><html>Fixture outage</html>', { headers: { 'content-type': 'text/html' } });
   const payload = url.includes('/threads/') ? { snapshotSequence: 1, thread: fixtureThread } : {
     snapshotSequence: 1,
@@ -83,7 +86,7 @@ function loadProductionMain() {
       if (name === 'node:fs') return fakeFs;
       if (name === 'node-schedule') return { scheduleJob: () => ({ cancel() {} }) };
       if (name === './lib/api-client') return { ...apiModule, createApiClient: options => apiModule.createApiClient({ ...options, fetchImpl: fixtureFetch }) };
-      if (name === './lib/harnesses') return { ...harnessModule, createHarnesses: options => harnessModule.createHarnessRegistry([createT3Harness({ api: options.api }), fake.adapter]) };
+      if (name === './lib/harnesses') return { ...harnessModule, createHarnesses: options => harnessModule.createHarnessRegistry([createT3Harness({ api: options.api }), { ...fake.adapter, async listConversations(options) { if (fakeOffline) throw new Error('Fake Agent unavailable'); return fake.adapter.listConversations(options); } }]) };
       return name.startsWith('./lib/') ? require(path.join(root, name)) : require(name);
     }, __dirname: root, process: { env: { T3_TOKEN: 'fixture-only' }, pid: process.pid }, console, Buffer
   }, { filename: 'main.js' });
@@ -288,6 +291,29 @@ async function harnessJourney(js) {
   assert.equal(await js(`document.querySelector('#connection-state').textContent`), 'Fake Agent connected');
   await click('[data-nav="settings"]');
   await waitFor(() => js(`Boolean(document.querySelector('#harness-form'))`), 'agent settings card');
+  const fakeChecks = fake.state.calls.filter(([name]) => name === 'checkConnection').length;
+  const readsBefore = t3Reads;
+  await click('#settings-form [data-action="check-t3"]');
+  await waitFor(() => js(`document.querySelector('#toast').textContent.includes('Connected to T3 Code.')`), 'T3 settings connection toast');
+  assert.ok(t3Reads > readsBefore, 'The T3 settings button checks the T3 API');
+  assert.equal(fake.state.calls.filter(([name]) => name === 'checkConnection').length, fakeChecks);
+  assert.equal(await js(`document.querySelector('#connection-state').textContent`), 'Fake Agent connected');
+  offline = true;
+  await waitFor(() => js(`!document.querySelector('[data-action="check-t3"]').disabled`), 'T3 connection check completed');
+  await click('#settings-form [data-action="check-t3"]');
+  await waitFor(() => js(`Boolean(document.querySelector('#settings-error').textContent)`), 'T3 settings connection failure');
+  assert.equal(await js(`document.querySelector('#connection-state').textContent`), 'Fake Agent connected');
+  offline = false;
+  fakeOffline = true;
+  await click('[data-nav="threads"]');
+  await waitFor(() => js(`Boolean(document.querySelector('#notices [data-action="check"]'))`), 'selected harness offline banner');
+  fakeOffline = false;
+  await click('#notices [data-action="check"]');
+  await waitFor(() => js(`document.querySelector('#toast').textContent.includes('Connected to Fake Agent.')`), 'selected harness connection toast');
+  assert.equal(fake.state.calls.filter(([name]) => name === 'checkConnection').length, fakeChecks + 1);
+  await waitFor(() => js(`document.querySelector('#connection-state').textContent === 'Fake Agent connected'`), 'selected harness connection restored');
+  await click('[data-nav="settings"]');
+
   assert.match(await js(`document.querySelector('#harness-form').textContent`), /Works while locked/);
   await fill('#harness-fake-port', '4555');
   await js(`document.querySelector('#harness-form').requestSubmit()`);
