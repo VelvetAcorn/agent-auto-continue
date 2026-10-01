@@ -41,7 +41,8 @@ The shared engine is `lib/desktop/ui-delivery.js`, and every send follows the sa
 
 No synthetic keystrokes or clipboard pastes are used anywhere, so input cannot land in whichever window happens to have focus.
 Every write re-locates the conversation, the message box and the send button in the same Accessibility pass, and aborts if any of them does not match.
-The send button is searched for only near the message box, so a same-named button elsewhere in the window is never pressed.
+The send and stop buttons are searched for only in the message box's own containers, nearest first and never above the verified content area, so a same-named button elsewhere in the window is never pressed.
+If the send button is not inside the content area, nothing is sent.
 Deliveries run one at a time across all desktop harnesses, because they share the screen and focus.
 Text inserted by the harness is removed again when it stops before pressing send, and only when the box still holds exactly that text.
 Once a press has been attempted the message box is never touched again.
