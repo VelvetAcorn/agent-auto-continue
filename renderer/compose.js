@@ -17,9 +17,9 @@
     const trigger = draft.waitIfLimited ? 'time-then-available' : 'time';
     if (QUICK.has(draft.when)) {
       const wall = time.quickTime(draft.when, draft.timeZone, now);
-      return { trigger, whenISO: time.resolveWallTime(wall.date, wall.time, draft.timeZone, '').iso };
+      return { trigger, whenISO: time.resolveWallTime(wall.date, wall.time, draft.timeZone, '', now).iso };
     }
-    return { trigger, whenISO: time.resolveWallTime(draft.date, draft.time, draft.timeZone, draft.occurrence).iso };
+    return { trigger, whenISO: time.resolveWallTime(draft.date, draft.time, draft.timeZone, draft.occurrence, now).iso };
   }
 
   function farLabel(draft) {
