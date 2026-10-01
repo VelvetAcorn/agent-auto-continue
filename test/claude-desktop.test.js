@@ -229,3 +229,13 @@ test('end to end: user activity after scheduling cancels the send', async (t) =>
   assert.equal(service.get(job.id).status, 'canceled');
   assert.equal(fake.state.sent.length, 0);
 });
+
+test('a live process that does not identify itself as Claude Desktop is never treated as the app', async (t) => {
+  const { adapter, fixture } = setup(t);
+  // An older or unknown Claude Code process may omit its entrypoint; it could still be a second writer.
+  fixture.live('idle', null);
+  const state = await adapter.inspectConversation({ conversationId: SESSION });
+  assert.equal(state.busy, true);
+  assert.throws(() => adapter.prepareTurn(turn(), state), /outside Claude Desktop/);
+  assert.equal((await adapter.listConversations({})).find((item) => item.id === SESSION).state, 'open elsewhere');
+});
