@@ -165,6 +165,33 @@ test('conversations, schedules and connection checks are routed to the chosen ha
   assert.equal(fake.state.submitted.length, 0);
 });
 
+test('a desktop app change is checked on scheduling, logged, shown as a risk and copied for a bug report', async () => {
+  const { createFakeHarness } = require('../tools/fake-harness.cjs');
+  const healthy = { appVersion: '2.0', verifiedVersion: '1.0', problems: [], checked: ['app_path', 'composer_label'], unchecked: [] };
+  const fake = createFakeHarness({ id: 'desk', label: 'Desk App', kind: 'desktop-app', compatibility: healthy, conversations: [{ id: 'conv-1', title: 'Secret project plan' }] });
+  const app = appHarness([], { extraHarnesses: () => [fake.adapter] });
+  assert.equal(app.invoke('harnesses:compatibility').length, 0, 'Nothing is checked before it is needed');
+  await assert.rejects(app.invoke('harnesses:check-compatibility', 't3'), /no compatibility check/);
+  fake.state.compatibility = { ...healthy, problems: [{ contactPoint: 'composer_label', message: 'Desk App 2.0 changed how its message box is labelled. Scheduled messages for it may fail until Agent Auto-Continue supports this version.', hint: 'No "Prompt" text area.' }], checked: ['app_path'] };
+  const job = await app.invoke('schedule:create', { harness: 'desk', threadId: 'conv-1', message: 'Continue the secret plan', whenISO: '2099-01-01T12:00:00Z', timeZone: 'UTC' });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(fake.state.calls.filter((call) => call[0] === 'checkCompatibility').map((call) => call[1].depth), ['full'], 'Scheduling checks the app once');
+  const [state] = app.invoke('harnesses:compatibility');
+  assert.deepEqual([state.harness, state.label, state.appVersion, state.ok, state.problems[0].contactPoint], ['desk', 'Desk App', '2.0', false, 'composer_label']);
+  assert.match(app.invoke('jobs:get', job.id).risk.message, /changed how its message box is labelled/);
+  assert.equal(app.invoke('jobs:get', job.id).status, 'pending', 'A risk never cancels a schedule');
+  assert.ok(app.events.some((event) => event[0] === 'compatibility:changed'));
+  assert.equal(JSON.parse(app.files.get('/fixture/compatibility.json')).harnesses.desk.problems[0].contactPoint, 'composer_label');
+  const log = JSON.parse(app.files.get('/fixture/diagnostics.json'));
+  assert.deepEqual(log.entries.map((entry) => [entry.harness, entry.appVersion, entry.contactPoint]), [['desk', '2.0', 'composer_label']]);
+  assert.equal(app.invoke('diagnostics:copy').ok, true);
+  assert.match(app.clipboard[0], /Agent Auto-Continue diagnostics[\s\S]*- desk: Desk App 2\.0, verified 1\.0[\s\S]*composer_label/);
+  assert.doesNotMatch(app.clipboard[0] + app.files.get('/fixture/diagnostics.json'), /secret|Secret/, 'Neither message text nor titles reach diagnostics');
+  fake.state.compatibility = healthy;
+  assert.equal((await app.invoke('harnesses:check-compatibility', 'desk'))[0].ok, true);
+  assert.equal(app.invoke('jobs:get', job.id).risk, null);
+});
+
 test('harness settings are validated, persisted and never returned in clear text', () => {
   const app = appHarness([], { env: { T3_TOKEN: 'test-secret', OPENCODE_SERVER_PASSWORD: '' } });
   app.invoke('settings:save', { httpPort: 3773, bufferSeconds: 5, harnesses: { opencode: { port: 4555, password: 'oc-secret' }, 'claude-code': { executable: '/opt/claude' } } });

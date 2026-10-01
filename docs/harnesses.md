@@ -11,7 +11,7 @@ The executable contract is [`lib/harnesses/contract.js`](../lib/harnesses/contra
 | File | Responsibility |
 | --- | --- |
 | `lib/harnesses/contract.js` | Capability names, `defineHarness()` validation, and normalisers for conversations, availability and turn outcomes |
-| `lib/harnesses/errors.js` | `HarnessError`, `toErrorInfo()` and `redact()` |
+| `lib/harnesses/errors.js` | `HarnessError`, `toErrorInfo()`, `redact()`, and the drift helpers `appVersionUnsupported()`, `driftMessage()` and `CONTACT_POINTS` |
 | `lib/harnesses/registry.js` | `createHarnessRegistry()` and the default harness ID `t3` |
 | `lib/harnesses/settings.js` | Storage, validation, resolution and public presentation of adapter settings |
 | `lib/harnesses/index.js` | `createHarnesses()`, which builds the production registry |
@@ -25,6 +25,11 @@ The executable contract is [`lib/harnesses/contract.js`](../lib/harnesses/contra
 | `lib/desktop/ui-delivery.js` | The shared, verified send sequence for desktop-app harnesses |
 | `lib/desktop/mac-automation.js`, `jxa-program.js` | macOS Accessibility driver, run through `osascript` without a shell |
 | `lib/desktop/app-labels.js` | Control labels in the app's interface language |
+| `lib/desktop/profiles/<id>.js` | One profile per desktop app with every contact point the harness relies on; `profiles/define.js` validates them |
+| `lib/desktop/app-location.js` | `createAppLocator()`, which finds the app by bundle ID and resolves files inside it |
+| `lib/desktop/compatibility.js` | `checkDesktopCompatibility()`, the shared read-only check behind `checkCompatibility()` |
+| `lib/compatibility-monitor.js` | Runs compatibility checks, tracks problems per harness and marks scheduled work at risk |
+| `lib/diagnostics.js` | The bounded diagnostics log and its plain-text bug report |
 
 ### Identity
 
@@ -73,6 +78,7 @@ Adapters must never put tokens, passwords or raw response bodies into messages o
 | `findDelivery(turn)` | Yes | Read-only check that resolves `{ delivered }` using the delivery key |
 | `checkTurn(turn)` | With `canDetectCompletion` | Resolves a turn outcome for a delivered turn |
 | `probeAvailability()` | With `canDetectUsageLimit` | Resolves the account's current availability |
+| `checkCompatibility({ depth })` | No | Read-only check that the installed app still matches what the adapter relies on; see [Compatibility checks](#compatibility-checks) |
 | `shutdown()` | No | Called before the app quits; interrupt or release long-running work gracefully |
 
 `ref` is `{ conversationId, deliveryKey }`.
@@ -111,6 +117,40 @@ Automations must treat `approval_required` as a stop condition rather than sched
 
 `submitTurn()` may also return `completion`, a promise of a turn outcome for work the adapter supervises in-process.
 
+A compatibility result is `{ ok, appVersion, verifiedVersion, checkedAt, depth, problems, checked, unchecked }`, normalised by `compatibility()` in `contract.js`.
+`problems` is a list of `{ contactPoint, message, hint }`, and `ok` is true exactly when it is empty.
+`checked` lists the contact points that were inspected and found working.
+`unchecked` lists `{ contactPoint, reason }` for contact points that could not be inspected this time, such as `not_running`, `screen_locked`, `no_conversation_shown`, `agent_working` or `quick`; an unchecked contact point is never a problem.
+
+### Compatibility checks
+
+Adapters that depend on undocumented details of another app implement `checkCompatibility({ depth })`.
+It must never navigate, open links, type, press anything or change focus.
+`depth: 'quick'` must be cheap, such as reading the installation, version and link registration.
+`depth: 'full'` may also inspect what the app currently shows, start a short-lived read-only protocol client, or read files.
+
+Each such detail is a contact point with a stable ID from `CONTACT_POINTS` in `errors.js`:
+
+| Contact point | What it covers |
+| --- | --- |
+| `app_path` | Where the app and the files the harness reads inside it are installed |
+| `deep_link` | The app's URL scheme and the link that opens a conversation |
+| `content_match` | How the open conversation's content area is recognised |
+| `composer_label` | The accessible label of the message box |
+| `send_label` | The accessible label of the send button |
+| `stop_label` | The accessible label of the stop button |
+| `label_catalogue` | The app's translated label catalogue |
+| `session_store` | The app's local session index |
+| `live_registry` | The live process registry that reports whether the agent is working |
+| `transcript` | The conversation transcript format |
+| `originator` | How the app marks the conversations it created |
+| `app_server` | The app's built-in protocol server |
+
+The desktop adapters build their check with `checkDesktopCompatibility()` and add app-specific probes as `probes: [{ contactPoints, depth, run }]`.
+`run({ profile, env, app, depth })` resolves `{ checked, unchecked, problems: [{ contactPoint, hint }] }`, all optional.
+A probe that throws an `app_version_unsupported` error reports a problem; any other error marks its contact points unchecked.
+A probe with `depth: 'full'` is skipped by quick checks.
+
 ### Delivery semantics
 
 A resolved `submitTurn()` means the harness accepted the message, not that the agent finished.
@@ -141,6 +181,15 @@ Absence of a key from a partial or windowed read is not proof of non-delivery, s
 | `unknown_harness` | A job names a harness this build does not include |
 | `permission_required` | A macOS permission is missing; `details.permission` names it and `details.settingsUrl` opens its System Settings pane |
 | `screen_locked` | The Mac is locked or another user is on the console, so a desktop app cannot be driven; always a certain non-delivery |
+| `app_version_unsupported` | The app changed in a way this version of Agent Auto-Continue does not understand; always a certain non-delivery, with `details` `{ app, appVersion, verifiedVersion, contactPoint, hint }` |
+
+Build `app_version_unsupported` with `appVersionUnsupported({ app, appVersion, verifiedVersion, contactPoint, hint, during })`, so every adapter words it the same way.
+Its message names the app, its installed version and what changed, for example "Claude Desktop 2.17.0 changed how its message box is labelled, so Agent Auto-Continue could not send. Nothing was sent."
+Pass `during: 'read'` when a file or protocol read failed rather than a send.
+Throw it only on strong evidence and only before anything could have reached the app.
+`hint` is a short technical note for bug reports; it is redacted and capped at 300 characters, and must never contain message text.
+Use a truthful code for ambiguous failures instead, and add `contactPoint`, `appVersion` and `hint` to its details so the failure is still logged against the contact point.
+Every desktop delivery failure carries the installed app version in `details.appVersion`.
 
 Remote control keeps the codes that describe the conversation or the Mac in its errors: `conversation_busy`, `awaiting_input` and `owned_by_other_harness` answer `409`, and `screen_locked`, `permission_required` and `usage_limited` answer `503`.
 `conversation_not_found` answers `404 thread_not_found`, `unknown_harness` answers `400`, and every other code answers `502 harness_unavailable`; see [remote control](remote-control.md#errors).
@@ -187,6 +236,8 @@ These interfaces are stable for other features.
 | `job.error.code === 'usage_limited'` with `job.error.details.resetsAt` | A schedule that was skipped because of a usage limit |
 | `job.turn.usageLimit` | A delivered turn that stopped at a usage limit |
 | `registry.describe()` | Serialisable harness metadata and capabilities |
+| `observe` and `riskFor` passed to `JobService` | `observe({ harness, jobId, status, error })` hears every send outcome, and `riskFor(harness)` returns `{ message, appVersion, contactPoints }` or `null` |
+| `job.risk` | Present on pending and sending jobs whose harness has a compatibility problem; such jobs are never canceled for it |
 
 ### IPC
 
@@ -201,6 +252,10 @@ These interfaces are stable for other features.
 | `dashboard:schedule-thread` | Accepts a conversation ID and harness ID |
 | `settings:save` | Accepts `harnesses: { <id>: { <key>: value } }` alongside the existing fields |
 | `harnesses:open-permission-settings` | Takes no arguments and opens the Accessibility pane of System Settings |
+| `harnesses:compatibility` | Resolves the compatibility state of every checked harness: `{ harness, label, appVersion, verifiedVersion, checkedAt, lastPassing, ok, problems }` |
+| `harnesses:check-compatibility` | Takes a harness ID, runs a full read-only check and resolves the same list |
+| `diagnostics:copy` | Copies the plain-text diagnostics report to the clipboard |
+| `compatibility:changed` | Sent to windows when the compatibility state changes |
 
 ## Adding an adapter
 
@@ -211,6 +266,7 @@ These interfaces are stable for other features.
 
 Desktop-app adapters use `kind: 'desktop-app'` and must set `requiresUnlockedScreen` and `requiresAccessibilityPermission` truthfully.
 They should report `delivered` only from evidence read back from the app, and should throw `deliveryUncertain: true` whenever input may have reached the app without confirmation.
+They keep every app-specific detail in a profile under `lib/desktop/profiles`, locate the app with `createAppLocator()`, implement `checkCompatibility()` with `checkDesktopCompatibility()`, and pass the profile's `verifiedVersion` to delivery.
 They send through `deliverThroughUi()` in `lib/desktop/ui-delivery.js`, and report `{ state: 'unavailable', reason: 'screen_locked', source: 'reported' }` from `probeAvailability()` while the screen is locked.
 A one-off schedule that fires while the screen is locked fails as not sent with `screen_locked`.
 An automatic continuation waits instead: the same unsent turn is checked again every minute and when the Mac is unlocked (see [automatic continuations](continuations.md)).
@@ -227,17 +283,21 @@ Functions accept `{ home, env }` so tests can point them at fixtures.
 | Export | Returns |
 | --- | --- |
 | `claudePaths(options)` | `{ configDir, projectsDir, sessionsDir, desktopDir }` |
+| `readDesktopCodeSessionStore(options)` | `{ found, files, sessions, unrecognised, drift }`, where `drift` is a hint when the session files no longer look like the known store |
 | `readDesktopCodeSessions(options)` | Claude Desktop Code sessions as `{ sessionId, cliSessionId, cwd, originCwd, title, archived, createdAt, lastActivityAt }` |
 | `desktopOwnedCliSessionIds(options)` | A `Set` of lowercase CLI session IDs that Claude Desktop owns, archived or not |
-| `readLiveSessions(options)`, `readLiveSession(cliSessionId, options)` | Live registry entries `{ pid, status, waitingFor, entrypoint, kind, hostSessionId, name, updatedAt }` for alive processes only; `status` is `idle`, `busy`, `waiting`, `blocked` or `unknown` |
+| `readLiveRegistry(options)` | `{ found, pids, sessions, unidentified }` for alive processes only; `sessions` maps a CLI session ID to the entry that refuses most firmly, and `unidentified` lists live entries that name no session |
+| `readLiveSessions(options)`, `readLiveSession(cliSessionId, options)` | Live registry entries `{ pid, status, state, drift, waitingFor, entrypoint, kind, hostSessionId, name, updatedAt }`; `state` is `busy`, `waiting`, `idle`, `starting` or `unrecognised`, and `drift` says what changed when unrecognised |
 | `readClaudePlanUsage(options)` | The newest plan-usage sample `{ sampledAt, org, fiveHourPct, sevenDayPct }` or `null`; pass `org` to filter |
 | `findTranscriptPath(cliSessionId, options)` | The transcript path or `null` |
 | `readHumanPrompts(file)` | Typed prompts `{ uuid, timestamp, text }`, excluding tool results, meta, synthetic, compact-summary and sidechain records |
-| `scanTranscript(file, promptUuid)` | Working directory, permission mode, latest human prompt time, whether `promptUuid` is present, and the records after it |
+| `scanTranscript(file, promptUuid)` | Working directory, permission mode, latest human prompt time, whether `promptUuid` is present, the records after it, whether Claude Desktop wrote to the session (`desktopOwned`) and a format-change hint (`drift`) |
+| `transcriptDrift(records)` | A hint when transcript records no longer look like the known format, or an empty string |
 | `turnOutcomeAfter(file, promptUuid, { running, now })` | A turn outcome for the turn after `promptUuid` |
 | `listTranscripts`, `summariseTranscript`, `recentLimitSignal`, `isHumanPrompt` | Listing and usage-limit helpers |
 
-Pass `isAlive` in `options` to replace the process liveness check in tests.
+Pass `isAlive` in `options` to replace the process liveness check in tests, and `now` to fix the clock.
+Claude Desktop's compatibility probes, which read these files without changing anything, are in `lib/harnesses/claude-desktop-probes.js`.
 
 `lib/harnesses/codex-reader.js` exports `createReader({ executable, env, home, transport, detectDaemon, requestTimeoutMs })` (also named `createCodexReader`).
 The reader offers `listThreads()`, `listAllThreads({ archived, sourceKinds })`, `readThread(id)`, `recentTurns(id, limit)`, `rateLimits()`, `account()`, `turnOutcome(turn, limit)`, `threadWriter(threadId)`, `selectTransport()`, `open()`, `withClient()` and `close()`.
@@ -316,7 +376,10 @@ Claude Code records an interruption (Esc or SIGINT) as a user record reading `[R
 Discovery reads transcripts under `$CLAUDE_CONFIG_DIR/projects` or `~/.claude/projects`, newest 150 first, using the head and tail of each file for the title and working directory.
 Titles prefer a user rename, then Claude's generated title, then the first typed prompt.
 Sessions owned by Claude Desktop are hidden, and sending to one fails with `owned_by_other_harness`.
+A session is Claude Desktop's when its store lists it or when its transcript has messages whose `entrypoint` is `claude-desktop`, so a changed Desktop store cannot expose them.
 Sessions open in any live Claude process, from the registry in `sessions/<pid>.json`, fail with `conversation_busy`, because a second writer would fork the conversation.
+A live registry entry that names no session could hold any session, so every send refuses with `app_version_unsupported` for the `live_registry` contact point.
+A transcript whose records no longer look like the known format refuses with `app_version_unsupported` for the `transcript` contact point, because new user activity could not be seen.
 Exit that Claude Code session after scheduling so the turn can resume it.
 
 Completion comes from the supervised process's final `result` event, or from the transcript after a restart.
@@ -355,6 +418,12 @@ Threads with originator `Codex Desktop`, and older top-level threads with no ori
 Threads whose originator starts with `t3code` belong to T3 Code, which drives its own Codex process for them.
 The Codex CLI adapter claims only threads with originator `codex_cli_rs` or `codex_exec`, or with no originator and source `cli` or `exec`; any other originator, such as an IDE extension, is reported as `other`.
 Threads it does not own are not listed, and sending to one fails with `owned_by_other_harness`.
+An unknown originator is never claimed by either Codex adapter, even when an app update renamed the desktop app's originator; the Codex desktop harness reports that case as an app change instead (see [desktop-harnesses.md](desktop-harnesses.md#chatgpt-desktop-app-codex-threads-codex-desktop)).
+A JSON-RPC `Method not found` error never counts as a missing thread, so it cannot cancel a job.
+Every turn is checked before busy detection or user activity reads it, both when inspecting and right before `turn/start`.
+A turn status other than `completed`, `interrupted`, `failed` or `inProgress`, a malformed `startedAt`, or a user message without content fails with `unsupported_response_shape` instead of reading as idle.
+Its message names the codex version from the `initialize` reply, and its details carry contact point `app_server` and a hint naming the request.
+The CLI has no app bundle or verified app version, so `app_version_unsupported` would not fit; the remedy is a Codex version this app supports.
 Listed threads show their source, so threads created by `codex exec` automation are recognisable.
 
 Codex serialises writers with a lock file per thread, and a second `thread/resume` fails with "already has an active writer".
@@ -372,7 +441,9 @@ The outcome is then `interrupted` with error code `approval_required`.
 The adapter was built against Claude Desktop 2.16120.0 and covers its Code sessions; sending in the real app awaits the owner's check.
 It opens a session with `claude://code/continue?session=local_<uuid>`, sets the message through Accessibility and presses send; it never starts `claude` itself.
 Discovery, activity, busy state, delivery evidence, completion and usage limits come from `claude-sessions.js`.
+A Stop button near the message box is a second busy signal, independent of the live registry.
 Delivery is confirmed by a typed prompt with exactly the scheduled text in the session transcript, written after the send attempt.
+An unrecognised live status, transcript format or session store refuses with `app_version_unsupported` before anything is typed, and `checkCompatibility()` probes all three and the label catalogue.
 Usage limits are inferred from Claude Desktop's plan-usage samples, without a reset time.
 Chat conversations are not supported; [desktop-harnesses.md](desktop-harnesses.md) explains why and lists every detail.
 

@@ -94,7 +94,7 @@ function onMessage(message) {
   const thread = state.threads[message.params?.threadId];
   const bare = (value) => { const { turns, ...rest } = value; return rest; };
   switch (message.method) {
-    case 'initialize': return reply({ userAgent: 'fake', codexHome: '/tmp', platformOs: 'macos' });
+    case 'initialize': return reply({ userAgent: 'agent-auto-continue/0.159.0 (Mac OS 26.5.1; arm64) unknown (agent-auto-continue; 0)', codexHome: '/tmp', platformOs: 'macos' });
     case 'account/read': return reply(state.account);
     case 'account/rateLimits/read':
       if (mode === 'limit-exit') return setTimeout(() => reply(state.rateLimits), 200);

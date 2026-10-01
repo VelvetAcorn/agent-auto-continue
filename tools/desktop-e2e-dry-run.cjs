@@ -20,6 +20,8 @@ const { createMacAutomation } = require('../lib/desktop/mac-automation');
 const { isScreenLocked } = require('../lib/harnesses/session-lock');
 const claude = require('../lib/harnesses/claude-desktop');
 const codex = require('../lib/harnesses/codex-desktop');
+const { claudeDesktop, codexDesktop, deepLinkFor } = require('../lib/desktop/profiles');
+const { createAppLocator } = require('../lib/desktop/app-location');
 
 if (process.env.AAC_DESKTOP_E2E !== '1') {
   console.error('Refusing to run: set AAC_DESKTOP_E2E=1 to drive the real desktop apps (read-only dry run).');
@@ -34,12 +36,14 @@ const automation = new Proxy(real, { get(target, name) {
   return target[name];
 } });
 
-const claudeLabels = createAppLabels({ catalogueDirectory: '/Applications/Claude.app/Contents/Resources/ion-dist/i18n', controls: claude.CONTROLS });
+// The catalogue lives inside Claude Desktop wherever Launch Services says it is installed.
+let claudeApp = null;
+const claudeLabels = createAppLabels({ catalogueDirectory: () => (claudeApp ? path.join(claudeApp, claudeDesktop.bundledFiles.labelCatalogue.path) : null), controls: claude.CONTROLS });
 const apps = {
   'claude-desktop': {
     bundleId: claude.BUNDLE_ID,
     adapter: claude.createClaudeDesktopHarness({ automation }),
-    link: (id) => `claude://code/continue?session=${encodeURIComponent(id)}`, scheme: 'claude',
+    link: (id) => deepLinkFor(claudeDesktop, id), schemes: claudeDesktop.deepLink.schemes,
     // Which listed conversation a content area shows, and the target that locates its controls.
     shown: (area, conversations) => conversations.find((item) => (area.url || '').split(/[/?#]/).includes(item.id)),
     target: (item, language) => ({ bundleId: claude.BUNDLE_ID, match: { urlSegment: item.id }, composerLabels: claudeLabels(language).composer, sendLabels: claudeLabels(language).send })
@@ -47,7 +51,7 @@ const apps = {
   'codex-desktop': {
     bundleId: codex.BUNDLE_ID,
     adapter: codex.createCodexDesktopHarness({ automation }),
-    link: (id) => `codex://threads/${encodeURIComponent(id)}`, scheme: 'codex',
+    link: (id) => deepLinkFor(codexDesktop, id), schemes: codexDesktop.deepLink.schemes,
     shown: (area, conversations) => conversations.find((item) => item.title && item.title === area.title),
     target: (item) => ({ bundleId: codex.BUNDLE_ID, match: { title: item.title }, ...codex.TARGET })
   }
@@ -86,7 +90,7 @@ async function check(name, spec, openId) {
   const item = conversations.find((entry) => entry.id === openId);
   if (!item) { report('  --open', 'that conversation was not discovered; nothing opened'); return; }
   const previous = env.frontmost;
-  await automation.openUrl(spec.link(item.id), [spec.scheme]);
+  await automation.openUrl(spec.link(item.id), spec.schemes);
   for (let attempt = 0; attempt < 30; attempt++) {
     const view = await automation.inspect(spec.target(item, ''));
     if (view.ok && view.composer) break;
@@ -107,6 +111,7 @@ async function main() {
   report('Screen locked', await isScreenLocked());
   report('Front app', env.frontmost);
   if (!env.trusted) return;
+  claudeApp = (await createAppLocator({ profile: claudeDesktop, automation }).locate()).appPath;
   for (const [name, spec] of Object.entries(apps)) await check(name, spec, open?.harness === name ? open.id : null);
   console.log(`\nDry run complete. ${path.basename(__filename)} never types or sends.`);
 }

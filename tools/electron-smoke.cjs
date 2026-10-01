@@ -20,6 +20,7 @@ let fakeOffline = false;
 let t3Reads = 0;
 let dispatches = 0;
 const externalUrls = [];
+const copied = [];
 let menu;
 let trayImage;
 const evidenceDirectory = process.env.T3_SMOKE_EVIDENCE_DIR;
@@ -58,6 +59,11 @@ const { createT3Harness } = require('../lib/harnesses/t3');
 const { createFakeHarness } = require('./fake-harness.cjs');
 // A second, in-memory harness exercises the picker without touching real agents.
 const fake = createFakeHarness({ label: 'Fake Agent', conversations: [{ id: 'conv-fake', title: 'Fake conversation', projectName: 'Fake repo', updatedAt: '2026-09-30T10:00:00Z' }, { id: 'conv-chain', title: 'Chain fixture session', projectName: 'fake-repo', updatedAt: '2026-09-30T09:00:00Z' }], settings: [{ key: 'port', type: 'port', label: 'Fake agent port', default: 4096, help: 'Fixture setting.' }] });
+// An in-memory desktop app whose installed version can drift, for the compatibility notice.
+const supported = { appVersion: '2.16120.0', verifiedVersion: '2.16120.0', problems: [], checked: ['app_path', 'deep_link', 'content_match', 'composer_label', 'send_label'], unchecked: [] };
+const desk = createFakeHarness({ id: 'desk', label: 'Claude Desktop', kind: 'desktop-app', compatibility: supported,
+  capabilities: { requiresRunningApp: true, requiresUnlockedScreen: true, requiresAccessibilityPermission: true },
+  conversations: [{ id: 'local_fixture', title: 'Refactor the scheduler', projectName: 'agent-auto-continue', updatedAt: '2026-09-30T11:00:00Z' }] });
 // Automatic continuations run end to end against the fake harness; each turn
 // completes on its own after 300 ms, or when the journey releases it.
 let completionMode = 'auto';
@@ -97,6 +103,7 @@ const injectedElectron = {
   Tray: class { constructor(image) { trayImage = image; } setImage(image) { trayImage = image; } setToolTip() {} on() {} setContextMenu(value) { menu = value; } },
   Menu: { buildFromTemplate: value => value }, Notification: { isSupported: () => false },
   shell: { openExternal: async url => { externalUrls.push(url); } },
+  clipboard: { writeText: text => { copied.push(text); } },
   // Real power save blockers; power events stay inert so the fixture never reacts to the host's sleep.
   powerMonitor: { on() {}, isOnBatteryPower: () => electron.powerMonitor.isOnBatteryPower() }
 };
@@ -108,7 +115,7 @@ function loadProductionMain() {
       if (name === 'node:fs') return fakeFs;
       if (name === 'node-schedule') return nearTimers;
       if (name === './lib/api-client') return { ...apiModule, createApiClient: options => apiModule.createApiClient({ ...options, fetchImpl: fixtureFetch }) };
-      if (name === './lib/harnesses') return { ...harnessModule, createHarnesses: options => harnessModule.createHarnessRegistry([createT3Harness({ api: options.api }), { ...fake.adapter, async listConversations(options) { if (fakeOffline) throw new Error('Fake Agent unavailable'); return fake.adapter.listConversations(options); } }]) };
+      if (name === './lib/harnesses') return { ...harnessModule, createHarnesses: options => harnessModule.createHarnessRegistry([createT3Harness({ api: options.api }), { ...fake.adapter, async listConversations(options) { if (fakeOffline) throw new Error('Fake Agent unavailable'); return fake.adapter.listConversations(options); } }, desk.adapter]) };
       return name.startsWith('./lib/') ? require(path.join(root, name)) : require(name);
     }, __dirname: root, process: { env: { T3_TOKEN: 'fixture-only' }, pid: process.pid }, console, Buffer
   });
@@ -150,6 +157,7 @@ async function run() {
   await keepAwakeJourney(js);
   await harnessJourney(js);
   await continuationJourney(js);
+  await compatibilityJourney(js);
   offline = true;
   const history = await js('window.autoContinue.listJobs({view:"history"})');
   assert.ok(history.total >= 1, 'History survives offline API');
@@ -166,6 +174,7 @@ async function run() {
   if (evidenceDirectory) fs.writeFileSync(path.join(evidenceDirectory, 'persisted-fixture-jobs.json'), files.get('/fixture/jobs.json'));
   assert.equal(dispatches, 0, 'The fixture must never send a message');
   assert.equal(fake.state.submitted.filter(item => item.conversationId !== 'conv-chain').length, 0, 'Only the continuation journey sends, and only to its fake session');
+  assert.equal(desk.state.submitted.length, 0, 'The fake desktop app must never send a message');
   assert.deepEqual(failures, []);
   assert.ok(menu.find(item => item.label === 'Open scheduler'));
   // The real nativeImage decodes the tray glyph, so an unreadable or undecodable asset fails here.
@@ -174,7 +183,7 @@ async function run() {
   assert.equal(trayImage.isTemplateImage(), true, 'The menu-bar icon must adapt to light and dark menu bars');
   assert.ok(trayImage.getScaleFactors().includes(2), 'The menu-bar icon needs a Retina representation');
   assert.equal(trayImage.toPNG().equals(nativeImageFor('trayTemplate.png').toPNG()), true, 'The idle glyph returns once keep-awake lets the Mac sleep');
-  console.log('Electron production workflow smoke passed: one window, real preload/IPC/renderer, local history, sanitized offline error, keep-awake assertions released, zero T3 sends, and fake-harness continuations (auto-start, turn limit, continuous, stop, tray stop all).');
+  console.log('Electron production workflow smoke passed: one window, real preload/IPC/renderer, local history, sanitized offline error, keep-awake assertions released, zero T3 sends, and fake-harness continuations (auto-start, turn limit, continuous, stop, tray stop all) and a desktop app compatibility notice.');
 }
 // Turns on remote control from Settings, then drives the real listener over HTTP and MCP.
 async function remoteJourney(js, click, fill) {
@@ -218,7 +227,7 @@ async function remoteJourney(js, click, fill) {
   assert.ok(listed.structuredContent.jobs.some(item => item.id === job.id));
   assert.equal((await mcp.callTool({ name: 'cancel_job', arguments: { id: job.id } })).structuredContent.job.status, 'canceled');
   // The production harness registry, continuation runs and keep-awake status are wired into remote control.
-  assert.deepEqual((await (await call('GET', '/v1/harnesses')).json()).harnesses.map(item => item.id), ['t3', 'fake']);
+  assert.deepEqual((await (await call('GET', '/v1/harnesses')).json()).harnesses.map(item => item.id), ['t3', 'fake', 'desk']);
   assert.deepEqual((await (await call('GET', '/v1/status')).json()).capabilities, { keepAwake: true, continuousRuns: true });
   const started = await call('POST', '/v1/jobs', { harness: 'fake', threadId: 'conv-fake', message: 'Remote continuation', delayMinutes: 120, continuous: true });
   assert.equal(started.status, 201);
@@ -679,6 +688,52 @@ async function keepAwakeJourney(js) {
   assert.equal(await js(`Boolean(document.querySelector('#notices .notice.awake'))`), false);
   await js(`window.autoContinue.cancelJob(${JSON.stringify(job.id)})`);
   if (evidenceDirectory) fs.writeFileSync(path.join(evidenceDirectory, 'keep-awake-assertions.json'), JSON.stringify(evidence, null, 2));
+}
+// A desktop app update is noticed before the schedule fires: the dashboard names
+// the app and version, marks the schedule at risk, copies diagnostics and clears
+// the notice once the app checks out again. Captured in both themes.
+async function compatibilityJourney(js) {
+  const click = async selector => {
+    await waitFor(() => js(`Boolean(document.querySelector(${JSON.stringify(selector)})) && !document.querySelector(${JSON.stringify(selector)}).disabled`), `control ${selector}`);
+    await js(`document.querySelector(${JSON.stringify(selector)}).click()`);
+  };
+  const heading = expected => waitFor(() => js(`document.querySelector('h1')?.textContent === ${JSON.stringify(expected)}`), `view ${expected}`);
+  desk.state.compatibility = ({ depth }) => depth === 'quick' ? supported : { ...supported, appVersion: '2.17.0', checked: ['app_path', 'deep_link', 'content_match'], unchecked: [{ contactPoint: 'send_label', reason: 'no_composer' }],
+    problems: [{ contactPoint: 'composer_label', message: 'Claude Desktop 2.17.0 changed how its message box is labelled. Scheduled messages for it may fail until Agent Auto-Continue supports this version.', hint: 'A conversation was shown, but no text area labelled "Prompt" or "Write your prompt to Claude" was found in it. Interface language: en-US.' }] };
+  await click('[data-nav="upcoming"]');
+  await heading('Upcoming');
+  const job = await js(`window.autoContinue.createSchedule({ harness: 'desk', threadId: 'local_fixture', message: 'Continue with the next step', whenISO: '2099-10-02T09:30:00Z', timeZone: 'UTC' })`);
+  await waitFor(() => js(`document.querySelector('#notices').textContent.includes('Claude Desktop 2.17.0 isn’t supported yet')`), 'compatibility notice');
+  await waitFor(() => js(`Boolean(document.querySelector(${JSON.stringify(`[data-job="${job.id}"] .pill.risk`)}))`), 'schedule marked at risk');
+  assert.match(await js(`document.querySelector('#notices').textContent`), /changed how its message box is labelled[\s\S]*One scheduled message is at risk/);
+  assert.equal((await js(`window.autoContinue.getJob(${JSON.stringify(job.id)})`)).status, 'pending', 'A risk never cancels a schedule');
+  await js(`document.querySelector('#notices details').open = true; document.querySelector('#toast').hidden = true`);
+  await capture('compatibility-notice-dark');
+  await click('[data-action="theme"]');
+  await waitFor(() => js(`!document.body.classList.contains('dark')`), 'light theme');
+  await js(`document.querySelector('#notices details').open = true`);
+  await capture('compatibility-notice-light');
+  await click(`[data-job="${job.id}"]`);
+  await waitFor(() => js(`Boolean(document.querySelector('.risk-detail'))`), 'risk shown in the detail');
+  assert.equal(await js(`document.querySelector('.detail-header .pill.risk')?.textContent`), 'At risk');
+  await js(`document.querySelector('.risk-detail').scrollIntoView({block:'center'})`);
+  await capture('compatibility-detail-light');
+  await click('[data-action="theme"]');
+  await waitFor(() => js(`document.body.classList.contains('dark')`), 'dark theme');
+  await js(`document.querySelector('.risk-detail').scrollIntoView({block:'center'})`);
+  await capture('compatibility-detail-dark');
+  await click('#notices [data-action="copy-diagnostics"]');
+  await waitFor(() => copied.length === 1, 'diagnostics copied');
+  assert.match(copied[0], /- desk: Claude Desktop 2\.17\.0, verified 2\.16120\.0[\s\S]*composer_label/);
+  assert.doesNotMatch(copied[0], /Continue with the next step|Refactor the scheduler/, 'Diagnostics never contain message text or titles');
+  await waitFor(() => js(`document.querySelector('#toast').textContent.includes('Diagnostics copied')`), 'copy toast');
+  desk.state.compatibility = supported;
+  await click('#notices [data-action="recheck-compatibility"]');
+  await waitFor(() => js(`!document.querySelector('#notices').textContent.includes('supported yet')`), 'notice cleared after a passing check');
+  await waitFor(() => js(`!document.querySelector('.risk-detail')`), 'risk cleared in the detail');
+  await click('[data-action="cancel"]');
+  await click('[data-action="confirm-cancel"]');
+  await waitFor(() => js(`window.autoContinue.getJob(${JSON.stringify(job.id)}).then(item=>item.status==='canceled')`), 'desktop schedule canceled');
 }
 // A hung window must fail the run rather than block CI or a shell indefinitely.
 // Before the app is ready (for example while macOS is locked) app.exit() is ignored, so force the exit.

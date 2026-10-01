@@ -1,0 +1,36 @@
+#!/usr/bin/env node
+'use strict';
+// Fake app-bundled `codex app-server` for the Codex desktop harness. Every
+// request re-reads the JSON state in FAKE_STATE, so a test can change the
+// "installed app" between calls:
+//   { version, threads: [...], turns: { [threadId]: [...] }, rateLimits, replies: { [method]: { result } | { error } } }
+// `replies` replaces the normal answer to a method, to model protocol changes.
+// Every request's method is appended to FAKE_LOG, so tests can prove reads only.
+const fs = require('node:fs');
+const readline = require('node:readline');
+const send = (value) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...value }) + '\n');
+const TOP_LEVEL = ['cli', 'vscode', 'exec', 'appServer', 'unknown'];
+readline.createInterface({ input: process.stdin }).on('line', (line) => {
+  const message = JSON.parse(line);
+  if (message.id === undefined) return;
+  const state = JSON.parse(fs.readFileSync(process.env.FAKE_STATE, 'utf8'));
+  if (process.env.FAKE_LOG) fs.appendFileSync(process.env.FAKE_LOG, `${message.method}\n`);
+  const reply = state.replies?.[message.method];
+  if (reply) return send({ id: message.id, ...reply });
+  const p = message.params || {};
+  if (message.method === 'initialize') return send({ id: message.id, result: { userAgent: `${p.clientInfo?.name}/${state.version || '0.155.0-alpha.9.2'} (Mac OS 26.5.1; arm64) unknown (${p.clientInfo?.name}; 0)`, codexHome: '/tmp', platformFamily: 'unix', platformOs: 'macos' } });
+  if (message.method === 'thread/list') {
+    const kinds = Array.isArray(p.sourceKinds) && p.sourceKinds.length ? p.sourceKinds : ['cli', 'vscode', 'appServer'];
+    const matching = (state.threads || []).filter((t) => kinds.includes(typeof t.source === 'string' ? t.source : 'subAgent') && kinds.some((kind) => TOP_LEVEL.includes(kind)) && Boolean(t.archived) === Boolean(p.archived))
+      .sort((a, b) => b.createdAt - a.createdAt);
+    const offset = Number(p.cursor || 0), limit = p.limit || 25;
+    return send({ id: message.id, result: { data: matching.slice(offset, offset + limit), nextCursor: offset + limit < matching.length ? String(offset + limit) : null } });
+  }
+  if (message.method === 'thread/read') {
+    const thread = (state.threads || []).find((t) => t.id === p.threadId);
+    return send(thread ? { id: message.id, result: { thread } } : { id: message.id, error: { code: -32600, message: `thread not found: ${p.threadId}` } });
+  }
+  if (message.method === 'thread/turns/list') return send({ id: message.id, result: { data: (state.turns?.[p.threadId] || []).slice(0, p.limit || 25), nextCursor: null } });
+  if (message.method === 'account/rateLimits/read') return send({ id: message.id, result: { rateLimits: state.rateLimits ?? null, ordinaryUsageAllowed: true } });
+  return send({ id: message.id, error: { code: -32601, message: 'Method not found' } });
+});

@@ -53,6 +53,14 @@ test('Claude Desktop sessions are read defensively and own their CLI session IDs
   assert.deepEqual(await sessions.readDesktopCodeSessions({ home: '/nonexistent', env: {} }), []);
 });
 
+test('the session store reports files that no longer parse, and calls a missing store empty', async () => {
+  const { options } = fixture();
+  const store = await sessions.readDesktopCodeSessionStore(options);
+  assert.deepEqual([store.found, store.files, store.sessions.length, store.unrecognised], [true, 3, 1, 2]);
+  assert.match(store.drift, /^2 of 3 session files lack the expected fields \(most often .+, in 1\)\.$/, 'A clear majority of unreadable files is a change');
+  assert.deepEqual(await sessions.readDesktopCodeSessionStore({ home: '/nonexistent', env: {} }), { found: false, files: 0, sessions: [], unrecognised: 0, drift: '' });
+});
+
 test('the live registry returns only live processes with normalised status', async () => {
   const { options } = fixture();
   const desktop = await sessions.readLiveSession(DESKTOP_CLI.toUpperCase(), options);
@@ -62,6 +70,36 @@ test('the live registry returns only live processes with normalised status', asy
   assert.equal(desktop.updatedAt, new Date(1790809000000).toISOString());
   assert.equal((await sessions.readLiveSession(CLI, options)).pid, 200, 'The dead pid 300 entry is ignored');
   assert.equal(await sessions.readLiveSession(CLI, { ...options, isAlive: () => false }), null);
+});
+
+test('the live registry classifies every live entry and names what changed', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-registry-'));
+  roots.push(home);
+  const dir = path.join(home, '.claude', 'sessions');
+  fs.mkdirSync(dir, { recursive: true });
+  const now = Date.parse('2026-10-01T12:00:00Z');
+  const id = (n) => `${String(n).padStart(8, '0')}-2222-4333-8444-555555555555`;
+  const write = (pid, value) => fs.writeFileSync(path.join(dir, `${pid}.json`), typeof value === 'string' ? value : JSON.stringify({ pid, startedAt: now - 600_000, kind: 'interactive', entrypoint: 'cli', ...value }));
+  write(1, { sessionId: id(1), status: 'shell' });
+  write(2, { sessionId: id(2), status: 'running' });
+  write(3, { sessionId: id(3) });
+  write(4, { sessionId: id(4), startedAt: now - 2_000 });
+  write(5, { session: id(5), status: 'busy' });
+  write(6, '{"pid": 6, "sessionId": "');
+  write(7, { sessionId: id(7), status: 'idle' });
+  fs.writeFileSync(path.join(dir, '7.abcdef.key'), 'not a registry entry');
+  const registry = await sessions.readLiveRegistry({ home, env: {}, now: () => now, isAlive: (pid) => pid !== 7 });
+  assert.equal(registry.found, true);
+  const states = Object.fromEntries([...registry.sessions].map(([key, entry]) => [key.slice(0, 8), [entry.state, entry.drift]]));
+  assert.deepEqual(states, {
+    '00000001': ['busy', ''],
+    '00000002': ['unrecognised', 'The live registry entry 2.json reports the unknown status "running".'],
+    '00000003': ['unrecognised', 'The live registry entry 3.json reports no status.'],
+    '00000004': ['starting', '']
+  }, 'A half-written file is skipped, as Claude Code does, and dead processes are ignored');
+  assert.deepEqual(registry.unidentified, [{ pid: 5, hint: 'The live registry entry 5.json of a running process has no session ID (sessionId: missing).' }]);
+  assert.deepEqual(registry.pids, [1, 2, 3, 4, 5]);
+  assert.deepEqual(await sessions.readLiveRegistry({ home: '/nonexistent', env: {} }), { found: false, pids: [], sessions: new Map(), unidentified: [] });
 });
 
 test('plan usage returns the newest valid sample, optionally for one organisation', async () => {

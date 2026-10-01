@@ -113,6 +113,28 @@ test('preparation refuses sessions open elsewhere or without their project folde
   assert.throws(() => open.make({ getSettings: () => ({ executable: 'claude' }) }).prepareTurn(turn(), closed), { code: 'harness_not_installed' }, 'Overrides must be absolute');
 });
 
+test('a live registry entry that names no session refuses, because it could hold this session', async () => {
+  // An update renames the session field, so the terminal session holding SESSION can no longer be matched.
+  const s = setup({ live: [{ session_id: SESSION, status: 'busy', kind: 'interactive', entrypoint: 'cli' }] });
+  const adapter = s.make();
+  const state = await adapter.inspectConversation({ conversationId: SESSION, deliveryKey: null });
+  assert.throws(() => adapter.prepareTurn(turn(), state), (error) => error.code === 'app_version_unsupported' && error.details.contactPoint === 'live_registry'
+    && error.message === 'Claude Code changed how it reports whether the agent is working, so Agent Auto-Continue could not send. Nothing was sent.' && /no session ID/.test(error.details.hint));
+  s.alive.clear();
+  const closed = await adapter.inspectConversation({ conversationId: SESSION, deliveryKey: null });
+  assert.doesNotThrow(() => adapter.prepareTurn(turn(), closed), 'Entries of processes that ended do not count');
+});
+
+test('a transcript in an unfamiliar format refuses before resuming, because user activity could not be seen', async () => {
+  const s = setup();
+  // An update records the user's newest prompt under a record type this version does not know.
+  fs.appendFileSync(path.join(s.store, `${SESSION}.jsonl`), JSON.stringify({ type: 'human', uuid: 'n1', cwd: s.project, timestamp: s.at(30), message: { role: 'user', content: 'I am back' } }) + '\n');
+  const adapter = s.make();
+  const state = await adapter.inspectConversation({ conversationId: SESSION, deliveryKey: null });
+  assert.throws(() => adapter.prepareTurn(turn(), state), (error) => error.code === 'app_version_unsupported' && error.details.contactPoint === 'transcript'
+    && error.message === 'Claude Code changed how it records conversations, so Agent Auto-Continue cannot work with it until it supports this version.');
+});
+
 async function send(s, adapter = s.make()) {
   const state = await adapter.inspectConversation({ conversationId: SESSION, deliveryKey: turn().deliveryKey });
   const { plan } = adapter.prepareTurn(turn(), state);
@@ -193,6 +215,20 @@ test('availability is inferred from recent usage-limit messages', async () => {
   assert.equal((await probe([limit('2026-10-01T12:00:00Z', "You've hit your limit · resets 1pm (UTC)")])).state, 'available', 'A past reset is no longer limiting');
   assert.equal((await probe([limit('2026-10-01T01:00:00Z', "You've reached your model limit.")])).state, 'unknown', 'Old limits without a reset are ignored');
   assert.equal((await probe([ok('2026-10-01T13:00:00Z')])).state, 'unknown');
+});
+
+test('sessions Claude Desktop wrote are recognised from the transcript too, so a changed Desktop store cannot expose them', async () => {
+  const s = setup();
+  // Claude Desktop's store is unreadable after an update, but its transcript records name Claude Desktop as the entrypoint.
+  const org = path.join(s.home, 'Library', 'Application Support', 'Claude', 'claude-code-sessions', 'acct', 'org');
+  fs.mkdirSync(org, { recursive: true });
+  fs.writeFileSync(path.join(org, 'local_aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee.json'), JSON.stringify({ id: 'local_aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', cli: OTHER }));
+  fs.appendFileSync(path.join(s.store, `${OTHER}.jsonl`), JSON.stringify({ type: 'user', uuid: 'o2', entrypoint: 'claude-desktop', cwd: s.project, timestamp: s.at(21), message: { role: 'user', content: 'From the app' } }) + '\n');
+  const adapter = s.make();
+  assert.deepEqual((await adapter.listConversations()).map((item) => item.id), [SESSION]);
+  const state = await adapter.inspectConversation({ conversationId: OTHER, deliveryKey: null });
+  assert.throws(() => adapter.prepareTurn(turn({ conversationId: OTHER }), state), (error) => error.code === 'owned_by_other_harness');
+  assert.equal(s.log().length, 0, 'Nothing was started');
 });
 
 test('sessions owned by Claude Desktop are hidden and refused with a pointer to that harness', async () => {

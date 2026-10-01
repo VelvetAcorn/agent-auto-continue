@@ -127,6 +127,41 @@ test('checkTurn and availability use the Codex protocol results', async () => {
   assert.deepEqual([available.state, available.resetsAt, available.source], ['limited', resetsAt, 'reported']);
 });
 
+test('a ChatGPT update that renames the send button is reported with its version, and the text is removed', async () => {
+  const { adapter, fake } = setup();
+  fake.state.version = '27.1.0';
+  fake.state.view.sendLabel = 'Submit';
+  await assert.rejects(adapter.submitTurn(turn(), { threadId: THREAD, name: 'Update live Ko-fi account' }), (error) => {
+    assert.equal(error.code, 'app_version_unsupported');
+    assert.equal(error.deliveryUncertain, false);
+    assert.deepEqual([error.details.app, error.details.appVersion, error.details.verifiedVersion, error.details.contactPoint], ['ChatGPT (Codex)', '27.1.0', '26.915.31945', 'send_label']);
+    assert.match(error.message, /^ChatGPT \(Codex\) 27\.1\.0 changed how its send button is labelled/);
+    return true;
+  });
+  assert.equal(fake.state.sent.length, 0);
+  assert.equal(fake.state.view.composer, '');
+});
+
+test('the bundled codex binary is found inside the app wherever Launch Services says it is installed', async (t) => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-app-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const bundle = path.join(root, 'Tools', 'ChatGPT.app');
+  fs.mkdirSync(path.join(bundle, 'Contents', 'Resources'), { recursive: true });
+  const reader = fakeReader();
+  const fake = createFakeDesktopAutomation({ bundleId: BUNDLE_ID });
+  fake.state.installedPath = bundle;
+  fake.state.version = '27.0';
+  const adapter = createCodexDesktopHarness({ createReader: reader.createReader, automation: fake.automation, platform: 'darwin', home: root });
+  // An update that moves or drops the bundled binary is an app change, not a missing app.
+  await assert.rejects(adapter.listConversations({}), (error) => error.code === 'app_version_unsupported' && error.details.contactPoint === 'app_path' && /^ChatGPT \(Codex\) 27\.0 changed where it keeps/.test(error.message));
+  fs.writeFileSync(path.join(bundle, 'Contents', 'Resources', 'codex'), '');
+  await adapter.listConversations({});
+  assert.deepEqual(reader.state.executables, [path.join(bundle, 'Contents', 'Resources', 'codex')]);
+});
+
 test('without the app the harness reports it as not installed', async () => {
   const reader = fakeReader();
   const adapter = createCodexDesktopHarness({ createReader: reader.createReader, platform: 'darwin', codexPath: () => null });

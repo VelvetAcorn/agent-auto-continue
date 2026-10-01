@@ -90,8 +90,9 @@ test('labels come from the app catalogue for the UI language, with English as a 
 test('the Accessibility program runs in osascript and reports environment facts', { skip: process.platform !== 'darwin' }, async () => {
   const automation = createMacAutomation();
   const missing = 'io.example.not-installed-app';
-  const env = await automation.environment([missing]);
+  const env = await automation.environment([missing], { schemes: ['io-example-no-such-scheme', 'BAD SCHEME'] });
   assert.equal(env.ok, true);
+  assert.deepEqual(env.handlers, { 'io-example-no-such-scheme': null }, 'Unregistered schemes have no handler, and invalid ones are not looked up');
   assert.equal(typeof env.trusted, 'boolean');
   assert.equal(typeof env.screenLocked, 'boolean');
   assert.deepEqual(env.apps[missing], { installedPath: null, version: null, running: false, pid: null, active: false });
@@ -107,6 +108,24 @@ test('desktop error codes are part of the contract and keep their details', () =
   assert.ok(ERROR_CODES.has('screen_locked'));
   const info = toErrorInfo(new HarnessError('permission_required', 'Allow access.', { permission: 'accessibility', settingsUrl: ACCESSIBILITY_SETTINGS_URL }));
   assert.deepEqual(info, { code: 'permission_required', message: 'Allow access.', details: { permission: 'accessibility', settingsUrl: ACCESSIBILITY_SETTINGS_URL }, deliveryUncertain: false });
+});
+
+test('an app change is a certain, sanitised failure that names the app, its version and what changed', () => {
+  const { CONTACT_POINTS, ERROR_CODES, appVersionUnsupported, driftMessage, toErrorInfo } = require('../lib/harnesses/errors');
+  assert.ok(ERROR_CODES.has('app_version_unsupported'));
+  const error = appVersionUnsupported({ app: 'Claude Desktop', appVersion: '2.17.0', verifiedVersion: '2.16120.0', contactPoint: 'composer_label', hint: `Token Bearer abcdefghijklmnop ${'x'.repeat(400)}` });
+  assert.equal(error.message, 'Claude Desktop 2.17.0 changed how its message box is labelled, so Agent Auto-Continue could not send. Nothing was sent.');
+  const info = toErrorInfo(error);
+  assert.equal(info.deliveryUncertain, false);
+  assert.deepEqual(Object.keys(info.details), ['app', 'appVersion', 'verifiedVersion', 'contactPoint', 'hint']);
+  assert.doesNotMatch(info.details.hint, /abcdefghijklmnop/);
+  assert.ok(info.details.hint.length <= 300);
+  assert.equal(appVersionUnsupported({ app: 'ChatGPT (Codex)', contactPoint: 'made_up' }).details.contactPoint, 'unknown', 'Unknown contact points are not passed through');
+  assert.match(appVersionUnsupported({ app: 'ChatGPT (Codex)', contactPoint: 'deep_link' }).message, /^ChatGPT \(Codex\) changed how its links open a conversation/, 'An unknown version is left out');
+  assert.match(driftMessage({ app: 'A', appVersion: '1', verifiedVersion: '1', contactPoint: 'send_label' }), /^A 1 did not match what this version of Agent Auto-Continue expects/);
+  assert.match(driftMessage({ app: 'A', appVersion: '2', contactPoint: 'send_label', during: 'check' }), /^A 2 changed how its send button is labelled\. Scheduled messages for it may fail/);
+  assert.match(appVersionUnsupported({ app: 'A', contactPoint: 'transcript', during: 'read' }).message, /^A changed how it records conversations, so Agent Auto-Continue cannot work with it until it supports this version\.$/);
+  for (const id of Object.keys(CONTACT_POINTS)) assert.match(id, /^[a-z_]+$/);
 });
 
 test('a child that exits before reading its input is a failed call, not a crash', async () => {

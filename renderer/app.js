@@ -15,7 +15,7 @@
     settings: null, storageError: null, jobsError: '', actionError: '', unacknowledged: 0, selected: null, draftKey: 'new', drafts: new Map(),
     picking: false, loading: true, busy: false, confirmCancel: false, calendarMonth: '', calendarOpen: false,
     theme: preference('scheduler-theme', 'system'), reduceMotion: preference('scheduler-motion', 'system') === 'reduce',
-    settingsDraft: null, harnesses: [], harness: preference('scheduler-harness', 't3'), harnessDraft: null, availability: {}, keepAwake: null, keepAwakeDraft: null
+    settingsDraft: null, harnesses: [], harness: preference('scheduler-harness', 't3'), harnessDraft: null, availability: {}, keepAwake: null, keepAwakeDraft: null, compatibility: []
   };
   let jobRequest = 0, threadRequest = 0, timer, toastTimer, lastRefresh = 0, stopped = false, failuresKnown = false;
   const knownProblems = new Set();
@@ -91,9 +91,21 @@
   function connection() {
     return `<span class="connection ${state.online === false ? 'offline' : ''}" id="connection-state">${state.online === null ? 'Connecting…' : state.online ? escape(harnessLabel()) + ' connected' : 'Offline · queue saved'}</span>`;
   }
+  // Short names for the contact points in lib/harnesses/errors.js, shown beside the ID for bug reports.
+  const CONTACT_POINT_NAMES = { app_path: 'App files', deep_link: 'Conversation links', content_match: 'Open conversation title', composer_label: 'Message box label', send_label: 'Send button label', stop_label: 'Stop button label', label_catalogue: 'Translated labels', session_store: 'Session store', live_registry: 'Working status', transcript: 'Transcript format', originator: 'Conversation owner', app_server: 'Codex server replies' };
+  const contactPointName = (id) => CONTACT_POINT_NAMES[id] ? `${CONTACT_POINT_NAMES[id]} (${id})` : id;
+  // One notice per desktop app whose installed version changed in a way this version does not understand.
+  function compatibilityNotices() {
+    return state.compatibility.filter(item => item.problems?.length).map(item => {
+      const name = `${item.label}${item.appVersion ? ' ' + item.appVersion : ''}`;
+      const atRisk = state.upcoming.filter(job => job.harness === item.harness && job.risk).length;
+      const facts = [item.verifiedVersion ? `Verified with ${item.verifiedVersion}` : '', `Changed: ${item.problems.map(problem => contactPointName(problem.contactPoint)).join(', ')}`, item.checkedAt ? `Last checked ${relative(item.checkedAt).toLocaleLowerCase()}` : ''].filter(Boolean);
+      return `<div class="notice" role="status"><div><strong>${escape(name)} isn’t supported yet</strong><p>${escape(item.problems[0].message)}</p>${atRisk ? `<p>${atRisk === 1 ? 'One scheduled message is' : `${atRisk} scheduled messages are`} at risk. ${atRisk === 1 ? 'It stays' : 'They stay'} scheduled, and if the problem remains when ${atRisk === 1 ? 'it is' : 'one is'} due, nothing is sent.</p>` : ''}<details><summary>Technical details</summary><p>${facts.map(escape).join(' · ')}</p></details></div><button type="button" data-action="copy-diagnostics">Copy diagnostics</button><button type="button" class="ghost" data-action="recheck-compatibility" data-harness="${escape(item.harness)}">Check again</button></div>`;
+    }).join('');
+  }
   function notice() {
     const storage = state.storageError ? `<div class="notice" role="alert"><div><strong>Local schedule storage needs attention</strong><p>${escape(state.storageError.message)}</p></div></div>` : '';
-    return storage + keepAwakeNotice() + (state.online === false ? `<div class="notice"><div><strong>${escape(harnessLabel())} is unavailable</strong><p>${escape(state.connectionError?.message || `Check that ${harnessLabel()} is available and review your connection settings. Your local queue and history remain available.`)}</p>${technical(state.connectionError)}</div>${state.connectionError?.code === 'permission_required' ? '<button type="button" data-action="open-permission-settings">Open System Settings</button>' : ''}<button type="button" data-action="check">Check connection</button><button type="button" class="ghost" data-nav="settings">Settings</button></div>` : '');
+    return storage + keepAwakeNotice() + (state.online === false ? `<div class="notice"><div><strong>${escape(harnessLabel())} is unavailable</strong><p>${escape(state.connectionError?.message || `Check that ${harnessLabel()} is available and review your connection settings. Your local queue and history remain available.`)}</p>${technical(state.connectionError)}</div>${state.connectionError?.code === 'permission_required' ? '<button type="button" data-action="open-permission-settings">Open System Settings</button>' : ''}<button type="button" data-action="check">Check connection</button><button type="button" class="ghost" data-nav="settings">Settings</button></div>` : '') + compatibilityNotices();
   }
   function keepAwakeNotice() {
     const k = state.keepAwake;
@@ -129,7 +141,8 @@
   function technical(info) {
     if (!info?.details && !info?.code) return '';
     const details = info.details || {};
-    return `<details><summary>Technical details</summary><p>${[info.code, details.status ? 'HTTP ' + details.status : '', details.endpoint, details.contentType].filter(Boolean).map(escape).join(' · ')}</p></details>`;
+    const app = details.appVersion ? `${details.app || 'App'} ${details.appVersion}${details.verifiedVersion && details.verifiedVersion !== details.appVersion ? ` (verified with ${details.verifiedVersion})` : ''}` : '';
+    return `<details><summary>Technical details</summary><p>${[info.code, details.status ? 'HTTP ' + details.status : '', details.endpoint, details.contentType, app, details.contactPoint && contactPointName(details.contactPoint), details.hint].filter(Boolean).map(escape).join(' · ')}</p></details>`;
   }
   function render(focusSelector) {
     const active = document.activeElement;
@@ -171,7 +184,7 @@
     const zone = job.timeZone || localZone;
     const prefix = running ? 'Sent ' : !history && status === 'waiting' ? 'Next check ' : '';
     const progress = job.automation ? `<span class="progress">${escape(job.automation.progressLabel)}</span>` : '';
-    return `<button type="button" class="row" data-job="${escape(job.id)}"><div class="row-top"><span class="overline">${escape(jobSource(job))}</span>${jobPill(job)}</div><div class="row-title">${escape(job.threadTitle || job.threadId)}</div><div class="row-preview">${escape(job.message)}</div><div class="meta"><span>${escape(prefix + display(when, zone))}${progress}</span><span data-relative="${escape(when)}">${relative(when)}</span></div></button>`;
+    return `<button type="button" class="row" data-job="${escape(job.id)}"><div class="row-top"><span class="overline">${escape(jobSource(job))}</span><span class="pills">${job.risk ? '<span class="pill risk">At risk</span>' : ''}${jobPill(job)}</span></div><div class="row-title">${escape(job.threadTitle || job.threadId)}</div><div class="row-preview">${escape(job.message)}</div><div class="meta"><span>${escape(prefix + display(when, zone))}${progress}</span><span data-relative="${escape(when)}">${relative(when)}</span></div></button>`;
   }
   function jobSource(job) { return [job.harnessLabel || harnessLabel(job.harness || 't3'), job.projectName || job.projectId].filter(Boolean).join(' · '); }
   const turnLabels = { running: 'Running', completed: 'Finished', failed: 'Stopped with an error', interrupted: 'Interrupted', unknown: 'Unknown' };
@@ -275,8 +288,9 @@
     const timed = !auto || auto.trigger !== 'available' || auto.currentTurn > 1;
     const problem = ['failed','unconfirmed'].includes(status) ? `<div class="error-detail"><h3>${status === 'unconfirmed' ? 'Check delivery before trying again' : 'This message could not be delivered'}</h3><p>${escape(job.error?.message || job.note)}</p>${technical(job.error)}${job.lastReconciledAt ? `<p>Last checked: ${escape(display(job.lastReconciledAt, zone))}. ${status === 'unconfirmed' ? 'Delivery is still unconfirmed. No resend was attempted.' : ''}</p>` : ''}<div class="actions"><button type="button" data-action="ack" ${job.acknowledgedAt ? 'disabled' : ''}>${job.acknowledgedAt ? 'Acknowledged ✓' : 'Acknowledge'}</button><button type="button" class="ghost" data-nav="settings">Connection settings</button></div></div>` : '';
     const info = problem || (auto ? (['waiting','pending'].includes(job.displayStatus) && job.note ? `<p class="help">${escape(job.note)}</p>` : '') : status === 'sent' ? `<p class="help">${escape(label)} accepted the message.${job.turn ? '' : ' This does not confirm that the agent completed its work.'}</p>` : job.note ? `<p class="help">${escape(job.note)}</p>` : '');
+    const risk = job.risk && status === 'pending' ? `<div class="risk-detail"><h3>This message may not be sent</h3><p>${escape(job.risk.message)}</p><p>It stays scheduled. If the problem remains when it is due, it fails without sending anything.</p></div>` : '';
     const actions = auto ? automationActions(job, status) : status === 'pending' ? '<button type="button" class="primary" data-action="edit">Edit schedule</button><button type="button" class="ghost danger" data-action="cancel">Cancel schedule</button>' : status === 'unconfirmed' ? '<button type="button" class="primary" data-action="reconcile">Check delivery</button>' : status !== 'dispatching' ? '<button type="button" class="primary" data-action="again">Schedule again</button>' : '<p class="help">Sending has started. This message can no longer be changed or canceled.</p>';
-    return `<section class="card panel"><div class="detail-header"><span class="overline">${escape(jobSource(job))}</span>${jobPill(job)}</div><h2>${escape(job.threadTitle || job.threadId)}</h2><p class="message">${escape(job.message)}</p>${auto ? `<div class="actions">${actions}</div>${info}${automationDetail(job, zone)}` : ''}<dl class="key-values"><dt>Agent harness</dt><dd>${escape(label)}</dd>${auto ? '' : turnSummary(job)}${timed ? `<dt>Requested time</dt><dd>${escape(display(job.scheduleAt, zone))}</dd>` : `<dt>Start</dt><dd>When ${escape(label)} is available</dd>`}${auto && !['pending','dispatching'].includes(status) ? '' : `<dt>${job.displayStatus === 'waiting' ? 'Next check' : 'Effective send time'}</dt><dd>${escape(display(job.effectiveAt, zone, true))}</dd>`}<dt>Timezone</dt><dd>${escape(zone)}${job.timeZone ? '' : ' (legacy record)'}</dd><dt>Safety buffer</dt><dd>${job.bufferSeconds} seconds</dd><dt>Last updated</dt><dd>${escape(display(job.updatedAt || job.createdAt || job.scheduleAt, zone))}</dd>${job.lateBySeconds > 0 ? `<dt>Catch-up delay</dt><dd>${job.lateBySeconds} seconds</dd>` : ''}</dl>${auto ? '' : `${info}<div class="actions">${actions}</div>`}${state.confirmCancel ? '<div class="confirm" role="group" aria-label="Confirm cancellation"><p>Cancel this scheduled message? The record will remain in History.</p><button type="button" class="danger" data-action="confirm-cancel">Cancel message</button> <button type="button" class="ghost" data-action="keep">Keep schedule</button></div>' : ''}</section>`;
+    return `<section class="card panel"><div class="detail-header"><span class="overline">${escape(jobSource(job))}</span><span class="pills">${job.risk && status === 'pending' ? '<span class="pill risk">At risk</span>' : ''}${jobPill(job)}</span></div><h2>${escape(job.threadTitle || job.threadId)}</h2><p class="message">${escape(job.message)}</p>${auto ? `<div class="actions">${actions}</div>${risk}${info}${automationDetail(job, zone)}` : ''}<dl class="key-values"><dt>Agent harness</dt><dd>${escape(label)}</dd>${auto ? '' : turnSummary(job)}${timed ? `<dt>Requested time</dt><dd>${escape(display(job.scheduleAt, zone))}</dd>` : `<dt>Start</dt><dd>When ${escape(label)} is available</dd>`}${auto && !['pending','dispatching'].includes(status) ? '' : `<dt>${job.displayStatus === 'waiting' ? 'Next check' : 'Effective send time'}</dt><dd>${escape(display(job.effectiveAt, zone, true))}</dd>`}<dt>Timezone</dt><dd>${escape(zone)}${job.timeZone ? '' : ' (legacy record)'}</dd><dt>Safety buffer</dt><dd>${job.bufferSeconds} seconds</dd><dt>Last updated</dt><dd>${escape(display(job.updatedAt || job.createdAt || job.scheduleAt, zone))}</dd>${job.lateBySeconds > 0 ? `<dt>Catch-up delay</dt><dd>${job.lateBySeconds} seconds</dd>` : ''}</dl>${auto ? '' : `${risk}${info}<div class="actions">${actions}</div>`}${state.confirmCancel ? '<div class="confirm" role="group" aria-label="Confirm cancellation"><p>Cancel this scheduled message? The record will remain in History.</p><button type="button" class="danger" data-action="confirm-cancel">Cancel message</button> <button type="button" class="ghost" data-action="keep">Keep schedule</button></div>' : ''}</section>`;
   }
   const turnStates = { completed: 'Finished', failed: 'Failed', interrupted: 'Interrupted', unknown: 'Ended unclear', running: 'Agent working', delivered: 'Delivered' };
   const chainStates = { active: 'Running', paused: 'Paused', stopped: 'Stopped', finished: 'Finished' };
@@ -422,7 +436,7 @@
   function bindOccurrence() { if($('#occurrence')) $('#occurrence').onchange=event=>{draft().occurrence=event.target.value;updatePreview();}; }
   function bind() {
     document.querySelectorAll('[data-nav]').forEach(button=>{button.onclick=()=>navigate(button.dataset.nav);});
-    document.querySelectorAll('[data-action]').forEach(button=>{button.onclick=()=>action(button.dataset.action);});
+    document.querySelectorAll('[data-action]').forEach(button=>{button.onclick=()=>action(button.dataset.action,button.dataset);});
     remote?.bind(remoteContext());
     document.querySelectorAll('[data-job]').forEach(button=>{button.onclick=()=>{saveListContext();state.returnView=state.view;state.selected=button.dataset.job;state.selectedJob=findJob(state.selected);state.view='detail';state.actionError='';state.confirmCancel=false;render('h1');};});
     document.querySelectorAll('[data-thread]').forEach(button=>{button.onclick=()=>{const thread=state.threads.find(item=>item.id===button.dataset.thread);if(state.picking){draft().threadId=thread.id;fitDraft(draft());state.view='composer';state.picking=false;state.search='';render('h1');}else openComposer(thread.id);};});
@@ -461,10 +475,12 @@
     if(starButton){starButton.onpointerdown=event=>{if(event.isPrimary&&event.button===0)holdStar();};starButton.onkeydown=event=>{if(event.key==='Enter'&&event.repeat)event.preventDefault();if(event.key===' '&&!event.repeat)holdStar();};starButton.onclick=spinStar;}
   }
   function savePreferences(){try{localStorage.setItem('scheduler-theme',state.theme);localStorage.setItem('scheduler-motion',state.reduceMotion?'reduce':'system');}catch{/* Cosmetic preferences can remain session-only. */}}
-  function action(name) {
+  function action(name, data = {}) {
     if(name==='support'){void perform(()=>api.openSupport());return;}
     if(name==='keep-awake-stop'){void perform(()=>api.stopKeepAwake(),{success:snapshot=>{state.keepAwake=snapshot;toast('Your Mac can sleep now.');}});return;}
     if(name==='keep-awake-resume'){void perform(()=>api.resumeKeepAwake(),{success:snapshot=>{state.keepAwake=snapshot;toast('Keeping your Mac awake again.');}});return;}
+    if(name==='copy-diagnostics'){void perform(()=>api.copyDiagnostics(),{success:()=>toast('Diagnostics copied. Paste them into your bug report.')});return;}
+    if(name==='recheck-compatibility'){void perform(()=>api.checkCompatibility(data.harness),{success:async list=>{state.compatibility=Array.isArray(list)?list:[];await refreshJobs(false);const item=state.compatibility.find(entry=>entry.harness===data.harness);toast(item?.ok?`${item.label} looks supported again.`:`${item?.label||harnessLabel(data.harness)} still needs an update of Agent Auto-Continue.`);}});return;}
     if(name==='new')return openComposer();
     if(name==='theme'){state.theme=document.body.classList.contains('dark')?'light':'dark';savePreferences();render();return;}
     if(name==='back'){if(state.picking){state.picking=false;state.view='composer';state.search='';render('h1');}else navigate(state.returnView,true);return;}
@@ -507,7 +523,12 @@
     }catch(error){if(request===jobRequest)state.jobsError=errorMessage(error);}
     finally {if(request===jobRequest){state.loading=false;const changed=previous!==JSON.stringify([state.upcoming,state.history,state.upcomingTotal,state.historyTotal,state.unacknowledged,state.jobsError,state.loading,state.selectedJob,state.storageError]);if(shouldRender&&changed&&!state.busy&&!['composer','settings'].includes(state.view)&&!state.picking)render();else updateChrome();}}
   }
-  function updateChrome(){const notices=$('#notices');if(notices){notices.innerHTML=notice();notices.querySelectorAll('[data-action]').forEach(button=>{button.onclick=()=>action(button.dataset.action);});notices.querySelectorAll('[data-nav]').forEach(button=>{button.onclick=()=>navigate(button.dataset.nav);});}document.querySelectorAll('[data-count="upcoming"]').forEach(node=>{node.textContent=state.upcomingTotal;});document.querySelectorAll('[data-count="history"]').forEach(node=>{node.textContent=state.unacknowledged||'';});if($('#ka-status'))$('#ka-status').textContent=keepAwakeStatus();const status=$('#connection-state');if(status){status.textContent=state.online===null?'Connecting…':state.online?harnessLabel()+' connected':'Offline · queue saved';status.classList.toggle('offline',state.online===false);}}
+  function updateChrome(){const notices=$('#notices');if(notices){notices.innerHTML=notice();notices.querySelectorAll('[data-action]').forEach(button=>{button.onclick=()=>action(button.dataset.action,button.dataset);});notices.querySelectorAll('[data-nav]').forEach(button=>{button.onclick=()=>navigate(button.dataset.nav);});}document.querySelectorAll('[data-count="upcoming"]').forEach(node=>{node.textContent=state.upcomingTotal;});document.querySelectorAll('[data-count="history"]').forEach(node=>{node.textContent=state.unacknowledged||'';});if($('#ka-status'))$('#ka-status').textContent=keepAwakeStatus();const status=$('#connection-state');if(status){status.textContent=state.online===null?'Connecting…':state.online?harnessLabel()+' connected':'Offline · queue saved';status.classList.toggle('offline',state.online===false);}}
+  async function refreshCompatibility() {
+    if(!api.getCompatibility)return;
+    try{const list=await api.getCompatibility();if(stopped)return;const before=JSON.stringify(state.compatibility);state.compatibility=Array.isArray(list)?list:[];if(before!==JSON.stringify(state.compatibility)&&!state.busy)updateChrome();}
+    catch{/* The last known state stays visible. */}
+  }
   async function refreshThreads(shouldRender=true) {
     const request=++threadRequest;
     const previous=JSON.stringify([state.threads,state.online]);
@@ -527,6 +548,7 @@
   if(api.onScheduleInit)cleanup.push(api.onScheduleInit(payload=>route({...payload,view:'composer'})));
   if(api.onJobsChanged)cleanup.push(api.onJobsChanged(()=>void refreshJobs(true,true)));
   if(api.onRemoteChanged)cleanup.push(api.onRemoteChanged(()=>{if(state.view==='settings'&&!state.busy)void remote?.load(remoteContext());}));
+  if(api.onCompatibilityChanged)cleanup.push(api.onCompatibilityChanged(()=>void refreshCompatibility()));
   if(api.onSettingsChanged)cleanup.push(api.onSettingsChanged(settings=>{state.settings=settings;state.storageError=settings.storageError||state.storageError;for(const item of state.drafts.values())if(!item.editId)item.bufferSeconds=settings.bufferSeconds;}));
   if(api.onKeepAwakeChanged)cleanup.push(api.onKeepAwakeChanged(snapshot=>{state.keepAwake=snapshot;updateChrome();}));
   if(api.getKeepAwake)void api.getKeepAwake().then(snapshot=>{if(stopped)return;state.keepAwake=snapshot;if(state.view==='settings'&&!state.busy)render();else updateChrome();}).catch(()=>{/* Keep-awake status is advisory; Settings shows loading until it arrives. */});
@@ -536,7 +558,7 @@
   mediaMotion.addEventListener('change',syncStar);
   const starReleases=['pointerup','pointercancel','keyup','blur'];starReleases.forEach(type=>window.addEventListener(type,letGoStar));
   window.addEventListener('beforeunload',()=>{stopped=true;clearTimeout(timer);clearTimeout(toastTimer);cancelAnimationFrame(starState.frame);cleanup.forEach(unsubscribe=>unsubscribe?.());window.removeEventListener('focus',onFocus);mediaTheme.removeEventListener('change',onTheme);mediaMotion.removeEventListener('change',syncStar);starReleases.forEach(type=>window.removeEventListener(type,letGoStar));});
-  async function poll(){if(stopped)return;await Promise.allSettled([refreshThreads(),refreshJobs()]);document.querySelectorAll('[data-relative]').forEach(node=>{node.textContent=node.dataset.relative?relative(node.dataset.relative):'';});timer=setTimeout(poll,state.online===false?60000:30000);}
+  async function poll(){if(stopped)return;await Promise.allSettled([refreshThreads(),refreshJobs(),refreshCompatibility()]);document.querySelectorAll('[data-relative]').forEach(node=>{node.textContent=node.dataset.relative?relative(node.dataset.relative):'';});timer=setTimeout(poll,state.online===false?60000:30000);}
   render();
   void api.getSettings().then(settings=>{state.settings=settings;state.storageError=settings.storageError||state.storageError;for(const item of state.drafts.values())if(!item.editId)item.bufferSeconds=settings.bufferSeconds;if(!state.drafts.has('new'))state.drafts.set('new',newDraft());if(state.view==='settings'||state.view==='composer')render();}).catch(error=>{state.actionError=errorMessage(error);render();});
   if(api.listHarnesses)void api.listHarnesses().then(result=>{state.harnesses=Array.isArray(result?.harnesses)?result.harnesses:[];if(!harnessInfo(state.harness)){useHarness(result?.defaultHarness||'t3');void refreshThreads();}for(const item of state.drafts.values()){if(!harnessInfo(item.harness))item.harness=state.harness;if(!item.editId)fitDraft(item);}render();if(state.view==='composer')void refreshAvailability();}).catch(()=>{});

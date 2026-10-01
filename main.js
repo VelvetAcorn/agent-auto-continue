@@ -1,9 +1,10 @@
 'use strict';
 
-const { app, BrowserWindow, Menu, Notification, Tray, ipcMain, nativeImage, powerMonitor, powerSaveBlocker, shell } = require('electron');
+const { app, BrowserWindow, Menu, Notification, Tray, clipboard, ipcMain, nativeImage, powerMonitor, powerSaveBlocker, shell } = require('electron');
 const { execFile } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { clearTimeout, setInterval, setTimeout } = require('node:timers');
 const schedule = require('node-schedule');
@@ -19,12 +20,20 @@ const { ACCESSIBILITY_SETTINGS_URL } = require('./lib/desktop/mac-automation');
 const { KeepAwakeController, WorkSourceRegistry, parseBatteryStatus, remoteStatus, validateKeepAwakeInput } = require('./lib/keep-awake');
 const { createActiveWorkSource } = require('./lib/active-work-source');
 const { createT3WorkSource } = require('./lib/t3-work-source');
+const { createDiagnosticsLog } = require('./lib/diagnostics');
+const { createCompatibilityMonitor } = require('./lib/compatibility-monitor');
 
 const APP_NAME = 'T3 Code Auto-Continue';
 const DEFAULT_CONFIG = { t3Token: '', httpPort: 3773, bufferSeconds: 5 };
 const TURN_POLL_MS = 30_000;
+// While desktop-app schedules are pending, their apps' versions are checked this often.
+const COMPATIBILITY_TICK_MS = 5 * 60_000;
+// The first check waits briefly, so launching at login does not compete with the apps starting.
+const COMPATIBILITY_STARTUP_DELAY_MS = 10_000;
 let config = { ...normaliseConfig(DEFAULT_CONFIG), harnesses: {} };
 let service;
+let diagnostics;
+let compatibility;
 let storageError;
 let tray;
 let dashboardWindow;
@@ -74,7 +83,30 @@ function loadState() {
       t3WorkSource?.changed();
       void rebuildMenu();
     },
-    notify: (title, body) => notify(title, body)
+    notify: (title, body) => notify(title, body),
+    observe: (event) => compatibility?.observe(event),
+    riskFor: (harness) => compatibility?.riskFor(harness) || null
+  });
+}
+
+// Desktop app compatibility: a bounded diagnostics log and the monitor that
+// notices app updates before a schedule fires. Neither can block scheduling.
+function startCompatibility() {
+  diagnostics = createDiagnosticsLog({ load: () => readJson(dataPath('diagnostics.json'), null), save: (value) => writeJson(dataPath('diagnostics.json'), value) });
+  compatibility = createCompatibilityMonitor({
+    harnesses, diagnostics,
+    load: () => readJson(dataPath('compatibility.json'), null), save: (value) => writeJson(dataPath('compatibility.json'), value),
+    hasScheduledWork: (harness) => activeJobs().some((job) => job.harness === harness),
+    onChange: () => {
+      for (const window of BrowserWindow.getAllWindows()) { window.webContents.send('compatibility:changed'); window.webContents.send('jobs:changed'); }
+    },
+    onProblem: (harness, problems) => {
+      const count = activeJobs().filter((job) => job.harness === harness).length;
+      if (!count) return;
+      const state = compatibility.snapshot().find((item) => item.harness === harness);
+      notify(`${state?.label || harness}${state?.appVersion ? ` ${state.appVersion}` : ''} isn’t supported yet`,
+        `${problems[0].message} ${count === 1 ? 'One scheduled message is' : `${count} scheduled messages are`} at risk.`, { view: 'upcoming' });
+    }
   });
 }
 
@@ -128,10 +160,10 @@ function dateLabel(iso) {
   return new Date(iso).toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
 }
 
-function notify(title, body) {
+function notify(title, body, route = { view: 'history' }) {
   if (!Notification.isSupported()) return;
   const notification = new Notification({ title, body });
-  notification.on('click', () => openDashboard({ view: 'history' }));
+  notification.on('click', () => openDashboard(route));
   notification.show();
 }
 
@@ -339,7 +371,14 @@ ipcMain.handle('settings:save', (_event, incoming) => {
   void rebuildMenu();
   return { ok: true };
 });
-ipcMain.handle('schedule:create', (_event, incoming) => { ensureStorage(); return service.create(incoming); });
+ipcMain.handle('schedule:create', (_event, incoming) => {
+  ensureStorage();
+  return service.create(incoming).then((job) => {
+    // A new desktop-app schedule checks its app right away; the check never changes anything.
+    if (compatibility?.supported(job.harness)) void compatibility.check(job.harness, { depth: 'full' });
+    return job;
+  });
+});
 ipcMain.handle('jobs:get', (_event, id) => service.present(service.get(id)));
 ipcMain.handle('jobs:list', (_event, options) => ({ ...service.list(options), storageError }));
 ipcMain.handle('jobs:edit', (_event, id, incoming) => { ensureStorage(); return service.edit(id, incoming); });
@@ -360,6 +399,17 @@ ipcMain.handle('connection:check', async (_event, harness) => {
 // Opens only the Accessibility pane; the renderer cannot choose the URL.
 ipcMain.handle('harnesses:open-permission-settings', () => shell.openExternal(ACCESSIBILITY_SETTINGS_URL));
 ipcMain.handle('harnesses:list', () => ({ harnesses: describeHarnesses(), defaultHarness: DEFAULT_HARNESS }));
+ipcMain.handle('harnesses:compatibility', () => compatibility?.snapshot() || []);
+ipcMain.handle('harnesses:check-compatibility', async (_event, harness) => {
+  if (!compatibility?.supported(harness)) throw new Error('That agent harness has no compatibility check.');
+  await compatibility.check(harness, { depth: 'full' });
+  return compatibility.snapshot();
+});
+// Copies a plain-text report for a bug report: versions, contact points and redacted hints, never message text.
+ipcMain.handle('diagnostics:copy', () => {
+  clipboard.writeText(diagnostics.report({ appVersion: app.getVersion?.(), platform: `macOS ${os.release()} ${os.arch()}`, states: compatibility.snapshot() }));
+  return { ok: true };
+});
 ipcMain.handle('harnesses:availability', async (_event, harness) => {
   try {
     const adapter = harnessFor(harness);
@@ -406,6 +456,7 @@ app.on('second-instance', () => openDashboard());
 
 app.whenReady().then(() => {
   if (!ownsInstance) return;
+  startCompatibility();
   try {
     loadState();
     service.recover();
@@ -426,6 +477,8 @@ app.whenReady().then(() => {
   // Turns that were running before a restart are checked straight away, then every 30 seconds.
   if (!storageError) void service.pollTurns().catch(() => {});
   setInterval(() => { if (!storageError) void service.pollTurns().catch(() => {}); }, TURN_POLL_MS).unref?.();
+  setTimeout(() => { if (!storageError) void compatibility.startup().catch(() => {}); }, COMPATIBILITY_STARTUP_DELAY_MS).unref?.();
+  setInterval(() => { if (!storageError) void compatibility.tick().catch(() => {}); }, COMPATIBILITY_TICK_MS).unref?.();
   // Give supervised agent turns a bounded chance to stop cleanly before quitting.
   let harnessesStopped = false;
   app.on('before-quit', (event) => {

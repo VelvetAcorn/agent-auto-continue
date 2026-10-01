@@ -490,3 +490,32 @@ test('only known Codex CLI originators are claimed by the Codex CLI adapter', ()
   assert.equal(ownerOfThread({ originator: null, source: 'appServer' }), 'other');
 });
 
+
+test('an unknown turn shape stops busy detection instead of reading as idle, before and at send time', async () => {
+  const s = setup();
+  const edit = (change) => { const state = s.state(); change(state.threads[THREAD].turns); fs.writeFileSync(s.env.FAKE_CODEX_STATE, JSON.stringify(state)); };
+  const original = s.state().threads[THREAD].turns;
+  const refusal = (pattern) => (error) => {
+    assert.deepEqual([error.code, error.deliveryUncertain, error.details.contactPoint, error.details.codexVersion], ['unsupported_response_shape', false, 'app_server', '0.159.0']);
+    assert.match(error.message, /^Codex 0\.159\.0 returned .*, which this version of Agent Auto-Continue does not understand, so it could not tell whether Codex is working\. Nothing was sent\.$/);
+    assert.match(error.details.hint, pattern);
+    return true;
+  };
+  const cases = [
+    [{ id: 'turn-4', status: 'queued', startedAt: 1_790_806_700, items: [] }, /turn status "queued"/],
+    [{ id: 'turn-4', status: 'completed', startedAt: '2026-10-01', items: [] }, /startedAt/],
+    [{ id: 'turn-4', status: 'completed', startedAt: 1_790_806_700, items: [{ type: 'userMessage', id: 'u' }] }, /userMessage/]
+  ];
+  const adapter = s.make();
+  for (const [odd, hint] of cases) {
+    edit((turns) => { turns.splice(0, turns.length, ...original, odd); });
+    await assert.rejects(adapter.inspectConversation({ conversationId: THREAD, deliveryKey: null }), refusal(hint));
+  }
+  // The turn appears between inspection and sending: the re-check right before turn/start refuses too.
+  edit((turns) => { turns.splice(0, turns.length, ...original); });
+  const state = await adapter.inspectConversation({ conversationId: THREAD, deliveryKey: turn().deliveryKey });
+  const { plan } = adapter.prepareTurn(turn(), state);
+  edit((turns) => { turns.push(cases[0][0]); });
+  await assert.rejects(adapter.submitTurn(turn(), plan), refusal(/turn status "queued"/));
+  assert.ok(!s.log().some((entry) => entry.method === 'turn/start'), 'Nothing was sent');
+});

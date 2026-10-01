@@ -35,7 +35,9 @@ function fixtureHome() {
   const append = (record) => fs.appendFileSync(transcript, `${JSON.stringify(record)}\n`);
   append({ type: 'user', uuid: 'first', timestamp: '2026-09-14T15:16:54.495Z', message: { role: 'user', content: 'Review the plan' }, entrypoint: 'claude-desktop', sessionId: CLI });
   append({ type: 'assistant', uuid: 'reply', timestamp: '2026-09-14T15:17:30.000Z', message: { role: 'assistant', content: [{ type: 'text', text: 'Here is the plan.' }], stop_reason: 'end_turn' } });
-  const live = (status, entrypoint = 'claude-desktop') => fs.writeFileSync(path.join(home, '.claude', 'sessions', '13299.json'), JSON.stringify({ pid: 13299, sessionId: CLI, entrypoint, hostSessionId: SESSION, status }));
+  // Claude Code 2.1.286 writes { pid, sessionId, startedAt, kind, entrypoint } at startup and adds `status` with its first update.
+  const live = (status, entrypoint = 'claude-desktop', extra = {}) => fs.writeFileSync(path.join(home, '.claude', 'sessions', '13299.json'),
+    JSON.stringify({ pid: 13299, sessionId: CLI, startedAt: START - 3_600_000, kind: 'interactive', entrypoint, hostSessionId: SESSION, status, ...extra }));
   const usage = (samples) => fs.writeFileSync(path.join(desktop, 'plan-usage-history.json'), JSON.stringify({ version: 2, samples }));
   return { home, work, append, live, usage, cleanup: () => fs.rmSync(home, { recursive: true, force: true }) };
 }
@@ -171,6 +173,161 @@ test('checkConnection skips the ioreg lock helper but reports the lock state, pe
   await assert.rejects(adapter.checkConnection(), (error) => error.code === 'connection_refused');
 });
 
+test('localised labels are read from the catalogue inside the app wherever it is installed', async (t) => {
+  const { fixture, advance } = setup(t);
+  const bundle = path.join(fixture.home, 'Elsewhere', 'Claude.app');
+  const catalogue = path.join(bundle, 'Contents', 'Resources', 'ion-dist', 'i18n');
+  fs.mkdirSync(catalogue, { recursive: true });
+  fs.writeFileSync(path.join(catalogue, 'de-DE.json'), JSON.stringify({ iWKE8shLIt: 'Eingabe', '9WRlF4R2gm': 'Senden' }));
+  let clock = START;
+  const fake = createFakeDesktopAutomation({ bundleId: BUNDLE_ID, view: { urlSegment: SESSION, language: 'de-DE', composerLabel: 'Eingabe', sendLabel: 'Senden' },
+    onSend: (text) => fixture.append({ type: 'user', uuid: 'sent-de', timestamp: new Date(clock).toISOString(), message: { role: 'user', content: text } }) });
+  fake.state.installedPath = bundle;
+  const adapter = createClaudeDesktopHarness({ home: fixture.home, env: {}, isAlive: () => false, automation: fake.automation, isLocked: async () => false, platform: 'darwin',
+    now: () => clock, sleep: async (ms) => { clock += ms; advance(ms); }, timings: { navigateMs: 1000, confirmMs: 1000, pollMs: 250 } });
+  assert.deepEqual(await adapter.submitTurn(turn(), { sessionId: SESSION }), { turnId: 'sent-de' });
+});
+
+test('the stop button near the message box is a second busy signal, independent of the registry', async (t) => {
+  // The registry says nothing is running, as it would if an update moved it.
+  const { adapter, fake } = setup(t);
+  fake.state.view = { ...fake.state.view, urlSegment: SESSION, stop: true, stopLabel: 'Stop response' };
+  await assert.rejects(adapter.submitTurn(turn(), { sessionId: SESSION }), (error) => error.code === 'conversation_busy' && error.deliveryUncertain === false);
+  assert.equal(fake.state.calls.filter((call) => call[0] === 'setComposer').length, 0, 'Nothing typed');
+  const target = fake.state.calls.find((call) => call[0] === 'inspect')[1];
+  assert.deepEqual(target.stopLabels, ['Stop response'], 'Both catalogue IDs read "Stop response" in English');
+});
+
+test('the stop button is recognised in the interface language from the catalogue', async (t) => {
+  const { fixture } = setup(t);
+  const bundle = path.join(fixture.home, 'Claude.app');
+  const catalogue = path.join(bundle, 'Contents', 'Resources', 'ion-dist', 'i18n');
+  fs.mkdirSync(catalogue, { recursive: true });
+  fs.writeFileSync(path.join(catalogue, 'de-DE.json'), JSON.stringify({ iWKE8shLIt: 'Eingabe', '9WRlF4R2gm': 'Senden', '9PawskFnw4': 'Antwort stoppen' }));
+  const fake = createFakeDesktopAutomation({ bundleId: BUNDLE_ID, view: { urlSegment: SESSION, language: 'de-DE', composerLabel: 'Eingabe', sendLabel: 'Senden', stop: true, stopLabel: 'Antwort stoppen' } });
+  fake.state.installedPath = bundle;
+  let clock = START;
+  const adapter = createClaudeDesktopHarness({ home: fixture.home, env: {}, isAlive: () => false, automation: fake.automation, isLocked: async () => false, platform: 'darwin',
+    now: () => clock, sleep: async (ms) => { clock += ms; }, timings: { navigateMs: 1000, confirmMs: 1000, pollMs: 250 } });
+  await assert.rejects(adapter.submitTurn(turn(), { sessionId: SESSION }), (error) => error.code === 'conversation_busy');
+  assert.equal(fake.state.calls.filter((call) => call[0] === 'setComposer').length, 0);
+});
+
+const transcriptDrift = (error) => error.code === 'app_version_unsupported' && error.details.contactPoint === 'transcript' && error.deliveryUncertain === false;
+
+test('a transcript in an unfamiliar format refuses before sending instead of silently losing the activity check', async (t) => {
+  const formats = [
+    ['renamed record types', (at) => ({ type: 'prompt', uuid: 'n1', timestamp: at, message: { role: 'user', content: 'I am back' } })],
+    ['renamed timestamps', (at) => ({ type: 'user', uuid: 'n1', time: at, message: { role: 'user', content: 'I am back' } })]
+  ];
+  for (const [label, record] of formats) {
+    const { adapter, fake, fixture } = setup(t);
+    const transcript = path.join(fixture.home, '.claude', 'projects', '-work-FeedWorks-io', `${CLI}.jsonl`);
+    fs.writeFileSync(transcript, '');
+    for (let i = 0; i < 3; i++) fixture.append(record(new Date(START + i).toISOString()));
+    const state = await adapter.inspectConversation({ conversationId: SESSION });
+    assert.throws(() => adapter.prepareTurn(turn(), state), (error) => transcriptDrift(error)
+      && error.message === 'Claude Desktop 1.0 changed how it records conversations, so Agent Auto-Continue cannot work with it until it supports this version.', label);
+    assert.equal(fake.state.calls.filter((call) => call[0] === 'setComposer').length, 0);
+  }
+});
+
+test('records in a new format after an update are noticed even when older records are familiar', async (t) => {
+  const { adapter, fixture } = setup(t);
+  fixture.append({ type: 'prompt', uuid: 'n1', timestamp: new Date(START).toISOString(), message: { role: 'user', content: 'I am back' } });
+  const state = await adapter.inspectConversation({ conversationId: SESSION });
+  assert.throws(() => adapter.prepareTurn(turn(), state), (error) => transcriptDrift(error) && /unknown record type "prompt"/.test(error.details.hint));
+});
+
+test('a new or quiet transcript with no messages yet is not mistaken for a format change', async (t) => {
+  const { adapter, fixture } = setup(t);
+  const transcript = path.join(fixture.home, '.claude', 'projects', '-work-FeedWorks-io', `${CLI}.jsonl`);
+  // The shape of real sessions that were opened without a prompt: settings, attachments and bookkeeping only.
+  fs.writeFileSync(transcript, '');
+  for (const type of ['mode', 'permission-mode', 'bridge-session', 'attachment', 'attachment', 'attachment', 'system', 'bridge-session', 'cost-state', 'last-prompt', 'cost-state']) {
+    fixture.append({ type, sessionId: CLI, timestamp: new Date(START).toISOString() });
+  }
+  const state = await adapter.inspectConversation({ conversationId: SESSION });
+  assert.equal(state.context.drift, null);
+  assert.deepEqual(adapter.prepareTurn(turn(), state).plan, { sessionId: SESSION });
+});
+
+test('end to end: user activity in a changed transcript format fails the job instead of sending over it', async (t) => {
+  const { adapter, fake, fixture, now, advance } = setup(t);
+  const { service } = jobService(adapter, now);
+  const job = await schedule(service, now);
+  advance(30_000);
+  // Claude Desktop updates and records the user's new prompt in a format this version does not know.
+  fixture.append({ type: 'human', uuid: 'typed', timestamp: new Date(now()).toISOString(), message: { role: 'user', content: 'I am back' } });
+  advance(90_000);
+  await service.run(job.id);
+  const failed = service.present(service.get(job.id));
+  assert.deepEqual([failed.status, failed.error?.code, failed.error?.details.contactPoint], ['failed', 'app_version_unsupported', 'transcript']);
+  assert.equal(fake.state.sent.length, 0);
+});
+
+const storeDrift = (error) => error.code === 'app_version_unsupported' && error.details.contactPoint === 'session_store' && error.deliveryUncertain === false;
+const storeDir = (fixture) => path.join(fixture.home, 'Library', 'Application Support', 'Claude', 'claude-code-sessions');
+// Rewrites every session file through `change`, as an update that renamed fields would.
+function rewriteStore(fixture, change) {
+  const index = path.join(storeDir(fixture), 'account', 'org');
+  for (const name of fs.readdirSync(index)) fs.writeFileSync(path.join(index, name), JSON.stringify(change(JSON.parse(fs.readFileSync(path.join(index, name), 'utf8')))));
+}
+
+test('session files that no longer parse into sessions are a store change, not an empty list', async (t) => {
+  const { adapter, fixture } = setup(t);
+  rewriteStore(fixture, ({ cliSessionId, ...rest }) => ({ ...rest, cliSessionID: cliSessionId }));
+  await assert.rejects(adapter.listConversations({}), (error) => storeDrift(error)
+    && error.message === 'Claude Desktop 1.0 changed how it stores its sessions, so Agent Auto-Continue cannot work with it until it supports this version.'
+    && /3 of 3 session files/.test(error.details.hint));
+  await assert.rejects(adapter.inspectConversation({ conversationId: SESSION }), storeDrift, 'A scheduled session is not reported as gone');
+});
+
+test('a clear majority of unreadable session files is a store change, but one odd or brand-new file is not', async (t) => {
+  const { adapter, fixture } = setup(t);
+  const index = path.join(storeDir(fixture), 'account', 'org');
+  // A session created moments ago may not have its Claude Code session yet.
+  fs.writeFileSync(path.join(index, 'local_22222222-2222-4333-8444-555555555555.json'), JSON.stringify({ sessionId: 'local_22222222-2222-4333-8444-555555555555', cwd: fixture.work, title: 'New' }));
+  fs.writeFileSync(path.join(index, 'local_33333333-2222-4333-8444-555555555555.json'), '[]');
+  assert.equal((await adapter.listConversations({})).length, 2, 'One odd file among readable ones is skipped');
+  for (const n of [4, 5, 6, 7]) fs.writeFileSync(path.join(index, `local_${n}${n}${n}${n}${n}${n}${n}${n}-2222-4333-8444-555555555555.json`), JSON.stringify({ id: 'x' }));
+  await assert.rejects(adapter.listConversations({}), storeDrift);
+});
+
+test('session files that moved to another folder depth are a store change', async (t) => {
+  const { adapter, fixture } = setup(t);
+  const deeper = path.join(storeDir(fixture), 'account', 'org', 'workspace');
+  fs.mkdirSync(deeper);
+  const index = path.join(storeDir(fixture), 'account', 'org');
+  for (const name of fs.readdirSync(index).filter((item) => item.endsWith('.json'))) fs.renameSync(path.join(index, name), path.join(deeper, name));
+  await assert.rejects(adapter.listConversations({}), (error) => storeDrift(error) && /unexpected folder depth/.test(error.details.hint));
+});
+
+test('no session store means no Code sessions when listing, but a scheduled session is not silently canceled', async (t) => {
+  const { adapter, fake, fixture, now, advance } = setup(t);
+  const { service } = jobService(adapter, now);
+  const job = await schedule(service, now);
+  fs.rmSync(storeDir(fixture), { recursive: true });
+  assert.deepEqual(await adapter.listConversations({}), []);
+  advance(120_000);
+  await service.run(job.id);
+  const failed = service.present(service.get(job.id));
+  assert.deepEqual([failed.status, failed.error?.code, failed.error?.details.contactPoint], ['failed', 'app_version_unsupported', 'session_store']);
+  assert.equal(fake.state.sent.length, 0);
+});
+
+test('end to end: a session store change fails the job instead of canceling it as gone', async (t) => {
+  const { adapter, fake, fixture, now, advance } = setup(t);
+  const { service } = jobService(adapter, now);
+  const job = await schedule(service, now);
+  rewriteStore(fixture, ({ sessionId, ...rest }) => ({ ...rest, id: sessionId }));
+  advance(120_000);
+  await service.run(job.id);
+  const failed = service.present(service.get(job.id));
+  assert.deepEqual([failed.status, failed.error?.code, failed.error?.details.contactPoint], ['failed', 'app_version_unsupported', 'session_store']);
+  assert.equal(fake.state.sent.length, 0);
+});
+
 test('off macOS the adapter lists nothing and refuses to send', async () => {
   const adapter = createClaudeDesktopHarness({ platform: 'linux', home: os.tmpdir() });
   assert.deepEqual(await adapter.listConversations({}), []);
@@ -222,6 +379,22 @@ test('end to end: a locked screen fails the job without touching the app', async
   assert.equal(fake.state.calls.filter((call) => call[0] !== 'environment').length, 0);
 });
 
+test('end to end: a Claude Desktop update that renames the message box fails the job clearly and sends nothing', async (t) => {
+  const { adapter, fake, now, advance } = setup(t);
+  fake.state.version = '2.17.0';
+  fake.state.view.composerLabel = 'Message Claude';
+  const { service, notifications } = jobService(adapter, now);
+  const job = await schedule(service, now);
+  advance(120_000);
+  await service.run(job.id);
+  const failed = service.present(service.get(job.id));
+  assert.deepEqual([failed.status, failed.deliveryCertainty, failed.error.code], ['failed', 'not-delivered', 'app_version_unsupported']);
+  assert.equal(failed.note, 'Claude Desktop 2.17.0 changed how its message box is labelled, so Agent Auto-Continue could not send. Nothing was sent.');
+  assert.deepEqual([failed.error.details.appVersion, failed.error.details.verifiedVersion, failed.error.details.contactPoint], ['2.17.0', '2.16120.0', 'composer_label']);
+  assert.equal(notifications.at(-1)[1], failed.note);
+  assert.equal(fake.state.calls.filter((call) => call[0] === 'setComposer').length, 0);
+});
+
 test('end to end: user activity after scheduling cancels the send', async (t) => {
   const { adapter, fake, fixture, now, advance } = setup(t);
   const { service } = jobService(adapter, now);
@@ -263,7 +436,72 @@ test('busy and awaiting input come only from the live status, so the job service
   fixture.live('waiting');
   state = await adapter.inspectConversation({ conversationId: SESSION });
   assert.throws(() => adapter.prepareTurn(turn(), state), (error) => error.code === 'awaiting_input');
-  fixture.live('mystery');
+  fixture.live('shell');
   state = await adapter.inspectConversation({ conversationId: SESSION });
-  assert.deepEqual([state.busy, state.awaitingInput], [null, null], 'An unknown status never blocks');
+  assert.deepEqual([state.busy, state.awaitingInput], [true, false], 'Claude Code shows a running shell command as working');
+});
+
+// Drift of the registry must never read as idle.
+const registryDrift = (error) => error.code === 'app_version_unsupported' && error.details.contactPoint === 'live_registry' && error.deliveryUncertain === false;
+
+test('an unknown or missing live status refuses before typing, as a registry change', async (t) => {
+  for (const [label, status, extra] of [['renamed status', 'running', {}], ['missing status', undefined, {}], ['non-text status', 3, {}]]) {
+    const { adapter, fake, fixture } = setup(t);
+    fixture.live(status, 'claude-desktop', extra);
+    const state = await adapter.inspectConversation({ conversationId: SESSION });
+    assert.deepEqual([state.busy, state.awaitingInput], [null, null], label);
+    assert.throws(() => adapter.prepareTurn(turn(), state), (error) => registryDrift(error)
+      && error.message === 'Claude Desktop 1.0 changed how it reports whether the agent is working, so Agent Auto-Continue could not send. Nothing was sent.', label);
+    assert.equal(state.context.drift.contactPoint, 'live_registry');
+    await assert.rejects(adapter.submitTurn(turn(), { sessionId: SESSION }), registryDrift, `${label}: the check right before typing refuses too`);
+    assert.equal(fake.state.calls.filter((call) => call[0] === 'setComposer').length, 0, `${label}: nothing typed`);
+    assert.equal((await adapter.listConversations({})).find((item) => item.id === SESSION).state, 'unknown');
+  }
+  const { adapter, fixture } = setup(t);
+  fixture.live('running');
+  assert.match((await adapter.inspectConversation({ conversationId: SESSION })).context.drift.hint, /unknown status "running"/);
+});
+
+test('a process that has only just started may not report a status yet, and counts as working', async (t) => {
+  const { adapter, fixture } = setup(t);
+  fixture.live(undefined, 'claude-desktop', { startedAt: START - 5_000 });
+  const state = await adapter.inspectConversation({ conversationId: SESSION });
+  assert.deepEqual([state.busy, state.awaitingInput, state.context.drift], [true, false, null]);
+  assert.throws(() => adapter.prepareTurn(turn(), state), (error) => error.code === 'conversation_busy');
+});
+
+test('a live registry entry that names no session could be any session, so every send refuses', async (t) => {
+  const { adapter, fake, fixture } = setup(t);
+  // An update renames the session field: the entry can no longer be matched to its session.
+  fs.writeFileSync(path.join(fixture.home, '.claude', 'sessions', '13299.json'), JSON.stringify({ pid: 13299, session_id: CLI, startedAt: START - 60_000, kind: 'interactive', entrypoint: 'claude-desktop', status: 'busy' }));
+  const state = await adapter.inspectConversation({ conversationId: SESSION });
+  assert.throws(() => adapter.prepareTurn(turn(), state), (error) => registryDrift(error) && /no session ID/.test(error.details.hint));
+  await assert.rejects(adapter.submitTurn(turn(), { sessionId: SESSION }), registryDrift);
+  assert.equal(fake.state.calls.filter((call) => call[0] === 'setComposer').length, 0);
+});
+
+test('when several processes hold the session, the most restrictive entry wins', async (t) => {
+  const { fixture } = setup(t);
+  const write = (pid, status, entrypoint = 'claude-desktop') => fs.writeFileSync(path.join(fixture.home, '.claude', 'sessions', `${pid}.json`),
+    JSON.stringify({ pid, sessionId: CLI, startedAt: START - 60_000, kind: 'interactive', entrypoint, status }));
+  const alive = new Set([13299, 13300]);
+  const harness = createClaudeDesktopHarness({ home: fixture.home, env: {}, isAlive: (pid) => alive.has(pid), automation: createFakeDesktopAutomation({ bundleId: BUNDLE_ID }).automation,
+    isLocked: async () => false, platform: 'darwin', now: () => START, appPath: null });
+  write(13299, 'idle');
+  write(13300, 'busy');
+  assert.equal((await harness.inspectConversation({ conversationId: SESSION })).busy, true);
+  write(13299, 'mystery');
+  assert.equal((await harness.inspectConversation({ conversationId: SESSION })).context.drift.contactPoint, 'live_registry');
+});
+
+test('end to end: a Claude Code update that renames a live status fails the job clearly and types nothing', async (t) => {
+  const { adapter, fake, fixture, now, advance } = setup(t);
+  const { service } = jobService(adapter, now);
+  const job = await schedule(service, now);
+  fixture.live('running');
+  advance(120_000);
+  await service.run(job.id);
+  const failed = service.present(service.get(job.id));
+  assert.deepEqual([failed.status, failed.deliveryCertainty, failed.error.code, failed.error.details.contactPoint], ['failed', 'not-delivered', 'app_version_unsupported', 'live_registry']);
+  assert.equal(fake.state.calls.filter((call) => call[0] === 'setComposer').length, 0);
 });

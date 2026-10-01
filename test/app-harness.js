@@ -17,7 +17,7 @@ const path = require('node:path');
  * @param {Record<string, string>} [options.env] The process environment main.js sees.
  */
 function appHarness(initialJobs = [], { ownsInstance = true, rawJobs, config, extraFiles = {}, extraHarnesses, wrapRegistry, env = { T3_TOKEN: 'test-secret' } } = {}) {
-  const handlers = {}, files = new Map(), events = [], windows = [], opened = [], appEvents = {}, powerEvents = {}, blockers = new Map();
+  const handlers = {}, files = new Map(), events = [], windows = [], opened = [], clipboard = [], appEvents = {}, powerEvents = {}, blockers = new Map();
   let nextBlocker = 0;
   let trayMenu, trayTooltip, failWrite = false;
   let ready, response = () => new Response('<!doctype html><html>test-secret</html>', { headers: { 'content-type': 'text/html' } });
@@ -42,7 +42,8 @@ function appHarness(initialJobs = [], { ownsInstance = true, rawJobs, config, ex
     nativeImage: { createFromPath: () => ({ setTemplateImage() {} }) },
     powerMonitor: { on: (name, fn) => { powerEvents[name] = fn; }, isOnBatteryPower: () => false },
     powerSaveBlocker: { start: (type) => { blockers.set(nextBlocker, type); return nextBlocker++; }, stop: (id) => blockers.delete(id), isStarted: (id) => blockers.has(id) },
-    shell: { openExternal: async (url) => { opened.push(url); } }
+    shell: { openExternal: async (url) => { opened.push(url); } },
+    clipboard: { writeText: (text) => { clipboard.push(text); } }
   };
   const fakeFs = { readFileSync: name => { if (!files.has(name)) throw Object.assign(new Error('missing'), { code: 'ENOENT' }); return files.get(name); }, mkdirSync() {}, writeFileSync: (name, value) => { if (failWrite) throw new Error('Disk full'); files.set(name, value); }, renameSync: (from, to) => { files.set(to, files.get(from)); files.delete(from); } };
   const apiModule = require('../lib/api-client');
@@ -58,7 +59,7 @@ function appHarness(initialJobs = [], { ownsInstance = true, rawJobs, config, ex
     invoke: (name, ...args) => handlers[name]({}, ...args),
     // Calls every listener for an app event with an Electron-like event object.
     emit: (name) => { const event = { defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } }; return Promise.all((appEvents[name] || []).map((fn) => fn(event))); },
-    setResponse: fn => { response = fn; }, files, events, windows, opened, appEvents, powerEvents, blockers, handlers,
+    setResponse: fn => { response = fn; }, files, events, windows, opened, clipboard, appEvents, powerEvents, blockers, handlers,
     setWriteFailure: value => { failWrite = value; }, get trayMenu() { return trayMenu; }, get trayTooltip() { return trayTooltip; }
   };
 }
