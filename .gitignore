@@ -15,5 +15,8 @@ config.json
 jobs.json
 remote-control.json
 
+# Local Apple credentials for the release rehearsal; the example file is committed, the real one never is.
+.env.release
+
 # Local working notes that are not part of the public repository
 docs/internal/
