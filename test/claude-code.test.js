@@ -146,7 +146,7 @@ test('submission resumes over stdin in the session folder with a sanitized envir
   const adapter = s.make();
   const result = await send(s, adapter);
   const outcome = await result.completion;
-  assert.equal(outcome.state, 'completed');
+  assert.deepEqual([outcome.state, outcome.lastAgentMessage], ['completed', 'Done.'], 'The final result event carries the last agent message');
   const [call] = s.log();
   assert.equal(fs.realpathSync(call.cwd), fs.realpathSync(s.project));
   assert.equal(call.input.message.content[0].text, 'Continue');
@@ -155,7 +155,8 @@ test('submission resumes over stdin in the session folder with a sanitized envir
   assert.equal((await adapter.findDelivery(turn())).delivered, true);
   assert.equal((await adapter.checkTurn(turn())).state, 'completed');
   const restarted = s.make();
-  assert.equal((await restarted.checkTurn(turn())).state, 'completed', 'The transcript answers after a restart');
+  const readBack = await restarted.checkTurn(turn());
+  assert.deepEqual([readBack.state, readBack.lastAgentMessage], ['completed', 'Done.'], 'The transcript answers after a restart, with the last agent message');
 });
 
 test('a usage limit after delivery is a delivered turn that failed with a reset time', async () => {

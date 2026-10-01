@@ -137,6 +137,9 @@ test('checkTurn reads the outcome after the confirmed prompt from the transcript
   fixture.append({ type: 'user', uuid: 'sent-uuid', timestamp: new Date(now()).toISOString(), message: { role: 'user', content: 'Continue' } });
   fixture.live('busy');
   assert.equal((await adapter.checkTurn(turn({ turnId: 'sent-uuid' }))).state, 'running');
+  fixture.append({ type: 'assistant', uuid: 'answer', timestamp: new Date(now() + 500).toISOString(), message: { role: 'assistant', stop_reason: 'end_turn', content: [{ type: 'text', text: 'Refactor finished. TASK COMPLETE' }] } });
+  const answered = await adapter.checkTurn(turn({ turnId: 'sent-uuid' }));
+  assert.deepEqual([answered.state, answered.lastAgentMessage], ['completed', 'Refactor finished. TASK COMPLETE'], 'The transcript carries the last agent message');
   fixture.append({ type: 'assistant', uuid: 'limit', timestamp: new Date(now() + 1000).toISOString(), isApiErrorMessage: true, error: 'rate_limit', message: { role: 'assistant', content: [{ type: 'text', text: 'You’ve hit your limit · resets 3pm (UTC)' }] } });
   const outcome = await adapter.checkTurn(turn({ turnId: 'sent-uuid' }));
   assert.equal(outcome.state, 'failed');
@@ -367,16 +370,21 @@ test('end to end: an unconfirmed UI send becomes unconfirmed and is reconciled f
   assert.equal((await service.reconcile(job.id)).deliveryStatus, 'sent');
 });
 
-test('end to end: a locked screen fails the job without touching the app', async (t) => {
+test('end to end: a locked screen holds a one-off message without touching the app, and it is sent after the unlock', async (t) => {
   const { adapter, fake, now, advance } = setup(t);
   fake.state.screenLocked = true;
   const { service } = jobService(adapter, now);
   const job = await schedule(service, now);
   advance(120_000);
   await service.run(job.id);
-  const failed = service.get(job.id);
-  assert.deepEqual([failed.status, failed.deliveryCertainty, failed.error.code], ['failed', 'not-delivered', 'screen_locked']);
+  const waiting = service.present(service.get(job.id));
+  assert.deepEqual([waiting.status, waiting.deliveryCertainty, waiting.error, waiting.displayStatus, waiting.deliveryLabel], ['pending', 'not-delivered', null, 'waiting', 'Waiting for unlock']);
+  assert.equal(waiting.availability.reason, 'screen_locked');
+  assert.equal(Date.parse(waiting.nextAttemptAt) - now(), 60_000, 'Checked again in a minute');
   assert.equal(fake.state.calls.filter((call) => call[0] !== 'environment').length, 0);
+  fake.state.screenLocked = false;
+  await service.retryAfterUnlock();
+  assert.deepEqual([service.get(job.id).status, service.get(job.id).deliveryCertainty], ['sent', 'delivered']);
 });
 
 test('end to end: a Claude Desktop update that renames the message box fails the job clearly and sends nothing', async (t) => {

@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, Menu, Notification, Tray, clipboard, ipcMain, nativeImage, powerMonitor, powerSaveBlocker, shell } = require('electron');
+const { app, BrowserWindow, Menu, Notification, Tray, clipboard, dialog, ipcMain, nativeImage, powerMonitor, powerSaveBlocker, shell } = require('electron');
 const { execFile } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
 const fs = require('node:fs');
@@ -22,6 +22,7 @@ const { createActiveWorkSource } = require('./lib/active-work-source');
 const { createT3WorkSource } = require('./lib/t3-work-source');
 const { createDiagnosticsLog } = require('./lib/diagnostics');
 const { createCompatibilityMonitor } = require('./lib/compatibility-monitor');
+const { connectionLabel, conversationMenuItems, createConversationCache } = require('./lib/tray-conversations');
 
 const APP_NAME = 'T3 Code Auto-Continue';
 const DEFAULT_CONFIG = { t3Token: '', httpPort: 3773, bufferSeconds: 5 };
@@ -130,6 +131,8 @@ function token() {
 const api = createApiClient({ getConfig: () => config, getToken: token });
 // Adapters read their settings lazily so a Settings change applies to the next operation.
 const harnesses = createHarnesses({ api, clientVersion: app.getVersion?.(), getSettings: (id) => resolveHarnessSettings(harnesses.get(id), config.harnesses?.[id], process.env) });
+// The tray's conversations from every harness, refreshed in the background so opening the menu never waits.
+const trayConversations = createConversationCache({ harnesses, onChange: () => void rebuildMenu() });
 
 function harnessFor(id) {
   return harnesses.get(id === undefined || id === null || id === '' ? DEFAULT_HARNESS : id);
@@ -154,6 +157,8 @@ function createRemoteControl() {
     // The monitor's last results only: get_status never runs a check.
     compatibility: { supported: (id) => Boolean(compatibility?.supported(id)), snapshot: () => compatibility?.snapshot() || [] },
     appInfo: { name: APP_NAME, version: app.getVersion?.() || '' },
+    // Tells the user once when an older local-network listener is dropped (remote control is Tailscale only).
+    notify: (title, body) => notify(title, body, { view: 'settings' }),
     onChange: () => { for (const window of BrowserWindow.getAllWindows()) window.webContents.send('remote:changed'); }
   });
 }
@@ -300,12 +305,37 @@ function trayAction(action, title) {
   catch (error) { notify(title, String(error?.message || 'Check local disk space and try again in the scheduler.').slice(0, 200)); }
 }
 
+// Asks before asserting that an unconfirmed message did not arrive, because Resume then sends that turn again.
+async function trayMarkNotDelivered(job) {
+  const noun = harnesses.has(job.harness) ? harnesses.get(job.harness).conversationNoun : 'conversation';
+  const { response } = await dialog.showMessageBox({
+    type: 'warning', buttons: ['Mark as not delivered', 'Cancel'], defaultId: 1, cancelId: 1, title: APP_NAME,
+    message: 'Mark this message as not delivered?',
+    detail: `Only do this after checking the ${noun} yourself. The app checks once more first and confirms the delivery instead if it finds the message. After marking, Resume sends the same message again with a new delivery key, so if it did arrive the agent would receive it twice.`
+  });
+  if (response !== 0) return;
+  try { ensureStorage(); await service.markNotDelivered(job.id, { confirm: true, source: 'tray' }); }
+  catch (error) { notify('Not marked as not delivered', String(error?.message || 'Try again from the scheduler.').slice(0, 200)); }
+}
+
+async function trayCheckDelivery(job) {
+  try {
+    ensureStorage();
+    const view = await service.reconcile(job.id);
+    notify(view.deliveryStatus === 'sent' ? 'Delivery confirmed' : 'Delivery still unconfirmed', view.deliveryStatus === 'sent' ? 'Resume the continuation to keep going.' : 'The message was not found. If you are sure it did not arrive, mark it as not delivered.');
+  } catch (error) { notify('Could not check delivery', String(error?.message || 'Try again from the scheduler.').slice(0, 200)); }
+}
+
 function trayJobItem(job) {
   const view = service.present(job);
   const items = [{ id: `view:${job.id}`, label: 'View schedule', click: () => openDashboard({ view: service.upcoming(job) ? 'upcoming' : 'history', jobId: job.id }) }];
   if (!job.chain) {
     items.push({ label: 'Cancel', enabled: job.status === 'pending', click: () => trayAction(() => { if (job.status === 'pending') service.cancel(job.id); }, 'Could not cancel') });
   } else {
+    if (job.chain.state === 'paused' && view.deliveryStatus === 'unconfirmed') {
+      items.push({ label: 'Check delivery', click: () => void trayCheckDelivery(job) },
+        { label: 'Mark as not delivered…', enabled: view.canMarkNotDelivered, click: () => void trayMarkNotDelivered(job) });
+    }
     if (job.chain.state === 'paused') {
       items.push({ label: 'Resume continuation', enabled: view.canResume, click: () => trayAction(() => { if (service.present(job).canResume) service.resumeChain(job.id); }, 'Could not resume') });
     }
@@ -314,23 +344,15 @@ function trayJobItem(job) {
   return { label: trayJobLabel(job), submenu: items };
 }
 
+// Builds the tray menu from cached state only, so it never waits for a harness.
 async function rebuildMenu() {
   if (!tray) return;
   const revision = ++menuRevision;
-  let threadItems = [];
-  let connectionLabel = `T3 Code on port ${config.httpPort}`;
-  try {
-    const threads = await activeThreads();
-    threadItems = threads.slice(0, 100).map((thread) => ({
-      label: thread.title || '(Untitled thread)',
-      sublabel: thread.projectId || '',
-      click: () => openScheduleWindow(thread.id, thread.title || '(Untitled thread)')
-    }));
-    if (threads.length > 100) threadItems.push({ label: `Showing first 100 of ${threads.length} threads`, enabled: false });
-  } catch (error) {
-    connectionLabel = `Cannot connect: ${error.message.slice(0, 90)}`;
-    threadItems = [{ label: 'Refresh after checking T3 Code and Settings', enabled: false }];
-  }
+  const conversations = trayConversations.snapshot();
+  const threadItems = conversationMenuItems(conversations, {
+    schedule: (conversation) => openScheduleWindow(conversation.id, conversation.title, conversation.harness),
+    showAll: () => openDashboard({ view: 'threads' })
+  });
 
   const listed = trayJobs();
   const continuing = service?.jobs.filter((job) => job.chain && ['active', 'paused'].includes(job.chain.state)) || [];
@@ -339,13 +361,13 @@ async function rebuildMenu() {
   if (revision !== menuRevision) return;
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: APP_NAME, enabled: false },
-    { label: connectionLabel, enabled: false },
+    { label: connectionLabel(conversations), enabled: false },
     ...keepAwakeTrayItems(keepAwake?.snapshot()),
     { type: 'separator' },
     { label: 'Open scheduler', click: () => openDashboard({ view: 'upcoming' }) },
     { label: 'History', click: () => openDashboard({ view: 'history' }) },
-    { label: 'Refresh threads', click: () => void rebuildMenu() },
-    { label: 'Schedule from a thread', submenu: threadItems },
+    { label: 'Refresh conversations', click: () => void trayConversations.refresh({ force: true }) },
+    { label: 'Schedule from a conversation', submenu: threadItems },
     { label: `Scheduled messages (${listed.length})`, submenu: jobItems },
     ...(continuing.length ? [{ label: `Stop all continuations (${continuing.length})`, click: () => trayAction(() => service.stopAll(), 'Could not stop') }] : []),
     { type: 'separator' },
@@ -371,6 +393,8 @@ ipcMain.handle('settings:save', (_event, incoming) => {
   service.bufferSeconds = config.bufferSeconds;
   for (const window of BrowserWindow.getAllWindows()) window.webContents.send('settings:changed', publicSettings());
   void rebuildMenu();
+  // A changed port, token or path may connect a harness, or disconnect one.
+  void trayConversations.refresh({ force: true });
   return { ok: true };
 });
 // A new desktop-app schedule checks its app right away, through the job service's report to the monitor.
@@ -382,6 +406,8 @@ ipcMain.handle('jobs:cancel', (_event, id) => { ensureStorage(); return service.
 ipcMain.handle('jobs:stop', (_event, id) => { ensureStorage(); return service.stop(id); });
 ipcMain.handle('jobs:stop-all', () => { ensureStorage(); return service.stopAll(); });
 ipcMain.handle('jobs:resume', (_event, id) => { ensureStorage(); return service.resumeChain(id); });
+// The user asserts that an unconfirmed delivery did not arrive; `{ confirm: true }` is required.
+ipcMain.handle('jobs:mark-not-delivered', (_event, id, options) => { ensureStorage(); return service.markNotDelivered(id, { confirm: options?.confirm === true, source: 'desktop' }); });
 ipcMain.handle('jobs:schedule-again', (_event, id) => service.scheduleAgain(id));
 ipcMain.handle('jobs:acknowledge', (_event, id) => { ensureStorage(); return service.acknowledge(id); });
 ipcMain.handle('jobs:reconcile', async (_event, id) => {
@@ -462,7 +488,9 @@ app.whenReady().then(() => {
   }
   tray = new Tray(makeTrayIcon());
   tray.setToolTip(APP_NAME);
-  tray.on('click', () => tray.popUpContextMenu());
+  // Opening the menu shows the cached conversations and refreshes stale harnesses in the background.
+  tray.on('click', () => { void trayConversations.refresh(); tray.popUpContextMenu(); });
+  void trayConversations.refresh();
   if (!storageError) service.schedulePending();
   remote = createRemoteControl();
   void remote.start();
@@ -491,7 +519,7 @@ app.whenReady().then(() => {
   });
   powerMonitor.on('unlock-screen', () => !storageError && void service.retryAfterUnlock().catch(() => notify('Schedule could not be updated', 'Check local disk space and restart the app.')));
   for (const event of ['on-ac', 'on-battery']) powerMonitor.on(event, () => keepAwake.handlePowerSourceChange());
-  app.on('activate', () => { openDashboard(); void rebuildMenu(); });
+  app.on('activate', () => { openDashboard(); void trayConversations.refresh(); });
 });
 
 app.on('before-quit', () => { void remote?.stop(); });

@@ -22,7 +22,7 @@ function createFakeHarness({ id = 'fake', label = 'Fake Agent', kind = 'cli', no
     id, label, kind, conversationNoun: noun, settings,
     capabilities: {
       canDiscoverConversations: true, canConfirmDelivery: true, canDetectUserActivity: true, canDetectCompletion: true,
-      canDetectUsageLimit: true, canReportResetTime: true, requiresRunningApp: false, requiresUnlockedScreen: false,
+      canDetectUsageLimit: true, canReportResetTime: true, canReportAgentMessage: capabilities.canDetectCompletion !== false, requiresRunningApp: false, requiresUnlockedScreen: false,
       requiresAccessibilityPermission: false, ...capabilities
     },
     async checkConnection() { record('checkConnection'); if (state.connectionError) throw state.connectionError; return { ok: true, version: 'fake' }; },

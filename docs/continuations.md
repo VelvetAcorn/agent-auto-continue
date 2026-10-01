@@ -12,6 +12,7 @@ A **turn** is one message the app sends into the conversation, followed by the a
 A **finished turn** means the harness reported that the agent stopped working on that message.
 A **finished task** is the user's own judgement, and no harness reports it, so the app never infers it.
 The turn limit and the Stop control are the safeguards against continuing past the end of a task.
+An optional [stop phrase](#stop-phrase) lets the agent say the task is done in words the user chose.
 
 ## Triggers
 
@@ -49,7 +50,8 @@ Every other schedule carries `job.chain`:
 | `previousTurns` | Delivered turns before the current one |
 | `limitedTurns` | How many of those ended at a usage limit and do not count |
 | `quickStreak`, `limitStreak` | Consecutive quick turns and consecutive usage-limited turns |
-| `history` | The last 100 finished turns: number, IDs, delivery key, times, outcome and whether it counted |
+| `stopPhrase` | The optional [stop phrase](#stop-phrase), or `null` |
+| `history` | The last 100 finished turns: number, IDs, delivery key, times, outcome, whether it counted and, with a stop phrase, whether it matched |
 
 The job's own delivery fields always describe the current turn.
 When a turn finishes and the chain continues, that turn moves into `history`, and the job receives a fresh `messageId`, `commandId` and delivery key.
@@ -59,10 +61,30 @@ The transition from a finished turn to the next pending turn is a single persist
 `paused` needs the user, who can resume or stop the chain.
 `stopped` and `finished` are final, and Schedule again prepares a new draft with the same settings.
 
+## Stop phrase
+
+A chain can carry an optional stop phrase, such as `TASK COMPLETE`, set with `stopPhrase` when it is created or edited before its first turn.
+Ask the agent in the conversation to end its final message with the phrase once the task is done.
+When a turn completes and the agent's last message contains the phrase, the chain finishes with reason code `stop_phrase`, and no further message is sent.
+
+- The phrase is trimmed, runs of whitespace become one space, and it must be 3 to 200 characters; blank or `null` means none.
+- Matching ignores case and whitespace differences and needs whole words, so `Task complete.` matches `TASK COMPLETE`, but `abandoned` does not match `DONE` and `Task completed` does not match `TASK COMPLETE`.
+  An edge of the phrase that is punctuation, such as `<done/>`, needs no word boundary.
+- Only a `completed` turn can match; a failed or interrupted turn pauses as before, even if its text contains the phrase.
+- The phrase needs more than one turn, so a turn limit of 1 with a phrase is refused.
+- The match is checked before the turn limit, so the finish reason names the phrase when both apply, and also when a paused chain is resumed, because sending another turn after the agent reported the end would continue past it.
+- The message comes from the turn outcome's `lastAgentMessage` (see [the adapter contract](harnesses.md#data-shapes)) and is never stored: the turn keeps only `stopPhraseMatched`, which is `true`, `false`, or `null` when the harness reported no message, and the chain then continues.
+- It needs `canDetectCompletion` and `canReportAgentMessage`; for any other harness the option is refused with the reason in `automation.stopPhrase` from `harnesses:list`, and every built-in harness supports it.
+- An edit that does not mention `stopPhrase` keeps the saved phrase, unless it sets a turn limit of 1, which drops it; `stopPhrase: null` removes it.
+  Like the other settings, it cannot be changed once the first turn has been sent.
+
+The agent's own words can still mislead, for example if it quotes the phrase while explaining what it will do, so the turn limit and Stop remain the safeguards.
+
 ## What happens after each turn
 
 | Outcome of the current turn | Result |
 | --- | --- |
+| `completed`, and the agent's last message contains the [stop phrase](#stop-phrase) | The chain finishes (`stop_phrase`) |
 | `completed`, and the limit is not reached | The next turn is queued and sent after the safety buffer |
 | `completed`, and the limit is reached | The chain finishes |
 | Ended at a usage limit (`usageLimit`, or error code `usage_limited`) | The next turn waits until the reported reset plus the safety buffer, or 15 minutes when no reset time is known; the turn is not counted |
@@ -94,7 +116,7 @@ Harnesses that cannot report usage limits, such as T3 Code, skip this read; a tu
 
 The job service then inspects the conversation, as for every schedule.
 For a chain, the following hold the turn back without counting it.
-A plain schedule instead fails without sending when the conversation is busy or awaiting input; a chain handles both itself and is never also failed by that check.
+A plain one-off schedule waits for a busy agent or a locked Mac too, but for at most six hours, and fails at once when the agent awaits input; see [waiting one-off messages](harnesses.md#waiting-one-off-messages).
 
 | Conversation state or send error | Result |
 | --- | --- |
@@ -128,20 +150,22 @@ For a plain schedule, `stop()` is the same as `cancel()`.
 `service.stopAll()` stops every active or paused chain, leaves plain schedules alone, and resolves `{ stopped: [ids] }`.
 
 Remote control calls the same methods: `POST /v1/runs/{id}/stop`, `POST /v1/runs/stop-all` and `POST /v1/runs/{id}/resume`, or the MCP tools `stop_run`, `stop_all_runs` and `resume_run`.
-`POST /v1/jobs` and `schedule_message` accept `trigger`, `turnLimit` and `continuous`, with the same validation and capability checks as the composer.
+`POST /v1/jobs` and `schedule_message` accept `trigger`, `turnLimit`, `continuous` and `stopPhrase`, with the same validation and capability checks as the composer, and `PATCH /v1/jobs/{id}` and `edit_job` accept `stopPhrase`.
 Refusals such as stopping an ended chain or resuming while delivery is unconfirmed carry error code `invalid_state` and answer `409`; see [remote control](remote-control.md#continuations).
 The Upcoming view shows Stop all whenever a continuation is running, each continuation's detail view has Stop continuing, and the tray offers Stop continuing per schedule and Stop all continuations.
 The tray lists running and paused continuations alike, with their progress and state, and offers Resume continuation on a paused one whenever Resume is allowed.
+A paused continuation whose delivery is unconfirmed also offers Check delivery and Mark as not delivered, which asks for confirmation first.
 
 ## Resuming
 
 `service.resumeChain(id)` resumes a paused chain and never resends a delivered turn.
 It is refused while delivery is unconfirmed; Check delivery, which is read-only, must settle that first.
+When Check delivery cannot find the message, the user can mark it as not delivered from the tray, over IPC or over remote control, with explicit confirmation; the chain then pauses with reason code `marked_not_delivered`, and Resume sends that turn again.
 
 | Current turn | Result |
 | --- | --- |
 | Pending and unsent | It is armed again, and activity up to now counts as seen |
-| Failed and certainly not delivered | It is replaced by a new unsent turn with new IDs |
+| Failed and certainly not delivered, including a delivery the user [marked as not delivered](harnesses.md#marking-a-delivery-as-not-delivered) | It is replaced by a new unsent turn with new IDs and a new delivery key |
 | Delivered and still running, or confirmed by Check delivery | Its outcome is tracked again, then the chain continues |
 | Delivered and finished | The next turn is queued, or the chain finishes if the limit is reached |
 
@@ -149,6 +173,7 @@ It is refused while delivery is unconfirmed; Check delivery, which is read-only,
 
 Chain state is persisted in store version 4.
 Older app versions refuse version 4 files rather than send a paused or availability-gated turn they do not understand.
+The stop phrase, a one-off message's `waitingSince` and `notDeliveredMarks` are optional fields of the same version; an older version 4 app ignores them, so it would not end a chain on its stop phrase, but the turn limit still applies.
 
 At startup, `recover()` sends nothing:
 
@@ -156,7 +181,7 @@ At startup, `recover()` sends nothing:
 | --- | --- |
 | `dispatching` without `dispatchAttemptedAt` | Nothing was submitted, so the turn returns to `pending` and is checked again, or is canceled if the chain was stopped; plain schedules follow the same rule |
 | `dispatching` with `dispatchAttemptedAt` | Unconfirmed, and the chain pauses |
-| A finished turn whose follow-up was not written | The follow-up is computed now |
+| A finished turn whose follow-up was not written | The follow-up is computed now, including a finish on the stop phrase recorded with the turn |
 | A delivered turn with no tracked outcome | The chain pauses (`turn_unknown`) |
 
 Waiting turns keep their next check time, and running turns are polled straight away and then every 30 seconds.
@@ -169,7 +194,7 @@ An outcome recorded for an earlier turn is ignored, so a late completion can nev
 | `service.activeWork()` | Items gain `nextCheckAt` and `chain: { state, limit, unlimited, currentTurn, sentTurns, remainingTurns }`; `phase` gains `waiting` |
 | `service.stop(id)`, `service.stopAll()`, `service.resumeChain(id)` | Stop and resume, for the UI, tray and remote control (`lib/remote/continuations.js`); refusals carry `code: 'invalid_state'` |
 | `service.retryAfterUnlock()` | Called on `unlock-screen` so turns waiting for the unlock are checked at once |
-| `present(job).automation` | Trigger, limit, state, reason, `progressLabel`, `sentTurns`, `countedTurns`, `remainingTurns` and the full `turns` list |
+| `present(job).automation` | Trigger, limit, `stopPhrase`, state, reason, `progressLabel`, `sentTurns`, `countedTurns`, `remainingTurns` and the full `turns` list |
 | `present(job).deliveryLabel` | For a waiting turn, the latest cause: Waiting for unlock, Waiting for the agent to finish, or Waiting for availability |
 | `present(job).displayStatus` | `waiting`, `running`, `paused`, `stopped` or `finished` for chains, otherwise the delivery status |
 | `present(job).canStop`, `canResume`, `needsAttention` | Which controls to offer |
@@ -180,6 +205,7 @@ A send already in flight stays in `activeWork()` as `sending` even if its chain 
 Upcoming lists active chains, and History lists paused, stopped and finished ones.
 A paused chain counts toward the History attention badge until it is resumed, stopped or acknowledged.
 
-IPC adds `jobs:stop`, `jobs:stop-all` and `jobs:resume`.
-`schedule:create` and `jobs:edit` accept `trigger`, `turnLimit` and `continuous`.
-`harnesses:list` adds `automation: { whenAvailable, multipleTurns }` to each harness, each `{ supported, reason }`, so the UI explains disabled modes in the app's own words.
+IPC adds `jobs:stop`, `jobs:stop-all`, `jobs:resume` and `jobs:mark-not-delivered`.
+`schedule:create` and `jobs:edit` accept `trigger`, `turnLimit`, `continuous` and `stopPhrase`.
+`harnesses:list` adds `automation: { whenAvailable, multipleTurns, stopPhrase }` to each harness, each `{ supported, reason }`, so the UI explains disabled modes in the app's own words.
+The window has no stop phrase field or Mark as not delivered button yet; both are planned with the interface redesign.

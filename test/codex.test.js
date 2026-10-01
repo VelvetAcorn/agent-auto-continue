@@ -124,13 +124,16 @@ test('submission resumes the thread with a client message ID and reports complet
   const adapter = s.make();
   const result = await send(s, adapter);
   assert.equal(result.turnId, 'turn-4');
-  assert.equal((await result.completion).state, 'completed');
+  const completed = await result.completion;
+  assert.equal(completed.state, 'completed');
+  assert.equal(completed.lastAgentMessage, 'All done.', 'turn/completed has no items, so the final answer is read back from the turn list');
   const start = s.log().find((entry) => entry.method === 'turn/start');
   assert.equal(start.params.clientUserMessageId, turn().deliveryKey);
   assert.deepEqual(start.params.input, [{ type: 'text', text: 'Continue', text_elements: [] }]);
   assert.equal(fs.realpathSync(s.log().filter((entry) => entry.start).at(-1).cwd), fs.realpathSync(s.project));
   assert.equal((await adapter.findDelivery(turn())).delivered, true);
-  assert.equal((await s.make().checkTurn(turn())).state, 'completed', 'A new process reads the outcome back');
+  const readBack = await s.make().checkTurn(turn());
+  assert.deepEqual([readBack.state, readBack.lastAgentMessage], ['completed', 'All done.'], 'A new process reads the outcome and final answer back');
   assert.equal((await adapter.inspectConversation({ conversationId: THREAD, deliveryKey: turn().deliveryKey })).delivered, true);
 });
 
@@ -518,4 +521,16 @@ test('an unknown turn shape stops busy detection instead of reading as idle, bef
   edit((turns) => { turns.push(cases[0][0]); });
   await assert.rejects(adapter.submitTurn(turn(), plan), refusal(/turn status "queued"/));
   assert.ok(!s.log().some((entry) => entry.method === 'turn/start'), 'Nothing was sent');
+});
+
+test('the last agent message prefers the final answer, falls back to the newest message, and is null without one', () => {
+  const { lastAgentMessage, outcomeFromTurn } = require('../lib/harnesses/codex-reader');
+  const item = (text, phase) => ({ type: 'agentMessage', id: String(text), text, phase });
+  assert.equal(lastAgentMessage({ items: [item('Thinking', 'commentary'), item('Done. TASK COMPLETE', 'final_answer'), item('PS', 'commentary')] }), 'Done. TASK COMPLETE');
+  assert.equal(lastAgentMessage({ items: [item('First', null), item('Second', null)] }), 'Second');
+  assert.equal(lastAgentMessage({ items: [{ type: 'userMessage', id: 'u', content: [] }, item('   ', 'final_answer')] }), null);
+  assert.equal(lastAgentMessage({}), null);
+  assert.equal(outcomeFromTurn({ id: 't', status: 'completed', items: [item('Shipped', 'final_answer')] }).lastAgentMessage, 'Shipped');
+  assert.equal(outcomeFromTurn({ id: 't', status: 'inProgress', items: [item('Partial', 'commentary')] }).lastAgentMessage, undefined, 'A running turn has no final message');
+  assert.equal(outcomeFromTurn({ id: 't', status: 'failed', error: { message: 'boom' }, items: [item('x', 'final_answer')] }).lastAgentMessage, undefined);
 });

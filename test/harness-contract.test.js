@@ -234,7 +234,7 @@ test('prepare failures, missing conversations and unknown harnesses never count 
   const fake = createFakeHarness({ conversations: [{ id: 'conv' }] });
   const h = service([fake.adapter]);
   const first = await h.service.create(input('fake'));
-  fake.state.prepareError = new HarnessError('conversation_busy', 'The session is open elsewhere.');
+  fake.state.prepareError = new HarnessError('harness_not_configured', 'The session cannot be continued from here.');
   h.setClock(70_000);
   await h.service.run(first.id);
   assert.equal(h.service.get(first.id).status, 'failed');
@@ -369,20 +369,22 @@ test('an interrupted send that never started runs again instead of becoming unco
   assert.equal(fake.state.submitted.length, 1);
 });
 
-test('a conversation that is waiting for the user or still working is refused, while unknown never blocks', async () => {
-  for (const [patch, code] of [[{ awaitingInput: true }, 'awaiting_input'], [{ busy: true }, 'conversation_busy'], [{ awaitingInput: null }, null]]) {
+test('a conversation waiting for the user is refused, a busy one is waited for, and unknown never blocks', async () => {
+  for (const [patch, outcome] of [[{ awaitingInput: true }, 'refused'], [{ busy: true }, 'waits'], [{ awaitingInput: null }, 'sent']]) {
     const fake = createFakeHarness({ conversations: [{ id: 'conv', ...patch }] });
     const h = service([fake.adapter]);
     const job = await h.service.create(input('fake'));
     h.setClock(70_000);
     await h.service.run(job.id);
-    const result = h.service.get(job.id);
-    if (code) {
-      assert.equal(result.status, 'failed', code);
-      assert.equal(result.error.code, code);
-      assert.equal(result.deliveryCertainty, 'not-delivered');
-      assert.equal(fake.state.submitted.length, 0);
+    const result = h.service.present(h.service.get(job.id));
+    assert.equal(fake.state.submitted.length, outcome === 'sent' ? 1 : 0, outcome);
+    if (outcome === 'refused') {
+      assert.deepEqual([result.status, result.error.code, result.deliveryCertainty], ['failed', 'awaiting_input', 'not-delivered']);
+      assert.match(result.error.message, /waiting for your answer.*Answer it, then schedule again/);
       assert.equal(h.notifications.at(-1)[0], 'Scheduled message not sent');
+    } else if (outcome === 'waits') {
+      assert.deepEqual([result.status, result.displayStatus, result.deliveryLabel, result.error], ['pending', 'waiting', 'Waiting for the agent to finish', null]);
+      assert.equal(h.notifications.at(-1)[0], 'Scheduled message waiting');
     } else {
       assert.equal(result.status, 'sent');
     }

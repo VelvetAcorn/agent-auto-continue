@@ -32,10 +32,12 @@ The existing package name and macOS app identity are retained to preserve compat
 - Shows which harness each schedule targets and whether the agent's turn finished.
 - Skips a schedule without sending when the harness reports a usage limit that has not reset yet.
 - Shows upcoming schedules and local delivery history, including failed, canceled and unconfirmed outcomes.
+- Waits instead of failing when a one-off message is due while the agent is still working, the Mac is locked or the harness is unavailable, checking again with backoff for up to six hours; see [waiting one-off messages](docs/harnesses.md#waiting-one-off-messages).
 - Schedules a message for a chosen thread, with `+5 min`, `+30 min`, `+1 hour`, and tomorrow shortcuts.
 - For agents that report usage limits, starts as soon as the agent is available, or at a time and then once any limit has reset.
-- For agents that report when a turn finishes, sends follow-up turns up to a turn limit, or continuously until stopped; see [automatic continuations](docs/continuations.md).
+- For agents that report when a turn finishes, sends follow-up turns up to a turn limit, or continuously until stopped, and optionally finishes when the agent's last message contains a stop phrase such as `TASK COMPLETE`; see [automatic continuations](docs/continuations.md).
 - Stops any schedule or continuation at once from its detail view, the Upcoming Stop all control, or the menu-bar tray.
+- Lists recent conversations from every connected harness in the menu-bar tray, grouped by harness, from a cache that refreshes in the background so the menu opens at once.
 - Persists jobs through quitting, restarting, and sleep/wake.
 - Checks Claude Desktop and the ChatGPT app read-only at launch, when something is scheduled for them and every five minutes while it waits, so an app update that changed what the app relies on is shown on the dashboard, with the schedules it puts at risk, before they are due; see [surviving app updates](docs/desktop-harnesses.md#checking-before-schedules-fire).
 - Optionally keeps the Mac awake while scheduled work waits or runs, and shows why and for which tasks.
@@ -43,7 +45,7 @@ The existing package name and macOS app identity are retained to preserve compat
 - Checks the conversation before dispatching. It cancels a job if the conversation is missing, archived, or has newer user activity.
 - Uses stable command/message IDs and marks interrupted or ambiguous dispatches as unconfirmed for reconciliation without automatic resending.
 - Keeps the token in the app's macOS application-data directory (permissions `0600`) or accepts `T3_TOKEN` only for the current launch.
-- Optionally lets a phone or AI agent control the schedule through a token-protected REST API and MCP server, on this Mac or over Tailscale.
+- Optionally lets a phone or AI agent control the schedule through a token-protected REST API and MCP server, on this Mac or over Tailscale only.
 
 ## Requirements
 
@@ -97,7 +99,8 @@ The environment token takes precedence for that launch.
 ## Remote control
 
 Settings includes an optional **Remote control** section, off by default.
-When enabled, the app serves a REST API and an MCP server on `127.0.0.1`, and optionally on a Tailscale or other private address you choose; it never listens on public or all-interface addresses.
+When enabled, the app serves a REST API and an MCP server on `127.0.0.1`, and optionally on your Tailscale address; it never listens on ordinary local-network, public or all-interface addresses.
+A local-network address saved by an earlier version is dropped at launch, with a notice, while loopback keeps working.
 Each phone or agent gets its own revocable bearer token, shown once with a QR code, and every remote change appears under Remote activity.
 Status includes each desktop app's last compatibility check without running a new one, and a send refused because an app changed answers `503 app_version_unsupported`; see [remote control](docs/remote-control.md).
 Remote clients can schedule for any harness, start, stop and resume automatic continuations, and read the keep-awake status.
@@ -138,7 +141,7 @@ Locking the screen or letting the display sleep does not stop scheduled work, ex
 | --- | --- |
 | Desktop Mac | Yes |
 | Laptop, lid open, on power or battery | Yes, down to the battery floor you set |
-| Laptop, lid open, screen locked or display asleep | Yes, except desktop-app harnesses, which wait for the unlock (continuations) or fail as not sent (one-off schedules) |
+| Laptop, lid open, screen locked or display asleep | Yes, except desktop-app harnesses, which wait for the unlock (one-off schedules for up to six hours) |
 | Laptop, lid closed, with power, an external display and an external keyboard or mouse | Yes |
 | Laptop, lid closed, without an external display, or on battery only | No; the Mac sleeps and catches up after waking |
 
@@ -162,7 +165,8 @@ Missed pending schedules catch up after restart or wake and record lateness.
 Interrupted sends and ambiguous POST responses become `unconfirmed` and never retry automatically, because resending could duplicate a message that was already accepted.
 Reconciliation only reads the conversation, marking delivery confirmed if the stable message key is found.
 Absence from a windowed snapshot is not proof of nondelivery.
-Schedule again provides a draft only for confirmed terminal outcomes; it is blocked for unconfirmed delivery.
+When the user has checked the conversation and the message is not there, they can mark it as not delivered, with explicit confirmation, from the tray or over remote control; the app checks once more and records the assertion on the job, and a continuation then resends that turn on Resume with a new delivery key.
+Schedule again provides a draft only for confirmed terminal outcomes; it is blocked for unconfirmed delivery until it is confirmed or marked as not delivered.
 Acknowledgment clears an attention badge without deleting history or sending anything.
 
 The renderer uses queue/history, edit/cancel, acknowledgment, reconciliation and job-change APIs.

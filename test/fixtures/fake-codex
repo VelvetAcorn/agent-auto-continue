@@ -75,14 +75,17 @@ async function runTurn(threadId, turnId) {
   turn.status = mode.startsWith('limit') ? 'failed' : mode === 'approval' ? 'interrupted' : 'completed';
   turn.completedAt = Math.floor(Date.now() / 1000);
   if (mode.startsWith('limit')) turn.error = { message: "You've hit your usage limit.", codexErrorInfo: 'usageLimitExceeded' };
+  // Like codex-cli 0.159, the turn list keeps the final answer, while turn/completed carries no items.
+  if (turn.status === 'completed') turn.items.push({ type: 'agentMessage', id: `${turnId}-progress`, text: 'Working on it.', phase: 'commentary' }, { type: 'agentMessage', id: `${turnId}-answer`, text: state.agentReply ?? 'All done.', phase: 'final_answer' });
   state.decisions = decisions;
   save(state);
+  const completed = { ...turn, items: [] };
   if (mode === 'limit-exit') {
-    const message = JSON.stringify({ jsonrpc: '2.0', method: 'turn/completed', params: { threadId, turn } });
+    const message = JSON.stringify({ jsonrpc: '2.0', method: 'turn/completed', params: { threadId, turn: completed } });
     process.stdout.write(proxy ? frame(message) : message + '\n', () => process.exit(0));
     return;
   }
-  send({ method: 'turn/completed', params: { threadId, turn } });
+  send({ method: 'turn/completed', params: { threadId, turn: completed } });
 }
 function onMessage(message) {
   if (message.id !== undefined && message.method === undefined) { waiting.get(message.id)?.(message.result ?? { error: message.error }); return; }
