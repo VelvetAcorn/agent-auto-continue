@@ -160,6 +160,7 @@ test('submission resumes over stdin in the session folder with a sanitized envir
 
 test('a usage limit after delivery is a delivered turn that failed with a reset time', async () => {
   const s = setup({ mode: 'limit' });
+  s.env.FAKE_CLAUDE_NOW = '2026-10-01T14:00:00Z';
   const adapter = s.make({ now: () => Date.parse('2026-10-01T14:00:00Z') });
   const outcome = await (await send(s, adapter)).completion;
   assert.equal(outcome.state, 'failed');

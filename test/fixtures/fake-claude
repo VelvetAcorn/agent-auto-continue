@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 // Fake `claude` executable for adapter tests. Behaviour is chosen by
-// FAKE_CLAUDE_MODE; every invocation is logged to FAKE_CLAUDE_LOG.
+// FAKE_CLAUDE_MODE; FAKE_CLAUDE_NOW pins transcript timestamps; every invocation is logged to FAKE_CLAUDE_LOG.
 const fs = require('node:fs');
 const args = process.argv.slice(2);
 const mode = process.env.FAKE_CLAUDE_MODE || 'complete';
@@ -24,7 +24,8 @@ process.stdin.on('end', () => {
   const message = JSON.parse(input.trim().split('\n')[0]);
   const session = args[args.indexOf('--resume') + 1];
   log({ args, cwd: process.cwd(), env: Object.keys(process.env), input: message, pid: process.pid });
-  const stamp = (offset = 0) => new Date(Date.now() + offset).toISOString();
+  const base = process.env.FAKE_CLAUDE_NOW ? Date.parse(process.env.FAKE_CLAUDE_NOW) : Date.now();
+  const stamp = (offset = 0) => new Date(base + offset).toISOString();
   const record = (extra) => ({ sessionId: session, cwd: process.cwd(), timestamp: stamp(), isSidechain: false, ...extra });
   emit({ type: 'system', subtype: 'init', session_id: session, permissionMode: 'manual' });
   if (mode === 'no-auth') {
