@@ -92,6 +92,8 @@ test('connection checks use loopback, basic auth and friendly failures', async (
   await assert.rejects(adapterFor(server, { password: 'server-secret' }).checkConnection(), (error) => error.code === 'unexpected_response_format' && !error.message.includes('secret'));
   await server.close();
   await assert.rejects(adapterFor(server).checkConnection(), (error) => error.code === 'connection_refused' && /opencode serve --port/.test(error.message));
+  const plan = { directory: '/work/repo', body: { messageID: 'msg_000000000001AAAAAAAAAAAAAA', parts: [{ type: 'text', text: 'Continue' }] } };
+  await assert.rejects(adapterFor(server).submitTurn(turn(), plan), (error) => error.code === 'connection_refused' && error.deliveryUncertain === false, 'A refused POST never reached OpenCode');
 });
 
 test('lists root sessions across projects without archived or child sessions', async (t) => {
