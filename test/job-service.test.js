@@ -246,3 +246,19 @@ test('confirmed pre-dispatch failures remain eligible for a draft after restart'
   assert.equal(restored.service.scheduleAgain('job').message, 'Continue');
   assert.equal(h.calls + restored.calls, 0);
 });
+
+test('schedule times are judged by the service clock, not the wall clock', async () => {
+  const at = (when) => {
+    const h = harness();
+    h.service.now = () => Date.parse(when);
+    return h.service;
+  };
+  // A clock behind the wall clock accepts a time that is already past in real life.
+  const early = await at('2020-01-01T00:00:00Z').create({ ...input(), whenISO: '2020-01-01T00:01:00Z' });
+  assert.equal(early.scheduleAt, '2020-01-01T00:01:00.000Z');
+  // A clock ahead of it refuses a time that is still to come in real life, when creating and when editing.
+  const late = at('2100-01-01T00:00:00Z');
+  await assert.rejects(late.create({ ...input(), whenISO: '2099-12-31T23:59:00Z' }), /must be in the future/);
+  const job = await late.create({ ...input(), whenISO: '2100-01-01T00:05:00Z' });
+  assert.throws(() => late.edit(job.id, { ...input(), whenISO: '2099-12-31T23:59:00Z' }), /must be in the future/);
+});
