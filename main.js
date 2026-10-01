@@ -207,7 +207,7 @@ async function rebuildMenu() {
 
   const pending = activeJobs();
   const jobItems = pending.length ? pending.map((job) => ({
-    label: `${job.message} — ${dateLabel(service.present(job).effectiveAt)}${job.status === 'dispatching' ? ' (sending)' : ''}`,
+    label: `${job.message} · ${dateLabel(service.present(job).effectiveAt)}${job.status === 'dispatching' ? ' (sending)' : ''}`,
     submenu: [{ label: 'View schedule', click: () => openDashboard({ view: 'upcoming', jobId: job.id }) }, {
       label: 'Cancel',
       enabled: job.status === 'pending',
