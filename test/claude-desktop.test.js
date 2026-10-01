@@ -239,7 +239,31 @@ test('a live process that does not identify itself as Claude Desktop is never tr
   // An older or unknown Claude Code process may omit its entrypoint; it could still be a second writer.
   fixture.live('idle', null);
   const state = await adapter.inspectConversation({ conversationId: SESSION });
-  assert.equal(state.busy, true);
+  assert.equal(state.context.elsewhere, true);
   assert.throws(() => adapter.prepareTurn(turn(), state), /outside Claude Desktop/);
   assert.equal((await adapter.listConversations({})).find((item) => item.id === SESSION).state, 'open elsewhere');
+});
+
+test('the check right before typing refuses a session that is waiting for an answer or open elsewhere', async (t) => {
+  for (const [status, entrypoint, code] of [['waiting', 'claude-desktop', 'awaiting_input'], ['blocked', 'claude-desktop', 'awaiting_input'], ['idle', 'cli', 'conversation_busy'], ['idle', null, 'conversation_busy']]) {
+    const { adapter, fake, fixture } = setup(t);
+    // The state changed after prepareTurn ran.
+    fixture.live(status, entrypoint);
+    await assert.rejects(adapter.submitTurn(turn(), { sessionId: SESSION }), (error) => error.code === code && error.deliveryUncertain === false, `${status} ${entrypoint}`);
+    assert.equal(fake.state.calls.filter((call) => call[0] === 'setComposer').length, 0, `${status} ${entrypoint}: nothing typed`);
+  }
+});
+
+test('busy and awaiting input come only from the live status, so the job service and prepareTurn give the right reason', async (t) => {
+  const { adapter, fixture } = setup(t);
+  fixture.live('idle', 'cli');
+  let state = await adapter.inspectConversation({ conversationId: SESSION });
+  assert.deepEqual([state.busy, state.awaitingInput], [false, false], 'An idle terminal session is not reported as working');
+  assert.throws(() => adapter.prepareTurn(turn(), state), (error) => error.code === 'conversation_busy' && /outside Claude Desktop/.test(error.message));
+  fixture.live('waiting');
+  state = await adapter.inspectConversation({ conversationId: SESSION });
+  assert.throws(() => adapter.prepareTurn(turn(), state), (error) => error.code === 'awaiting_input');
+  fixture.live('mystery');
+  state = await adapter.inspectConversation({ conversationId: SESSION });
+  assert.deepEqual([state.busy, state.awaitingInput], [null, null], 'An unknown status never blocks');
 });

@@ -85,6 +85,9 @@ Discovery and evidence come from local files, read through `lib/harnesses/claude
 | Completion and usage-limit outcomes | Transcript records after the delivered prompt |
 | Usage limits before sending | `plan-usage-history.json` samples under 20 minutes old, as inferred state without a reset time |
 
+Busy and waiting-for-input state come only from the registry status, and an unknown status never blocks.
+The job service refuses a busy session with `conversation_busy` and a waiting one with `awaiting_input`, and the harness checks the registry again right before typing and before pressing send.
+
 Delivery is confirmed when the transcript gains a typed prompt with exactly the scheduled text, written no earlier than five seconds before the send attempt.
 The text match is the evidence because the app assigns the prompt's own ID; the same text typed by hand in the same session at the same moment would also match.
 The job service cancels a schedule when new user activity appears before it runs, which keeps that window small.
