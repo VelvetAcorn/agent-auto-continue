@@ -46,7 +46,9 @@ function createFakeHarness({ id = 'fake', label = 'Fake Agent', kind = 'cli', no
       if (state.submitError) throw state.submitError;
       plan.conversation.messages.push({ id: turn.deliveryKey, role: 'user', text: plan.text, createdAt: new Date().toISOString() });
       state.submitted.push({ conversationId: turn.conversationId, text: plan.text, deliveryKey: turn.deliveryKey });
-      return { turnId: `turn-${state.submitted.length}`, ...(state.completion ? { completion: state.completion } : {}) };
+      // `completion` may be a shared promise or a function that returns one per turn.
+      const completion = typeof state.completion === 'function' ? state.completion(turn, state.submitted.length) : state.completion;
+      return { turnId: `turn-${state.submitted.length}`, ...(completion ? { completion } : {}) };
     },
     async findDelivery(turn) {
       record('findDelivery', turn);

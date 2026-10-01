@@ -128,7 +128,7 @@ test('a non-T3 harness schedules, persists its delivery key before submitting an
   assert.equal(job.harness, 'fake');
   assert.equal(job.harnessLabel, 'Fake Agent');
   assert.equal(job.threadTitle, 'Refactor');
-  assert.equal(h.stored.version, 3);
+  assert.equal(h.stored.version, 4);
   h.setClock(70_000);
   await h.service.run(job.id);
   const sent = h.service.get(job.id);

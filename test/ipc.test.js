@@ -134,7 +134,7 @@ test('settings persistence failure leaves active configuration unchanged', () =>
 
 
 test('corrupt and future-version schedule files are preserved and block scheduling visibly', () => {
-  for (const rawJobs of ['{"jobs":', JSON.stringify({ version: 4, jobs: [] }), JSON.stringify([{ id: 'invalid-record' }])]) {
+  for (const rawJobs of ['{"jobs":', JSON.stringify({ version: 5, jobs: [] }), JSON.stringify([{ id: 'invalid-record' }])]) {
     const app = appHarness([], { rawJobs });
     assert.equal(app.files.get('/fixture/jobs.json'), rawJobs);
     const state = app.invoke('jobs:list');
@@ -174,7 +174,7 @@ test('conversations, schedules and connection checks are routed to the chosen ha
   const job = await app.invoke('schedule:create', { harness: 'fake', threadId: 'conv-1', message: 'Continue', whenISO: '2099-01-01T12:00:00Z', timeZone: 'UTC' });
   assert.equal(job.harness, 'fake');
   assert.equal(job.harnessLabel, 'Fake Agent');
-  assert.equal(JSON.parse(app.files.get('/fixture/jobs.json')).version, 3);
+  assert.equal(JSON.parse(app.files.get('/fixture/jobs.json')).version, 4);
   assert.equal(JSON.parse(app.files.get('/fixture/jobs.json')).jobs[0].harness, 'fake');
   assert.equal((await app.invoke('harnesses:availability', 'fake')).availability.state, 'available');
   assert.equal((await app.invoke('harnesses:availability', 't3')).availability.state, 'unknown');
@@ -197,5 +197,37 @@ test('harness settings are validated, persisted and never returned in clear text
   assert.throws(() => app.invoke('settings:save', { httpPort: 3773, bufferSeconds: 5, harnesses: { unknown: {} } }), /Unknown/);
   app.invoke('settings:save', { httpPort: 3773, bufferSeconds: 5, harnesses: { opencode: { password: '' } } });
   assert.equal(JSON.parse(app.files.get('/fixture/config.json')).harnesses.opencode.password, 'oc-secret', 'A blank secret keeps the stored value');
+});
+
+test('continuations are created, stopped and described over IPC and the tray', async () => {
+  const { createFakeHarness } = require('../tools/fake-harness.cjs');
+  const fake = createFakeHarness({ conversations: [{ id: 'conv-1', title: 'Fake conversation' }] });
+  const app = appHarness([], { extraHarnesses: () => [fake.adapter] });
+  const described = app.invoke('harnesses:list').harnesses;
+  assert.equal(described.find((item) => item.id === 't3').automation.whenAvailable.supported, false);
+  assert.match(described.find((item) => item.id === 't3').automation.whenAvailable.reason, /T3 Code does not report usage limits/);
+  assert.equal(described.find((item) => item.id === 'fake').automation.multipleTurns.supported, true);
+  await assert.rejects(async () => app.invoke('schedule:create', { harness: 't3', threadId: 'thread', message: 'Continue', timeZone: 'UTC', trigger: 'available' }), /does not report usage limits/);
+  fake.state.availability = { state: 'limited', resetsAt: '2099-01-01T00:00:00Z', source: 'reported' };
+  const first = await app.invoke('schedule:create', { harness: 'fake', threadId: 'conv-1', message: 'Continue', timeZone: 'UTC', trigger: 'available', continuous: true });
+  const second = await app.invoke('schedule:create', { harness: 'fake', threadId: 'conv-1', message: 'Continue', timeZone: 'UTC', trigger: 'time', whenISO: '2099-01-01T12:00:00Z', turnLimit: 4 });
+  assert.equal(first.automation.unlimited, true);
+  assert.equal(second.automation.limit, 4);
+  const settle = () => new Promise((resolve) => setImmediate(resolve));
+  const stopItem = () => app.trayMenu.find((item) => String(item.label).startsWith('Stop all continuations'));
+  await settle();
+  assert.equal(stopItem().label, 'Stop all continuations (2)');
+  const perJob = app.trayMenu.find((item) => String(item.label).startsWith('Scheduled messages')).submenu;
+  assert.ok(perJob.every((item) => item.submenu.some((entry) => entry.label === 'Stop continuing')));
+  assert.equal(app.invoke('jobs:stop', first.id).automation.state, 'stopped');
+  await settle();
+  assert.equal(stopItem().label, 'Stop all continuations (1)');
+  stopItem().click();
+  assert.equal(app.invoke('jobs:get', second.id).automation.state, 'stopped');
+  await settle();
+  assert.equal(stopItem(), undefined);
+  assert.equal(JSON.stringify(app.invoke('jobs:stop-all')), JSON.stringify({ stopped: [] }));
+  assert.throws(() => app.invoke('jobs:resume', first.id), /Only paused/);
+  assert.equal(fake.state.submitted.length, 0);
 });
 

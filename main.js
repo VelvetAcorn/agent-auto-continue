@@ -9,6 +9,7 @@ const schedule = require('node-schedule');
 const { normaliseConfig, validateSettingsInput } = require('./lib/model');
 const { createApiClient, toErrorInfo } = require('./lib/api-client');
 const { JobService } = require('./lib/job-service');
+const { automationSupport } = require('./lib/continuation');
 const { DEFAULT_HARNESS, applyHarnessSettingsInput, createHarnesses, normaliseHarnessSettings, publicHarnessSettings, resolveHarnessSettings } = require('./lib/harnesses');
 
 const APP_NAME = 'T3 Code Auto-Continue';
@@ -150,8 +151,20 @@ async function activeThreads(options) {
   return harnessFor(options?.harness).listConversations({ showSettled: options?.showSettled === true });
 }
 
+// Plain schedules not yet sent, and every active automatic continuation.
 function activeJobs() {
-  return service?.jobs.filter((job) => job.status === 'pending' || job.status === 'dispatching') || [];
+  return service?.jobs.filter((job) => service.upcoming(job)) || [];
+}
+
+function trayJobLabel(job) {
+  const view = service.present(job);
+  const when = view.displayStatus === 'running' ? 'agent working' : view.displayStatus === 'waiting' ? 'waiting for availability' : view.displayStatus === 'dispatching' ? 'sending' : dateLabel(view.effectiveAt);
+  return `${job.message.slice(0, 60)} · ${view.automation ? `${view.automation.progressLabel} · ` : ''}${when}`;
+}
+
+function stopFromTray(action) {
+  try { ensureStorage(); action(); }
+  catch { notify('Could not stop', 'Check local disk space and try again in the scheduler.'); }
 }
 
 async function rebuildMenu() {
@@ -173,15 +186,16 @@ async function rebuildMenu() {
   }
 
   const pending = activeJobs();
+  const continuing = service?.jobs.filter((job) => job.chain && ['active', 'paused'].includes(job.chain.state)) || [];
   const jobItems = pending.length ? pending.map((job) => ({
-    label: `${job.message} — ${dateLabel(service.present(job).effectiveAt)}${job.status === 'dispatching' ? ' (sending)' : ''}`,
-    submenu: [{ label: 'View schedule', click: () => openDashboard({ view: 'upcoming', jobId: job.id }) }, {
+    label: trayJobLabel(job),
+    submenu: [{ label: 'View schedule', click: () => openDashboard({ view: 'upcoming', jobId: job.id }) }, job.chain ? {
+      label: 'Stop continuing',
+      click: () => stopFromTray(() => { if (service.present(job).canStop) service.stop(job.id); })
+    } : {
       label: 'Cancel',
       enabled: job.status === 'pending',
-      click: () => {
-        try { ensureStorage(); if (job.status === 'pending') service.cancel(job.id); }
-        catch { notify('Schedule could not be canceled', 'Check local disk space and try again in the scheduler.'); }
-      }
+      click: () => stopFromTray(() => { if (job.status === 'pending') service.cancel(job.id); })
     }]
   })) : [{ label: 'No scheduled messages', enabled: false }];
 
@@ -195,6 +209,7 @@ async function rebuildMenu() {
     { label: 'Refresh threads', click: () => void rebuildMenu() },
     { label: 'Schedule from a thread', submenu: threadItems },
     { label: `Scheduled messages (${pending.length})`, submenu: jobItems },
+    ...(continuing.length ? [{ label: `Stop all continuations (${continuing.length})`, click: () => stopFromTray(() => service.stopAll()) }] : []),
     { type: 'separator' },
     { label: 'Settings…', click: openSettings },
     {
@@ -225,6 +240,9 @@ ipcMain.handle('jobs:get', (_event, id) => service.present(service.get(id)));
 ipcMain.handle('jobs:list', (_event, options) => ({ ...service.list(options), storageError }));
 ipcMain.handle('jobs:edit', (_event, id, incoming) => { ensureStorage(); return service.edit(id, incoming); });
 ipcMain.handle('jobs:cancel', (_event, id) => { ensureStorage(); return service.cancel(id); });
+ipcMain.handle('jobs:stop', (_event, id) => { ensureStorage(); return service.stop(id); });
+ipcMain.handle('jobs:stop-all', () => { ensureStorage(); return service.stopAll(); });
+ipcMain.handle('jobs:resume', (_event, id) => { ensureStorage(); return service.resumeChain(id); });
 ipcMain.handle('jobs:schedule-again', (_event, id) => service.scheduleAgain(id));
 ipcMain.handle('jobs:acknowledge', (_event, id) => { ensureStorage(); return service.acknowledge(id); });
 ipcMain.handle('jobs:reconcile', async (_event, id) => {
@@ -235,7 +253,7 @@ ipcMain.handle('connection:check', async (_event, harness) => {
   try { await harnessFor(harness).checkConnection(); return { online: true }; }
   catch (error) { return { online: false, error: toErrorInfo(error) }; }
 });
-ipcMain.handle('harnesses:list', () => ({ harnesses: harnesses.describe(), defaultHarness: DEFAULT_HARNESS }));
+ipcMain.handle('harnesses:list', () => ({ harnesses: harnesses.list().map((adapter, index) => ({ ...harnesses.describe()[index], automation: automationSupport(adapter) })), defaultHarness: DEFAULT_HARNESS }));
 ipcMain.handle('harnesses:availability', async (_event, harness) => {
   try {
     const adapter = harnessFor(harness);
@@ -283,6 +301,8 @@ app.whenReady().then(() => {
   void rebuildMenu();
   openDashboard();
   if (!token()) openSettings();
+  // Turns that were running before a restart are checked straight away, then every 30 seconds.
+  if (!storageError) void service.pollTurns().catch(() => {});
   setInterval(() => { if (!storageError) void service.pollTurns().catch(() => {}); }, TURN_POLL_MS).unref?.();
   // Give supervised agent turns a bounded chance to stop cleanly before quitting.
   let harnessesStopped = false;
@@ -293,6 +313,7 @@ app.whenReady().then(() => {
     void Promise.race([harnesses.shutdown(), new Promise((resolve) => setTimeout(resolve, 6000))]).finally(() => app.quit());
   });
   powerMonitor.on('resume', () => !storageError && void service.resume().catch(() => notify('Schedule could not be updated', 'Check local disk space and restart the app.')));
+  powerMonitor.on('unlock-screen', () => !storageError && void service.retryAfterUnlock().catch(() => notify('Schedule could not be updated', 'Check local disk space and restart the app.')));
   app.on('activate', () => { openDashboard(); void rebuildMenu(); });
 });
 

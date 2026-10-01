@@ -31,6 +31,9 @@ The existing package name and macOS app identity are retained to preserve compat
 - Skips a schedule without sending when the harness reports a usage limit that has not reset yet.
 - Shows upcoming schedules and local delivery history, including failed, canceled and unconfirmed outcomes.
 - Schedules a message for a chosen thread, with `+5 min`, `+30 min`, `+1 hour`, and tomorrow shortcuts.
+- For agents that report usage limits, starts as soon as the agent is available, or at a time and then once any limit has reset.
+- For agents that report when a turn finishes, sends follow-up turns up to a turn limit, or continuously until stopped; see [automatic continuations](docs/continuations.md).
+- Stops any schedule or continuation at once from its detail view, the Upcoming Stop all control, or the menu-bar tray.
 - Persists jobs through quitting, restarting, and sleep/wake.
 - Snapshots a configurable post-time safety buffer per job (5 seconds by default).
 - Checks the conversation before dispatching. It cancels a job if the conversation is missing, archived, or has newer user activity.
@@ -138,5 +141,6 @@ No live messages were sent during these checks.
 Unit and IPC tests inject transport, clocks, timers and persistence.
 The Electron smoke fixture exercises the production main process, preload and renderer against in-memory storage and a fake API that prohibits dispatch.
 Read-only live-server compatibility checks and controlled real macOS sleep/wake checks remain necessary before release; do not send live messages for validation.
-Usage-limit reset times come only from what each harness reports or records, and the app does not retry failed or unconfirmed sends.
-A user can still cancel a pending job from the menu at any time.
+Usage-limit reset times come only from what each harness reports or records, and the app never retries unconfirmed sends.
+Automatic continuations distinguish a delivered message from a finished turn, but no harness reports that a task is finished, so the turn limit and Stop are the safeguards.
+A user can cancel a pending job or stop a continuation from the menu at any time.

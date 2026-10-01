@@ -149,9 +149,9 @@ The T3 token and port keep their original top-level settings for compatibility.
 ## Job service integration
 
 Jobs store `harness`, which defaults to `t3` when older records are read.
-The schedule store is written as version 3.
-Version 2 files and legacy arrays load unchanged apart from the added `harness` field.
-Older app versions refuse version 3 files without changing them, rather than sending another harness's conversation ID to T3 Code.
+The schedule store is written as version 4, which adds [automatic continuations](continuations.md).
+Version 2 and 3 files and legacy arrays load unchanged apart from the added fields.
+Older app versions refuse newer files without changing them, rather than sending another harness's conversation ID to T3 Code or a continuation turn they do not understand.
 
 Before sending, the job service inspects the conversation, cancels on archive or newer user activity, and fails without sending when `probeAvailability()` reports a limit whose reset time is still in the future.
 A limit without a reset time blocks only when its `source` is `reported`; an inferred limit without a reset time is sent, and the turn outcome records the limit if it still applies.
@@ -171,7 +171,8 @@ These interfaces are stable for other features.
 
 | Interface | Use |
 | --- | --- |
-| `service.activeWork()` | Returns `{ jobId, harness, conversationId, phase, effectiveAt, requiresUnlockedScreen }` for scheduled, sending and running work; `phase` is `scheduled`, `sending` or `running` |
+| `service.activeWork()` | Returns `{ jobId, harness, conversationId, phase, effectiveAt, nextCheckAt, requiresUnlockedScreen, chain }` for scheduled, waiting, sending and running work, including every active continuation; `phase` is `scheduled`, `waiting`, `sending` or `running`, and `chain` is `null` for plain schedules |
+| `service.stop(id)`, `service.stopAll()`, `service.resumeChain(id)` | Stop a schedule or continuation, stop every continuation, or resume a paused one; see [automatic continuations](continuations.md) |
 | `onChange` passed to `JobService` | Fires after every persisted job change |
 | `adapter.probeAvailability()` | Current usage-limit state and reset time |
 | `job.error.code === 'usage_limited'` with `job.error.details.resetsAt` | A schedule that was skipped because of a usage limit |
@@ -182,11 +183,12 @@ These interfaces are stable for other features.
 
 | Channel | Payload |
 | --- | --- |
-| `harnesses:list` | Resolves `{ harnesses: describe(), defaultHarness }` |
+| `harnesses:list` | Resolves `{ harnesses, defaultHarness }`, where each entry is `describe()` plus `automation: { whenAvailable, multipleTurns }` |
 | `harnesses:availability` | Takes a harness ID and resolves `{ ok, availability }` or `{ ok: false, error }` |
 | `dashboard:threads` | Accepts `{ harness, showSettled }` |
 | `connection:check` | Accepts a harness ID |
-| `schedule:create` | Accepts `harness` alongside the existing fields |
+| `schedule:create` | Accepts `harness`, `trigger`, `turnLimit` and `continuous` alongside the existing fields |
+| `jobs:stop`, `jobs:stop-all`, `jobs:resume` | Stop a schedule or continuation, stop every continuation, resume a paused continuation |
 | `dashboard:schedule-thread` | Accepts a conversation ID and harness ID |
 | `settings:save` | Accepts `harnesses: { <id>: { <key>: value } }` alongside the existing fields |
 
