@@ -32,7 +32,7 @@ Everything else, including discovery, activity, delivery evidence, completion an
 The shared engine is `lib/desktop/ui-delivery.js`, and every send follows the same sequence.
 
 1. Check that the app is installed and running, Accessibility is granted, and the screen is unlocked; any failure is a certain non-delivery.
-2. If the app is not already showing the conversation, open it with the app's own deep link and wait until the content area proves it is the right one.
+2. If the app is not already showing the conversation, open it with the app's own deep link and wait until the content area proves it is the right one; the link is opened only when Launch Services would hand it to the app itself.
 3. Refuse while the agent is busy or waiting for input, and refuse if the message box already contains text, so a user's draft is never touched.
 4. Set the message text through the Accessibility value of the verified message box and read it back.
 5. Press the verified send button with an Accessibility press action.
@@ -48,6 +48,8 @@ Text inserted by the harness is removed again when it stops before pressing send
 Once a press has been attempted the message box is never touched again.
 
 Failures before the press are certain non-deliveries.
+When the conversation is shown but its message box never appears, or the box accepts the text but no send button is found near it, the app has changed, and the failure is `app_version_unsupported`; see [Surviving app updates](#surviving-app-updates).
+A running or waiting agent is ruled out first, because it may replace the message box with its own controls.
 After the press, a missing confirmation is reported with `deliveryUncertain: true`, so the job becomes unconfirmed and is never retried automatically.
 Unconfirmed jobs are reconciled from the same evidence the send waits for.
 
@@ -61,6 +63,67 @@ While the screen is locked, both apps expose their application element as its ow
 `probeAvailability()` reports `{ state: 'unavailable', reason: 'screen_locked', source: 'reported' }` while locked.
 The job service does not wait for an unlock: a schedule that fires while the screen is locked fails as not sent, with error code `screen_locked`, and nothing is typed.
 Whether one-off schedules should instead be deferred until the next unlock is an open decision for the owner.
+
+## Surviving app updates
+
+T3 Code is driven through an API, but these harnesses depend on about a dozen undocumented details of each app, called contact points.
+An app update can change any of them, so the design aims for three things: never do the wrong thing, notice the change before a schedule fires, and tell the user which app version changed what.
+
+### App profiles
+
+Every contact point of an app lives in one profile, `lib/desktop/profiles/claude-desktop.js` or `lib/desktop/profiles/codex-desktop.js`.
+A profile holds the bundle ID, the app version it was verified with (`verifiedVersion`), the usual install locations, the files read inside the app bundle, the deep-link template and schemes, how the open conversation is recognised, the control labels with their message IDs, and the local files and ownership markers the harness reads.
+The adapters, `claude-sessions.js`, `codex-reader.js` and `codex-locks.js` read from the profiles, so adapting to an update is usually one data change followed by re-verifying and bumping `verifiedVersion`.
+`defineProfile()` validates a profile when it loads, so a typo fails at once rather than as a confusing delivery failure.
+
+### Finding the app
+
+The app is located by bundle ID through Launch Services, using the same Accessibility helper process, and the answer is reused for a minute.
+Only when that is unavailable are the profile's candidate paths tried.
+Claude Desktop's label catalogue and the ChatGPT app's bundled `codex` binary are read from inside the app found this way, wherever it is installed.
+A required file missing from an app that was found is an app change (`app_version_unsupported` with contact point `app_path`), never "not installed".
+
+### When a send meets a change
+
+A change found while sending fails the job with `app_version_unsupported`, a certain non-delivery.
+The job's note names the app, its installed version and what changed, for example "Claude Desktop 2.17.0 changed how its message box is labelled, so Agent Auto-Continue could not send. Nothing was sent."
+The error details add the verified version, the contact point and a short technical hint.
+When the deep link was opened but the conversation never appeared, the evidence is ambiguous, so the failure stays a `timeout`, but its message and details name the app version, the `deep_link` contact point and the possibility of an update.
+A link scheme that no app handles is an app change; one that another app handles fails with `harness_not_configured`, and the link is not opened.
+
+### Checking before schedules fire
+
+Both harnesses implement `checkCompatibility()`, which never navigates, opens a link, types, presses or changes focus.
+A quick check reads the installation, the version, the files the profile needs inside the app, and which app opens the profile's links.
+A full check also reads the message box and send button of whichever conversation the app already shows, when Accessibility is granted, the app is running and the Mac is unlocked.
+Labels are the same in every conversation, so any shown conversation proves them; Claude Desktop sessions are recognised by their URL and ChatGPT threads by a unique thread name.
+When no conversation is shown, or its agent is working or waiting, the interface is reported as not checked rather than as a problem.
+A missing message box counts as a problem only after a second look one second later.
+The ChatGPT app may hide its send button while the message box is empty, so a missing send button there is only a problem when the box holds text.
+
+The app runs the checks through `lib/compatibility-monitor.js`:
+
+- ten seconds after launch, a quick check of each desktop harness, and a full one when that harness has scheduled work or its app version differs from the last version that passed;
+- a full check whenever a schedule is created for the harness;
+- every five minutes while the harness has scheduled work, a quick check, followed by a full one when the app version changed since the last full check, when the version has not passed yet and the last full check is 15 minutes old, or hourly;
+- a full check right after a delivery failure that names a contact point.
+
+A version passes when a full check saw its message box and found no problem, and the last passing version is kept per harness in `compatibility.json` in the app's data folder.
+A problem stays until a later check proves that contact point works, a send to the harness succeeds, or the app version changes.
+While a harness has a problem, its pending schedules are marked at risk in the list and the detail, but they are never canceled; if the problem remains when one is due, it fails without sending.
+A newly found problem with scheduled work also raises a notification.
+
+### Diagnostics
+
+Problems from checks and deliveries, and failures that name a contact point, are written to `diagnostics.json` in the app's data folder.
+The log keeps the newest 200 entries, and a check that keeps finding the same problem updates one entry's count instead of adding more.
+Entries hold timestamps, the harness, the app and verified versions, the contact point, the error code, the job ID and a redacted hint, and never message text or conversation titles.
+The dashboard shows a notice for each app in a drift state, with Copy diagnostics, which copies a plain-text report for a bug report, and Check again, which runs a full check.
+
+### Extending the checks
+
+Per-app probes of files and protocols slot into `checkCompatibility()` as `probes` of `checkDesktopCompatibility()`; see [Compatibility checks](harnesses.md#compatibility-checks).
+Readers that find an unknown format should throw `appVersionUnsupported({ ..., during: 'read' })` with the matching contact point, so the failure is worded, logged and shown like the rest.
 
 ## Claude Desktop (`claude-desktop`)
 
@@ -96,7 +159,7 @@ A live process that does not report its entrypoint counts as another process too
 The Claude Code harness in turn hides and refuses every session Claude Desktop owns.
 A session whose working folder no longer exists is canceled, because Claude Desktop cannot continue it either.
 
-The labels are localised by reading Claude Desktop's own message catalogue, `Contents/Resources/ion-dist/i18n/<locale>.json`, for the language of the content area.
+The labels are localised by reading Claude Desktop's own message catalogue, `Contents/Resources/ion-dist/i18n/<locale>.json` inside the app wherever it is installed, for the language of the content area.
 The message IDs used are `iWKE8shLIt` (`Prompt`), `uxkiTeN6WU` (`Write your prompt to Claude`) and `9WRlF4R2gm` (`Send`), and English is always included as a fallback.
 
 ## ChatGPT desktop app, Codex threads (`codex-desktop`)
@@ -114,9 +177,9 @@ Threads without a name, and threads whose name any other listed thread shares, a
 The check pages through every thread, and refuses when the listing cannot be finished.
 The message box is an `AXTextArea` described as `Do anything`, whose value includes the placeholder text while empty.
 The send button is labelled `Send` or `Send message`, and a `Stop` button near the message box means a turn is running.
-The app ships no readable message catalogue, so these labels are English only, and another interface language fails safely with an unsupported-version error before anything is typed.
+The app ships no readable message catalogue, so these labels are English only, and another interface language fails safely with `app_version_unsupported` before anything is typed.
 
-Everything else uses the supported app-server protocol through `lib/harnesses/codex-reader.js`, with the codex binary bundled inside the app so the protocol version matches.
+Everything else uses the supported app-server protocol through `lib/harnesses/codex-reader.js`, with the codex binary bundled inside the app (`Contents/Resources/codex`, wherever the app is installed) so the protocol version matches.
 Reads use a private server that never loads a thread for writing.
 
 | Need | Protocol call |
@@ -149,6 +212,7 @@ That would be too unreliable to send messages unattended, so it was left out rat
 ## Testing
 
 Unit tests use `tools/fake-desktop-automation.cjs`, an in-memory model of one app window, and fixture files, so no real interface is touched.
+App updates are simulated by changing the fake app's version, labels, install path or link registration, and the tests check that compatibility checks never call a write or focus operation.
 They cover the full job-service path, including unconfirmed sends, reconciliation, locked screens, busy agents and user drafts.
 
 `tools/desktop-e2e-dry-run.cjs` is a manual, opt-in check against the real apps that can never type or send, because its driver throws on every write operation.

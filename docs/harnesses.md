@@ -11,7 +11,7 @@ The executable contract is [`lib/harnesses/contract.js`](../lib/harnesses/contra
 | File | Responsibility |
 | --- | --- |
 | `lib/harnesses/contract.js` | Capability names, `defineHarness()` validation, and normalisers for conversations, availability and turn outcomes |
-| `lib/harnesses/errors.js` | `HarnessError`, `toErrorInfo()` and `redact()` |
+| `lib/harnesses/errors.js` | `HarnessError`, `toErrorInfo()`, `redact()`, and the drift helpers `appVersionUnsupported()`, `driftMessage()` and `CONTACT_POINTS` |
 | `lib/harnesses/registry.js` | `createHarnessRegistry()` and the default harness ID `t3` |
 | `lib/harnesses/settings.js` | Storage, validation, resolution and public presentation of adapter settings |
 | `lib/harnesses/index.js` | `createHarnesses()`, which builds the production registry |
@@ -25,6 +25,11 @@ The executable contract is [`lib/harnesses/contract.js`](../lib/harnesses/contra
 | `lib/desktop/ui-delivery.js` | The shared, verified send sequence for desktop-app harnesses |
 | `lib/desktop/mac-automation.js`, `jxa-program.js` | macOS Accessibility driver, run through `osascript` without a shell |
 | `lib/desktop/app-labels.js` | Control labels in the app's interface language |
+| `lib/desktop/profiles/<id>.js` | One profile per desktop app with every contact point the harness relies on; `profiles/define.js` validates them |
+| `lib/desktop/app-location.js` | `createAppLocator()`, which finds the app by bundle ID and resolves files inside it |
+| `lib/desktop/compatibility.js` | `checkDesktopCompatibility()`, the shared read-only check behind `checkCompatibility()` |
+| `lib/compatibility-monitor.js` | Runs compatibility checks, tracks problems per harness and marks scheduled work at risk |
+| `lib/diagnostics.js` | The bounded diagnostics log and its plain-text bug report |
 
 ### Identity
 
@@ -73,6 +78,7 @@ Adapters must never put tokens, passwords or raw response bodies into messages o
 | `findDelivery(turn)` | Yes | Read-only check that resolves `{ delivered }` using the delivery key |
 | `checkTurn(turn)` | With `canDetectCompletion` | Resolves a turn outcome for a delivered turn |
 | `probeAvailability()` | With `canDetectUsageLimit` | Resolves the account's current availability |
+| `checkCompatibility({ depth })` | No | Read-only check that the installed app still matches what the adapter relies on; see [Compatibility checks](#compatibility-checks) |
 | `shutdown()` | No | Called before the app quits; interrupt or release long-running work gracefully |
 
 `ref` is `{ conversationId, deliveryKey }`.
@@ -111,6 +117,40 @@ Automations must treat `approval_required` as a stop condition rather than sched
 
 `submitTurn()` may also return `completion`, a promise of a turn outcome for work the adapter supervises in-process.
 
+A compatibility result is `{ ok, appVersion, verifiedVersion, checkedAt, depth, problems, checked, unchecked }`, normalised by `compatibility()` in `contract.js`.
+`problems` is a list of `{ contactPoint, message, hint }`, and `ok` is true exactly when it is empty.
+`checked` lists the contact points that were inspected and found working.
+`unchecked` lists `{ contactPoint, reason }` for contact points that could not be inspected this time, such as `not_running`, `screen_locked`, `no_conversation_shown`, `agent_working` or `quick`; an unchecked contact point is never a problem.
+
+### Compatibility checks
+
+Adapters that depend on undocumented details of another app implement `checkCompatibility({ depth })`.
+It must never navigate, open links, type, press anything or change focus.
+`depth: 'quick'` must be cheap, such as reading the installation, version and link registration.
+`depth: 'full'` may also inspect what the app currently shows, start a short-lived read-only protocol client, or read files.
+
+Each such detail is a contact point with a stable ID from `CONTACT_POINTS` in `errors.js`:
+
+| Contact point | What it covers |
+| --- | --- |
+| `app_path` | Where the app and the files the harness reads inside it are installed |
+| `deep_link` | The app's URL scheme and the link that opens a conversation |
+| `content_match` | How the open conversation's content area is recognised |
+| `composer_label` | The accessible label of the message box |
+| `send_label` | The accessible label of the send button |
+| `stop_label` | The accessible label of the stop button |
+| `label_catalogue` | The app's translated label catalogue |
+| `session_store` | The app's local session index |
+| `live_registry` | The live process registry that reports whether the agent is working |
+| `transcript` | The conversation transcript format |
+| `originator` | How the app marks the conversations it created |
+| `app_server` | The app's built-in protocol server |
+
+The desktop adapters build their check with `checkDesktopCompatibility()` and add app-specific probes as `probes: [{ contactPoints, depth, run }]`.
+`run({ profile, env, app, depth })` resolves `{ checked, unchecked, problems: [{ contactPoint, hint }] }`, all optional.
+A probe that throws an `app_version_unsupported` error reports a problem; any other error marks its contact points unchecked.
+A probe with `depth: 'full'` is skipped by quick checks.
+
 ### Delivery semantics
 
 A resolved `submitTurn()` means the harness accepted the message, not that the agent finished.
@@ -141,6 +181,15 @@ Absence of a key from a partial or windowed read is not proof of non-delivery, s
 | `unknown_harness` | A job names a harness this build does not include |
 | `permission_required` | A macOS permission is missing; `details.permission` names it and `details.settingsUrl` opens its System Settings pane |
 | `screen_locked` | The Mac is locked or another user is on the console, so a desktop app cannot be driven; always a certain non-delivery |
+| `app_version_unsupported` | The app changed in a way this version of Agent Auto-Continue does not understand; always a certain non-delivery, with `details` `{ app, appVersion, verifiedVersion, contactPoint, hint }` |
+
+Build `app_version_unsupported` with `appVersionUnsupported({ app, appVersion, verifiedVersion, contactPoint, hint, during })`, so every adapter words it the same way.
+Its message names the app, its installed version and what changed, for example "Claude Desktop 2.17.0 changed how its message box is labelled, so Agent Auto-Continue could not send. Nothing was sent."
+Pass `during: 'read'` when a file or protocol read failed rather than a send.
+Throw it only on strong evidence and only before anything could have reached the app.
+`hint` is a short technical note for bug reports; it is redacted and capped at 300 characters, and must never contain message text.
+Use a truthful code for ambiguous failures instead, and add `contactPoint`, `appVersion` and `hint` to its details so the failure is still logged against the contact point.
+Every desktop delivery failure carries the installed app version in `details.appVersion`.
 
 ### Settings
 
@@ -183,6 +232,8 @@ These interfaces are stable for other features.
 | `job.error.code === 'usage_limited'` with `job.error.details.resetsAt` | A schedule that was skipped because of a usage limit |
 | `job.turn.usageLimit` | A delivered turn that stopped at a usage limit |
 | `registry.describe()` | Serialisable harness metadata and capabilities |
+| `observe` and `riskFor` passed to `JobService` | `observe({ harness, jobId, status, error })` hears every send outcome, and `riskFor(harness)` returns `{ message, appVersion, contactPoints }` or `null` |
+| `job.risk` | Present on pending and sending jobs whose harness has a compatibility problem; such jobs are never canceled for it |
 
 ### IPC
 
@@ -196,6 +247,10 @@ These interfaces are stable for other features.
 | `dashboard:schedule-thread` | Accepts a conversation ID and harness ID |
 | `settings:save` | Accepts `harnesses: { <id>: { <key>: value } }` alongside the existing fields |
 | `harnesses:open-permission-settings` | Takes no arguments and opens the Accessibility pane of System Settings |
+| `harnesses:compatibility` | Resolves the compatibility state of every checked harness: `{ harness, label, appVersion, verifiedVersion, checkedAt, lastPassing, ok, problems }` |
+| `harnesses:check-compatibility` | Takes a harness ID, runs a full read-only check and resolves the same list |
+| `diagnostics:copy` | Copies the plain-text diagnostics report to the clipboard |
+| `compatibility:changed` | Sent to windows when the compatibility state changes |
 
 ## Adding an adapter
 
@@ -206,6 +261,7 @@ These interfaces are stable for other features.
 
 Desktop-app adapters use `kind: 'desktop-app'` and must set `requiresUnlockedScreen` and `requiresAccessibilityPermission` truthfully.
 They should report `delivered` only from evidence read back from the app, and should throw `deliveryUncertain: true` whenever input may have reached the app without confirmation.
+They keep every app-specific detail in a profile under `lib/desktop/profiles`, locate the app with `createAppLocator()`, implement `checkCompatibility()` with `checkDesktopCompatibility()`, and pass the profile's `verifiedVersion` to delivery.
 They send through `deliverThroughUi()` in `lib/desktop/ui-delivery.js`, and report `{ state: 'unavailable', reason: 'screen_locked', source: 'reported' }` from `probeAvailability()` while the screen is locked.
 The job service does not act on that state yet, so a schedule that fires while the screen is locked fails as not sent with `screen_locked`.
 Keep-awake cannot help with a locked screen, so desktop-app schedules need the Mac left unlocked.
