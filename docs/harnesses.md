@@ -414,6 +414,10 @@ The Codex CLI adapter claims only threads with originator `codex_cli_rs` or `cod
 Threads it does not own are not listed, and sending to one fails with `owned_by_other_harness`.
 An unknown originator is never claimed by either Codex adapter, even when an app update renamed the desktop app's originator; the Codex desktop harness reports that case as an app change instead (see [desktop-harnesses.md](desktop-harnesses.md#chatgpt-desktop-app-codex-threads-codex-desktop)).
 A JSON-RPC `Method not found` error never counts as a missing thread, so it cannot cancel a job.
+Every turn is checked before busy detection or user activity reads it, both when inspecting and right before `turn/start`.
+A turn status other than `completed`, `interrupted`, `failed` or `inProgress`, a malformed `startedAt`, or a user message without content fails with `unsupported_response_shape` instead of reading as idle.
+Its message names the codex version from the `initialize` reply, and its details carry contact point `app_server` and a hint naming the request.
+The CLI has no app bundle or verified app version, so `app_version_unsupported` would not fit; the remedy is a Codex version this app supports.
 Listed threads show their source, so threads created by `codex exec` automation are recognisable.
 
 Codex serialises writers with a lock file per thread, and a second `thread/resume` fails with "already has an active writer".
