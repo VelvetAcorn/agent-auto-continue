@@ -391,18 +391,20 @@ async function supportStarJourney(js, reducedMotion) {
     const angle = () => parseFloat(document.querySelector('#support-star polygon').style.transform.slice(7));
     const samples = [], start = performance.now(), before = document.querySelector('#star-phrase').textContent;
     document.querySelector('#support-star').click();
-    setTimeout(() => { const box = document.querySelector('#motion'); box.checked = true; box.dispatchEvent(new Event('change', { bubbles: true })); }, 300);
+    // Opening another Settings section re-renders the whole screen while the star keeps spinning.
+    setTimeout(() => document.querySelector('[data-section="advanced"]').click(), 300);
     (function frame(now) { samples.push([now, angle()]); if (now - start < 1400) requestAnimationFrame(frame); else resolve({ samples, changed: document.querySelector('#star-phrase').textContent !== before, status: document.querySelector('#star-status').textContent }); })(start);
   })`);
   assert.equal(motion.changed, true);
-  // The re-render at 300 ms turned reduced motion on, so the star froze then: measure the burst before that.
-  const steps = motion.samples.slice(1).map(([time, angle], index) => ({ time, elapsed: time - motion.samples[index][0], turned: (angle - motion.samples[index][1] + 360) % 360 })).filter(step => step.time - motion.samples[0][0] < 290);
-  const total = steps.reduce((sum, step) => sum + step.turned, 0), evidence = JSON.stringify({ frames: steps.length, total, span: steps.at(-1)?.time - motion.samples[0][0] });
-  assert.ok(steps.length > 10, `the star animates frame by frame ${evidence}`);
+  const steps = motion.samples.slice(1).map(([time, angle], index) => ({ elapsed: time - motion.samples[index][0], turned: (angle - motion.samples[index][1] + 360) % 360 }));
+  const total = steps.reduce((sum, step) => sum + step.turned, 0), evidence = JSON.stringify({ frames: steps.length, total, span: motion.samples.at(-1)[0] - motion.samples[0][0] });
+  assert.ok(steps.length > 20, `the star animates frame by frame ${evidence}`);
   for (const step of steps) assert.ok(step.turned <= 480 * Math.max(step.elapsed, 17) / 1000 + 0.5, `angle jumped ${JSON.stringify(step)}`);
-  assert.ok(total > 60, `the click produced a fast burst ${evidence}`);
+  // Idle alone turns about 56 degrees in 1.4 s; the burst adds roughly 190 more.
+  assert.ok(total > 150, `the click produced a fast burst ${evidence}`);
   // Reduced motion (app toggle or OS): no spin or burst, but a click still changes the phrase.
   const still = () => js(`new Promise(resolve => { const angle = () => document.querySelector('#support-star polygon').style.transform, before = document.querySelector('#star-phrase').textContent; document.querySelector('#support-star').click(); const first = angle(); setTimeout(() => resolve({ moved: angle() !== first, changed: document.querySelector('#star-phrase').textContent !== before }), 400); })`);
+  await click(js, '#motion');
   assert.equal(await js(`document.querySelector('#motion').checked`), true);
   assert.deepEqual(await still(), { moved: false, changed: true });
   await click(js, '#motion');
