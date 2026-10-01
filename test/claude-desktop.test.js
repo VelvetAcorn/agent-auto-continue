@@ -157,9 +157,13 @@ test('availability uses a fresh plan-usage sample and reports a locked screen as
   assert.deepEqual([available.state, available.reason, available.source], ['unavailable', 'screen_locked', 'reported']);
 });
 
-test('checkConnection reports missing permission with the settings link and works while locked', async (t) => {
+test('checkConnection skips the ioreg lock helper but reports the lock state, permission and a stopped app from Accessibility', async (t) => {
   const { adapter, fake } = setup(t, { locked: true });
-  assert.deepEqual(await adapter.checkConnection(), { ok: true, version: '1.0' });
+  assert.deepEqual(await adapter.checkConnection(), { ok: true, version: '1.0' }, 'The shared ioreg helper is not consulted');
+  // On a real Mac the Accessibility environment reports the lock too, and then the check fails.
+  fake.state.screenLocked = true;
+  await assert.rejects(adapter.checkConnection(), (error) => error.code === 'screen_locked' && error.deliveryUncertain === false);
+  fake.state.screenLocked = false;
   fake.state.trusted = false;
   await assert.rejects(adapter.checkConnection(), (error) => error.code === 'permission_required' && error.details.settingsUrl.includes('Privacy_Accessibility'));
   fake.state.trusted = true;
