@@ -5,11 +5,13 @@ const vm = require('node:vm');
 const fs = require('node:fs');
 const path = require('node:path');
 
-function appHarness(initialJobs = [], { ownsInstance = true, rawJobs, extraHarnesses, env = { T3_TOKEN: 'test-secret' } } = {}) {
-  const handlers = {}, files = new Map(), events = [], windows = [], opened = [];
-  let trayMenu, failWrite = false;
+function appHarness(initialJobs = [], { ownsInstance = true, rawJobs, config, extraHarnesses, env = { T3_TOKEN: 'test-secret' } } = {}) {
+  const handlers = {}, files = new Map(), events = [], windows = [], opened = [], appEvents = {}, powerEvents = {}, blockers = new Map();
+  let nextBlocker = 0;
+  let trayMenu, trayTooltip, failWrite = false;
   let ready, response = () => new Response('<!doctype html><html>test-secret</html>', { headers: { 'content-type': 'text/html' } });
   files.set('/fixture/jobs.json', rawJobs ?? JSON.stringify(initialJobs));
+  if (config) files.set('/fixture/config.json', JSON.stringify(config));
   class Window {
     static getAllWindows() { return windows; }
     constructor(options) {
@@ -20,11 +22,13 @@ function appHarness(initialJobs = [], { ownsInstance = true, rawJobs, extraHarne
     removeMenu() {} loadFile(file) { this.file = file; } on() {} focus() {} isDestroyed() { return false; }
   }
   const electron = {
-    app: { requestSingleInstanceLock: () => ownsInstance, quit() {}, on() {}, whenReady: () => ({ then: fn => { ready = fn; } }), getPath: () => '/fixture', getLoginItemSettings: () => ({ openAtLogin: false }) },
+    app: { requestSingleInstanceLock: () => ownsInstance, quit() {}, on: (name, fn) => { appEvents[name] = fn; }, whenReady: () => ({ then: fn => { ready = fn; } }), getPath: () => '/fixture', getLoginItemSettings: () => ({ openAtLogin: false }) },
     ipcMain: { handle: (name, fn) => { handlers[name] = fn; } }, BrowserWindow: Window,
     Menu: { buildFromTemplate: value => value }, Notification: { isSupported: () => false },
-    Tray: class { setToolTip() {} on() {} setContextMenu(menu) { trayMenu = menu; } },
-    nativeImage: { createFromPath: () => ({ setTemplateImage() {} }) }, powerMonitor: { on() {} },
+    Tray: class { setToolTip(value) { trayTooltip = value; } setImage() {} on() {} setContextMenu(menu) { trayMenu = menu; } },
+    nativeImage: { createFromPath: () => ({ setTemplateImage() {} }) },
+    powerMonitor: { on: (name, fn) => { powerEvents[name] = fn; }, isOnBatteryPower: () => false },
+    powerSaveBlocker: { start: (type) => { blockers.set(nextBlocker, type); return nextBlocker++; }, stop: (id) => blockers.delete(id), isStarted: (id) => blockers.has(id) },
     shell: { openExternal: async (url) => { opened.push(url); } }
   };
   const fakeFs = { readFileSync: name => { if (!files.has(name)) throw Object.assign(new Error('missing'), { code: 'ENOENT' }); return files.get(name); }, mkdirSync() {}, writeFileSync: (name, value) => { if (failWrite) throw new Error('Disk full'); files.set(name, value); }, renameSync: (from, to) => { files.set(to, files.get(from)); files.delete(from); } };
@@ -33,7 +37,7 @@ function appHarness(initialJobs = [], { ownsInstance = true, rawJobs, extraHarne
   const context = { require: name => name === 'electron' ? electron : name === 'node:fs' ? fakeFs : name === 'node-schedule' ? { scheduleJob: () => ({ cancel() {} }) } : name === './lib/api-client' ? { ...apiModule, createApiClient: options => apiModule.createApiClient({ ...options, fetchImpl: (...args) => response(...args) }) } : name === './lib/harnesses' && extraHarnesses ? { ...harnessModule, createHarnesses: options => harnessModule.createHarnessRegistry([require('../lib/harnesses/t3').createT3Harness({ api: options.api }), ...extraHarnesses(options)]) } : name.startsWith('./lib/') ? require(path.join(__dirname, '..', name)) : require(name), __dirname: path.join(__dirname, '..'), process: { env, pid: 123 }, console, Buffer };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8'), context);
   ready();
-  return { invoke: (name, ...args) => handlers[name]({}, ...args), setResponse: fn => { response = fn; }, files, events, windows, opened, setWriteFailure: value => { failWrite = value; }, get trayMenu() { return trayMenu; } };
+  return { invoke: (name, ...args) => handlers[name]({}, ...args), setResponse: fn => { response = fn; }, files, events, windows, opened, appEvents, powerEvents, blockers, setWriteFailure: value => { failWrite = value; }, get trayMenu() { return trayMenu; }, get trayTooltip() { return trayTooltip; } };
 }
 
 test('dashboard IPC shows friendly HTML error and acknowledgment clears historical alert after restart', async () => {
@@ -274,4 +278,40 @@ test('paused continuations appear per schedule in the tray with their state, Res
   await settle();
   assert.equal(entry('uncertain'), undefined);
   assert.equal(fake.state.submitted.length, 0);
+});
+
+test('keep-awake IPC is opt-in, persists settings, shows the tray state and releases on stop and quit', async () => {
+  const pending = { id: 'pending', commandId: 'command', messageId: 'message', threadId: 'thread', threadTitle: 'Night shift', message: 'Continue', scheduleAt: new Date(Date.now() + 3_600_000).toISOString(), status: 'pending', bufferSeconds: 5 };
+  const app = appHarness([pending]);
+  app.setResponse(async () => new Response(JSON.stringify({ threads: [], projects: [] }), { headers: { 'content-type': 'application/json' } }));
+  assert.equal(app.invoke('keep-awake:get').state, 'off');
+  assert.equal(app.blockers.size, 0, 'Nothing is held until the user opts in');
+  const settings = { enabled: true, keepDisplayOn: false, powerSource: 'any', batteryFloorPercent: 20, maxHours: 8, includeRunningAgents: false };
+  assert.throws(() => app.invoke('keep-awake:configure', { ...settings, maxHours: 0 }), /Time limit/);
+  const armed = app.invoke('keep-awake:configure', settings);
+  assert.equal(armed.state, 'armed');
+  assert.deepEqual(armed.tasks.map((task) => [task.id, task.label, task.state]), [['job:pending', 'Night shift', 'waiting']]);
+  assert.deepEqual([...app.blockers.values()], ['prevent-app-suspension']);
+  assert.deepEqual(JSON.parse(app.files.get('/fixture/config.json')).keepAwake, settings);
+  assert.ok(app.events.some(([channel, snapshot]) => channel === 'keep-awake:changed' && snapshot.state === 'armed'));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(app.trayTooltip, 'T3 Code Auto-Continue · Keeping Mac awake');
+  assert.ok(app.trayMenu.find((item) => item.label === 'Keeping Mac awake · 1 task'));
+  app.trayMenu.find((item) => item.label === 'Let Mac sleep now').click();
+  assert.equal(app.invoke('keep-awake:get').state, 'ended');
+  assert.equal(app.blockers.size, 0);
+  assert.equal(app.invoke('keep-awake:resume').state, 'armed');
+  assert.equal(app.blockers.size, 1);
+  app.invoke('jobs:cancel', 'pending');
+  assert.equal(app.invoke('keep-awake:get').state, 'releasing', 'Canceling the last task starts the release grace');
+  assert.equal(app.invoke('keep-awake:stop').state, 'off');
+  assert.equal(app.blockers.size, 0);
+
+  const restarted = appHarness([{ ...pending, id: 'second' }], { config: { httpPort: 3773, bufferSeconds: 5, keepAwake: settings } });
+  assert.equal(restarted.invoke('keep-awake:get').state, 'armed', 'A saved opt-in resumes after restart');
+  assert.equal(restarted.blockers.size, 1);
+  restarted.powerEvents.suspend();
+  await restarted.powerEvents.resume();
+  restarted.appEvents['will-quit']();
+  assert.equal(restarted.blockers.size, 0, 'Quitting releases the assertion');
 });

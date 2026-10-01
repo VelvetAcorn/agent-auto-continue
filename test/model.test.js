@@ -26,8 +26,16 @@ test('normaliseConfig applies safe defaults to malformed values', () => {
   assert.deepEqual(normaliseConfig({ httpPort: 0, bufferSeconds: -1, t3Token: ' token ' }), {
     httpPort: 3773,
     bufferSeconds: 5,
-    t3Token: 'token'
+    t3Token: 'token',
+    keepAwake: { enabled: false, keepDisplayOn: false, powerSource: 'any', batteryFloorPercent: 20, maxHours: 12, includeRunningAgents: false }
   });
+});
+
+test('normaliseConfig keeps valid keep-awake preferences and repairs invalid ones', () => {
+  const saved = { enabled: true, keepDisplayOn: true, powerSource: 'ac-only', batteryFloorPercent: 0, maxHours: 72, includeRunningAgents: true };
+  assert.deepEqual(normaliseConfig({ keepAwake: saved }).keepAwake, saved);
+  assert.deepEqual(normaliseConfig({ keepAwake: { enabled: 'yes', powerSource: 'solar', batteryFloorPercent: 99, maxHours: 0.5 } }).keepAwake,
+    { enabled: false, keepDisplayOn: false, powerSource: 'any', batteryFloorPercent: 20, maxHours: 12, includeRunningAgents: false });
 });
 
 test('validateScheduleInput accepts a future job and rejects expired jobs', () => {

@@ -12,7 +12,7 @@
     "build:all": "electron-builder --publish never",
     "test": "node --test",
     "check:syntax": "node tools/check-syntax.cjs",
-    "test:electron": "env -u ELECTRON_RUN_AS_NODE electron tools/electron-smoke.cjs",
+    "test:electron": "env -u ELECTRON_RUN_AS_NODE electron tools/electron-smoke.cjs && node tools/keep-awake-e2e.cjs",
     "icons": "env -u ELECTRON_RUN_AS_NODE electron tools/build-icons.cjs"
   },
   "dependencies": {
@@ -39,7 +39,7 @@
       "settings.html",
       "dashboard.html",
       "styles.css",
-      "assets/trayTemplate*.png",
+      "assets/tray*Template*.png",
       "lib/**/*.js",
       "renderer/**/*.js",
       "package.json"

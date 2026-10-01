@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const { execFileSync } = require('node:child_process');
 const electron = require('electron');
 const { app, BrowserWindow } = electron;
 // Chromium storage is isolated too; even theme/localStorage cannot touch user state.
@@ -77,7 +78,7 @@ const appProxy = new Proxy(app, { get(target, property) {
   if (property === 'getPath') return name => name === 'userData' ? '/fixture' : target.getPath(name);
   const value = target[property]; return typeof value === 'function' ? value.bind(target) : value;
 } });
-class FixtureWindow extends BrowserWindow {
+class FixtureWindow extends electron.BrowserWindow {
   constructor(options) {
     super({ ...options, show: false });
     windows.push(this);
@@ -85,21 +86,23 @@ class FixtureWindow extends BrowserWindow {
     this.webContents.on('render-process-gone', (_event, detail) => failures.push(`Renderer stopped: ${detail.reason}`));
     this.webContents.on('did-fail-load', (_event, code, description) => failures.push(`Load failed ${code}: ${description}`));
   }
-  // Electron does not list subclassed windows, which silently dropped main-process broadcasts
-  // such as jobs:changed and settings:changed in this fixture.
+  // Electron's getAllWindows() filters by constructor name and does not list subclassed windows,
+  // which silently dropped main-process broadcasts (jobs:changed, settings:changed, keep-awake:changed).
   static getAllWindows() { return windows.filter(window => !window.isDestroyed()); }
   show() { /* Keep executable tests out of the user's foreground. */ }
   focus() { /* Keep executable tests out of the user's foreground. */ }
 }
 const injectedElectron = {
   ...electron, app: appProxy, BrowserWindow: FixtureWindow,
-  Tray: class { constructor(image) { trayImage = image; } setToolTip() {} on() {} setContextMenu(value) { menu = value; } },
+  Tray: class { constructor(image) { trayImage = image; } setImage(image) { trayImage = image; } setToolTip() {} on() {} setContextMenu(value) { menu = value; } },
   Menu: { buildFromTemplate: value => value }, Notification: { isSupported: () => false },
   shell: { openExternal: async url => { externalUrls.push(url); } },
-  powerMonitor: { on() {} }
+  // Real power save blockers; power events stay inert so the fixture never reacts to the host's sleep.
+  powerMonitor: { on() {}, isOnBatteryPower: () => electron.powerMonitor.isOnBatteryPower() }
 };
+let mainContext;
 function loadProductionMain() {
-  vm.runInNewContext(fs.readFileSync(path.join(root, 'main.js'), 'utf8'), {
+  mainContext = vm.createContext({
     require(name) {
       if (name === 'electron') return injectedElectron;
       if (name === 'node:fs') return fakeFs;
@@ -108,8 +111,15 @@ function loadProductionMain() {
       if (name === './lib/harnesses') return { ...harnessModule, createHarnesses: options => harnessModule.createHarnessRegistry([createT3Harness({ api: options.api }), { ...fake.adapter, async listConversations(options) { if (fakeOffline) throw new Error('Fake Agent unavailable'); return fake.adapter.listConversations(options); } }]) };
       return name.startsWith('./lib/') ? require(path.join(root, name)) : require(name);
     }, __dirname: root, process: { env: { T3_TOKEN: 'fixture-only' }, pid: process.pid }, console, Buffer
-  }, { filename: 'main.js' });
+  });
+  vm.runInContext(fs.readFileSync(path.join(root, 'main.js'), 'utf8'), mainContext, { filename: 'main.js' });
 }
+// The assertions this process holds, as macOS reports them.
+function ownAssertions() {
+  return execFileSync('/usr/bin/pmset', ['-g', 'assertions'], { encoding: 'utf8' }).split('\n')
+    .filter(line => line.includes(`pid ${process.pid}(`)).map(line => line.trim().replace(/\[0x[0-9a-f]+\] /, '').replace(/ \d\d:\d\d:\d\d /, ' '));
+}
+function nativeImageFor(file) { return electron.nativeImage.createFromPath(path.join(root, 'assets', file)); }
 async function waitFor(check, label) {
   const deadline = Date.now() + 10_000;
   do { if (await check()) return; await new Promise(resolve => setTimeout(resolve, 40)); } while (Date.now() < deadline);
@@ -137,6 +147,7 @@ async function run() {
   assert.equal(windows.length, 1);
   // DOM journey assertions are maintained below with the production selectors.
   await rendererJourney(js, reducedMotion);
+  await keepAwakeJourney(js);
   await harnessJourney(js);
   await continuationJourney(js);
   offline = true;
@@ -162,7 +173,8 @@ async function run() {
   assert.deepEqual(trayImage.getSize(), { width: 18, height: 18 });
   assert.equal(trayImage.isTemplateImage(), true, 'The menu-bar icon must adapt to light and dark menu bars');
   assert.ok(trayImage.getScaleFactors().includes(2), 'The menu-bar icon needs a Retina representation');
-  console.log('Electron production workflow smoke passed: one window, real preload/IPC/renderer, local history, sanitized offline error, zero T3 sends, and fake-harness continuations (auto-start, turn limit, continuous, stop, tray stop all).');
+  assert.equal(trayImage.toPNG().equals(nativeImageFor('trayTemplate.png').toPNG()), true, 'The idle glyph returns once keep-awake lets the Mac sleep');
+  console.log('Electron production workflow smoke passed: one window, real preload/IPC/renderer, local history, sanitized offline error, keep-awake assertions released, zero T3 sends, and fake-harness continuations (auto-start, turn limit, continuous, stop, tray stop all).');
 }
 async function rendererJourney(js, reducedMotion) {
   const click = async selector => {
@@ -517,6 +529,81 @@ async function continuationJourney(js) {
   await waitFor(() => js(`Boolean(document.querySelector('#threads-harness'))`), 'threads view');
   await choose('#threads-harness', 't3');
   await waitFor(() => js(`Boolean(document.querySelector('[data-thread="thread-active"]'))`), 'T3 threads again');
+}
+async function keepAwakeJourney(js) {
+  const click = async selector => {
+    await waitFor(() => js(`Boolean(document.querySelector(${JSON.stringify(selector)}))`), `control ${selector}`);
+    await js(`document.querySelector(${JSON.stringify(selector)}).click()`);
+  };
+  const submit = async () => {
+    await js(`document.querySelector('#keep-awake-form').requestSubmit()`);
+    await waitFor(() => js(`Boolean(document.querySelector('#keep-awake-form')) && !document.querySelector('#keep-awake-form button[type="submit"]').disabled`), 'keep-awake settings saved');
+  };
+  const held = expected => waitFor(() => JSON.stringify(ownAssertions().map(line => line.split(' ')[2])) === JSON.stringify(expected), `assertions ${JSON.stringify(expected)}; saw ${JSON.stringify(ownAssertions())}`);
+  await js(`window.scrollTo(0,0)`);
+  await click('[data-nav="settings"]');
+  await waitFor(() => js(`Boolean(document.querySelector('#keep-awake-form'))`), 'keep-awake settings card');
+  assert.match(await js(`document.querySelector('#ka-status').textContent`), /Off/);
+  await held([]);
+  await click('#ka-enabled');
+  await submit();
+  await waitFor(() => js(`window.autoContinue.getKeepAwake().then(state => state.enabled && state.state === 'off')`), 'enabled with nothing to track');
+  await held([]);
+  const job = await js(`window.autoContinue.createSchedule({ threadId: 'thread-active', message: 'Keep-awake fixture', whenISO: new Date(Date.now() + 7200000).toISOString(), timeZone: 'UTC' })`);
+  await waitFor(() => js(`window.autoContinue.getKeepAwake().then(state => state.state === 'armed')`), 'armed for the pending schedule');
+  await held(['NoIdleSleepAssertion']);
+  const evidence = { armed: ownAssertions() };
+  await waitFor(() => js(`document.querySelector('#notices .notice.awake')?.textContent.includes('Keeping your Mac awake')`), 'keep-awake notice');
+  assert.match(await js(`document.querySelector('#ka-status').textContent`), /Waiting for 1 scheduled task/);
+  assert.ok(menu.find(item => item.label === 'Keeping Mac awake · 1 task'), 'Tray shows the keep-awake state');
+  // The keep-awake glyph is a real decodable template image, like the idle one checked at the end.
+  assert.equal(trayImage.isEmpty(), false, 'The keep-awake menu-bar icon must contain pixels');
+  assert.equal(trayImage.isTemplateImage(), true);
+  assert.ok(trayImage.getScaleFactors().includes(2), 'The keep-awake menu-bar icon needs a Retina representation');
+  assert.equal(trayImage.toPNG().equals(nativeImageFor('trayAwakeTemplate.png').toPNG()), true, 'The tray shows the keep-awake glyph while holding');
+  await click('[data-nav="upcoming"]');
+  await click('#notices .notice.awake summary');
+  await capture('keep-awake-notice');
+  await click('[data-nav="settings"]');
+  await click('#ka-display');
+  await submit();
+  await held(['NoDisplaySleepAssertion']);
+  await js(`document.querySelector('#keep-awake-form').closest('.card').scrollIntoView({block:'center'})`);
+  await capture('keep-awake-settings');
+  evidence.display = ownAssertions();
+  await click('#notices [data-action="keep-awake-stop"]');
+  await held([]);
+  await waitFor(() => js(`document.querySelector('#notices .notice.awake')?.textContent.includes('Your Mac can sleep')`), 'stopped notice');
+  await capture('keep-awake-stopped');
+  await click('#notices [data-action="keep-awake-resume"]');
+  await held(['NoDisplaySleepAssertion']);
+  // The production controller reaches its time limit: its clock moves past the deadline.
+  const controller = vm.runInContext('keepAwake', mainContext);
+  const hours = (await js('window.autoContinue.getKeepAwake()')).settings.maxHours;
+  controller.now = () => Date.now() + (hours + 1) * 3_600_000;
+  controller.evaluate();
+  await held([]);
+  await click('[data-nav="upcoming"]');
+  await waitFor(() => js(`document.querySelector('#notices .notice.awake')?.textContent.includes('reached the time limit')`), 'capped notice');
+  const capped = await js(`(() => { const notice = document.querySelector('#notices .notice.awake'); notice.querySelector('details').open = true; return { title: notice.querySelector('strong').textContent, summary: notice.querySelector('summary').textContent, items: [...notice.querySelectorAll('li')].map(item => item.textContent), button: notice.querySelector('button')?.textContent }; })()`);
+  assert.equal(capped.title, 'Your Mac can sleep');
+  assert.equal(capped.summary, '1 task reached the time limit');
+  assert.equal(capped.items.length, 1);
+  assert.match(capped.items[0], /^Production renderer test · Scheduled message waiting to send · starts .* · reached the time limit$/);
+  assert.equal(capped.button, 'Keep awake again');
+  assert.ok(menu.find(item => item.label === 'Keep Mac awake again'), 'Tray offers to override the limit');
+  await js(`document.querySelector('#toast-dismiss')?.click()`);
+  await capture('keep-awake-capped');
+  await click('#notices [data-action="keep-awake-resume"]');
+  await held(['NoDisplaySleepAssertion']);
+  controller.now = () => Date.now();
+  await click('[data-nav="settings"]');
+  await click('#ka-enabled');
+  await submit();
+  await held([]);
+  assert.equal(await js(`Boolean(document.querySelector('#notices .notice.awake'))`), false);
+  await js(`window.autoContinue.cancelJob(${JSON.stringify(job.id)})`);
+  if (evidenceDirectory) fs.writeFileSync(path.join(evidenceDirectory, 'keep-awake-assertions.json'), JSON.stringify(evidence, null, 2));
 }
 // A hung window must fail the run rather than block CI or a shell indefinitely.
 // Before the app is ready (for example while macOS is locked) app.exit() is ignored, so force the exit.

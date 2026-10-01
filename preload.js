@@ -42,6 +42,15 @@ contextBridge.exposeInMainWorld('autoContinue', {
     ipcRenderer.on('jobs:changed', listener);
     return () => ipcRenderer.removeListener('jobs:changed', listener);
   },
+  getKeepAwake: () => ipcRenderer.invoke('keep-awake:get'),
+  configureKeepAwake: (settings) => ipcRenderer.invoke('keep-awake:configure', settings),
+  stopKeepAwake: () => ipcRenderer.invoke('keep-awake:stop'),
+  resumeKeepAwake: () => ipcRenderer.invoke('keep-awake:resume'),
+  onKeepAwakeChanged: (callback) => {
+    const listener = (_event, snapshot) => callback(snapshot);
+    ipcRenderer.on('keep-awake:changed', listener);
+    return () => ipcRenderer.removeListener('keep-awake:changed', listener);
+  },
   scheduleThread: (threadId, harness) => ipcRenderer.invoke('dashboard:schedule-thread', threadId, harness),
   openSettings: () => ipcRenderer.invoke('dashboard:open-settings')
 });

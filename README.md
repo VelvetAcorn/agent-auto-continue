@@ -35,6 +35,7 @@ The existing package name and macOS app identity are retained to preserve compat
 - For agents that report when a turn finishes, sends follow-up turns up to a turn limit, or continuously until stopped; see [automatic continuations](docs/continuations.md).
 - Stops any schedule or continuation at once from its detail view, the Upcoming Stop all control, or the menu-bar tray.
 - Persists jobs through quitting, restarting, and sleep/wake.
+- Optionally keeps the Mac awake while scheduled work waits or runs, and shows why and for which tasks.
 - Snapshots a configurable post-time safety buffer per job (5 seconds by default).
 - Checks the conversation before dispatching. It cancels a job if the conversation is missing, archived, or has newer user activity.
 - Uses stable command/message IDs and marks interrupted or ambiguous dispatches as unconfirmed for reconciliation without automatic resending.
@@ -98,8 +99,33 @@ npm run build:dmg   # optional disk image
 All build scripts package locally without publishing releases (`--publish never`).
 The default build produces a ZIP in `dist/`, which is the most portable artifact for local testing. `npm run build:dmg` creates a disk image on a normal macOS host with disk-image tooling available; `npm run build:all` requests both. The menu includes **Launch at login** after the app has been installed.
 
-The app icon (`assets/icon.icns`) and menu-bar glyph (`assets/trayTemplate.png`, `assets/trayTemplate@2x.png`) are generated from the SVG sources in `assets/` and committed.
-After editing `assets/icon.svg` or `assets/trayTemplate.svg`, run `npm run icons` on macOS and commit the regenerated files.
+The app icon (`assets/icon.icns`) and menu-bar glyphs (`assets/trayTemplate.png` and, while keep-awake holds the Mac awake, `assets/trayAwakeTemplate.png`, each with an `@2x` file) are generated from the SVG sources in `assets/` and committed.
+After editing `assets/icon.svg`, `assets/trayTemplate.svg` or `assets/trayAwakeTemplate.svg`, run `npm run icons` on macOS and commit the regenerated files.
+
+## Keep awake
+
+Keep-awake is off by default; turn it on in **Settings → Keep awake**.
+While it is on, the app holds a macOS power assertion for as long as tracked work is waiting or running.
+Tracked work includes pending schedules, deliveries in flight, and the T3 Code agent turn a delivery started.
+You can also track every running T3 Code agent turn.
+By default the display may sleep; choose **Keep the display on too** to keep it lit.
+The assertion is released when the work finishes, when you choose **Let Mac sleep**, at the battery floor, at the time limit, and when the app quits or crashes.
+A notice above every view and the menu-bar icon show when the Mac is being kept awake, why, and until when.
+
+The app uses Electron's `powerSaveBlocker`, never `sudo`, and never changes system settings.
+macOS still sleeps when a laptop lid closes, unless the Mac is in closed-display mode with power, an external display and an external keyboard or mouse.
+It also sleeps when you choose Sleep or the battery is critically low; missed schedules catch up after waking.
+Locking the screen or letting the display sleep does not stop scheduled work.
+
+| Configuration | Scheduled work keeps running? |
+| --- | --- |
+| Desktop Mac | Yes |
+| Laptop, lid open, on power or battery | Yes, down to the battery floor you set |
+| Laptop, lid open, screen locked or display asleep | Yes |
+| Laptop, lid closed, with power, an external display and an external keyboard or mouse | Yes |
+| Laptop, lid closed, without an external display, or on battery only | No; the Mac sleeps and catches up after waking |
+
+See the [keep-awake investigation](docs/keep-awake-investigation.md) for the mechanisms compared, measurements and the lifecycle design.
 
 ## Reliability model
 
@@ -130,7 +156,7 @@ See [the development plan](docs/development-plan.md) for accepted decisions, pro
 
 ```sh
 npm test
-npm run test:electron  # safe production-window smoke fixture; no real sends
+npm run test:electron  # production-window smoke fixture and keep-awake assertion checks; no real sends
 npm run check:syntax  # every script, including nested lib directories
 ```
 
