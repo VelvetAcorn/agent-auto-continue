@@ -35,7 +35,9 @@ function fixtureHome() {
   const append = (record) => fs.appendFileSync(transcript, `${JSON.stringify(record)}\n`);
   append({ type: 'user', uuid: 'first', timestamp: '2026-09-14T15:16:54.495Z', message: { role: 'user', content: 'Review the plan' }, entrypoint: 'claude-desktop', sessionId: CLI });
   append({ type: 'assistant', uuid: 'reply', timestamp: '2026-09-14T15:17:30.000Z', message: { role: 'assistant', content: [{ type: 'text', text: 'Here is the plan.' }], stop_reason: 'end_turn' } });
-  const live = (status, entrypoint = 'claude-desktop') => fs.writeFileSync(path.join(home, '.claude', 'sessions', '13299.json'), JSON.stringify({ pid: 13299, sessionId: CLI, entrypoint, hostSessionId: SESSION, status }));
+  // Claude Code 2.1.286 writes { pid, sessionId, startedAt, kind, entrypoint } at startup and adds `status` with its first update.
+  const live = (status, entrypoint = 'claude-desktop', extra = {}) => fs.writeFileSync(path.join(home, '.claude', 'sessions', '13299.json'),
+    JSON.stringify({ pid: 13299, sessionId: CLI, startedAt: START - 3_600_000, kind: 'interactive', entrypoint, hostSessionId: SESSION, status, ...extra }));
   const usage = (samples) => fs.writeFileSync(path.join(desktop, 'plan-usage-history.json'), JSON.stringify({ version: 2, samples }));
   return { home, work, append, live, usage, cleanup: () => fs.rmSync(home, { recursive: true, force: true }) };
 }
@@ -294,7 +296,72 @@ test('busy and awaiting input come only from the live status, so the job service
   fixture.live('waiting');
   state = await adapter.inspectConversation({ conversationId: SESSION });
   assert.throws(() => adapter.prepareTurn(turn(), state), (error) => error.code === 'awaiting_input');
-  fixture.live('mystery');
+  fixture.live('shell');
   state = await adapter.inspectConversation({ conversationId: SESSION });
-  assert.deepEqual([state.busy, state.awaitingInput], [null, null], 'An unknown status never blocks');
+  assert.deepEqual([state.busy, state.awaitingInput], [true, false], 'Claude Code shows a running shell command as working');
+});
+
+// Drift of the registry must never read as idle.
+const registryDrift = (error) => error.code === 'app_version_unsupported' && error.details.contactPoint === 'live_registry' && error.deliveryUncertain === false;
+
+test('an unknown or missing live status refuses before typing, as a registry change', async (t) => {
+  for (const [label, status, extra] of [['renamed status', 'running', {}], ['missing status', undefined, {}], ['non-text status', 3, {}]]) {
+    const { adapter, fake, fixture } = setup(t);
+    fixture.live(status, 'claude-desktop', extra);
+    const state = await adapter.inspectConversation({ conversationId: SESSION });
+    assert.deepEqual([state.busy, state.awaitingInput], [null, null], label);
+    assert.throws(() => adapter.prepareTurn(turn(), state), (error) => registryDrift(error)
+      && error.message === 'Claude Desktop 1.0 changed how it reports whether the agent is working, so Agent Auto-Continue could not send. Nothing was sent.', label);
+    assert.equal(state.context.drift.contactPoint, 'live_registry');
+    await assert.rejects(adapter.submitTurn(turn(), { sessionId: SESSION }), registryDrift, `${label}: the check right before typing refuses too`);
+    assert.equal(fake.state.calls.filter((call) => call[0] === 'setComposer').length, 0, `${label}: nothing typed`);
+    assert.equal((await adapter.listConversations({})).find((item) => item.id === SESSION).state, 'unknown');
+  }
+  const { adapter, fixture } = setup(t);
+  fixture.live('running');
+  assert.match((await adapter.inspectConversation({ conversationId: SESSION })).context.drift.hint, /unknown status "running"/);
+});
+
+test('a process that has only just started may not report a status yet, and counts as working', async (t) => {
+  const { adapter, fixture } = setup(t);
+  fixture.live(undefined, 'claude-desktop', { startedAt: START - 5_000 });
+  const state = await adapter.inspectConversation({ conversationId: SESSION });
+  assert.deepEqual([state.busy, state.awaitingInput, state.context.drift], [true, false, null]);
+  assert.throws(() => adapter.prepareTurn(turn(), state), (error) => error.code === 'conversation_busy');
+});
+
+test('a live registry entry that names no session could be any session, so every send refuses', async (t) => {
+  const { adapter, fake, fixture } = setup(t);
+  // An update renames the session field: the entry can no longer be matched to its session.
+  fs.writeFileSync(path.join(fixture.home, '.claude', 'sessions', '13299.json'), JSON.stringify({ pid: 13299, session_id: CLI, startedAt: START - 60_000, kind: 'interactive', entrypoint: 'claude-desktop', status: 'busy' }));
+  const state = await adapter.inspectConversation({ conversationId: SESSION });
+  assert.throws(() => adapter.prepareTurn(turn(), state), (error) => registryDrift(error) && /no session ID/.test(error.details.hint));
+  await assert.rejects(adapter.submitTurn(turn(), { sessionId: SESSION }), registryDrift);
+  assert.equal(fake.state.calls.filter((call) => call[0] === 'setComposer').length, 0);
+});
+
+test('when several processes hold the session, the most restrictive entry wins', async (t) => {
+  const { fixture } = setup(t);
+  const write = (pid, status, entrypoint = 'claude-desktop') => fs.writeFileSync(path.join(fixture.home, '.claude', 'sessions', `${pid}.json`),
+    JSON.stringify({ pid, sessionId: CLI, startedAt: START - 60_000, kind: 'interactive', entrypoint, status }));
+  const alive = new Set([13299, 13300]);
+  const harness = createClaudeDesktopHarness({ home: fixture.home, env: {}, isAlive: (pid) => alive.has(pid), automation: createFakeDesktopAutomation({ bundleId: BUNDLE_ID }).automation,
+    isLocked: async () => false, platform: 'darwin', now: () => START, appPath: null });
+  write(13299, 'idle');
+  write(13300, 'busy');
+  assert.equal((await harness.inspectConversation({ conversationId: SESSION })).busy, true);
+  write(13299, 'mystery');
+  assert.equal((await harness.inspectConversation({ conversationId: SESSION })).context.drift.contactPoint, 'live_registry');
+});
+
+test('end to end: a Claude Code update that renames a live status fails the job clearly and types nothing', async (t) => {
+  const { adapter, fake, fixture, now, advance } = setup(t);
+  const { service } = jobService(adapter, now);
+  const job = await schedule(service, now);
+  fixture.live('running');
+  advance(120_000);
+  await service.run(job.id);
+  const failed = service.present(service.get(job.id));
+  assert.deepEqual([failed.status, failed.deliveryCertainty, failed.error.code, failed.error.details.contactPoint], ['failed', 'not-delivered', 'app_version_unsupported', 'live_registry']);
+  assert.equal(fake.state.calls.filter((call) => call[0] === 'setComposer').length, 0);
 });

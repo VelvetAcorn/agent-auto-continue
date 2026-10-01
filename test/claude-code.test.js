@@ -113,6 +113,18 @@ test('preparation refuses sessions open elsewhere or without their project folde
   assert.throws(() => open.make({ getSettings: () => ({ executable: 'claude' }) }).prepareTurn(turn(), closed), { code: 'harness_not_installed' }, 'Overrides must be absolute');
 });
 
+test('a live registry entry that names no session refuses, because it could hold this session', async () => {
+  // An update renames the session field, so the terminal session holding SESSION can no longer be matched.
+  const s = setup({ live: [{ session_id: SESSION, status: 'busy', kind: 'interactive', entrypoint: 'cli' }] });
+  const adapter = s.make();
+  const state = await adapter.inspectConversation({ conversationId: SESSION, deliveryKey: null });
+  assert.throws(() => adapter.prepareTurn(turn(), state), (error) => error.code === 'app_version_unsupported' && error.details.contactPoint === 'live_registry'
+    && error.message === 'Claude Code changed how it reports whether the agent is working, so Agent Auto-Continue could not send. Nothing was sent.' && /no session ID/.test(error.details.hint));
+  s.alive.clear();
+  const closed = await adapter.inspectConversation({ conversationId: SESSION, deliveryKey: null });
+  assert.doesNotThrow(() => adapter.prepareTurn(turn(), closed), 'Entries of processes that ended do not count');
+});
+
 async function send(s, adapter = s.make()) {
   const state = await adapter.inspectConversation({ conversationId: SESSION, deliveryKey: turn().deliveryKey });
   const { plan } = adapter.prepareTurn(turn(), state);
