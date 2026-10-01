@@ -161,7 +161,7 @@ test('per-app probes slot in: drift errors become problems, other failures unche
 
 test('checkCompatibility is an optional contract method with a normalised result', () => {
   const base = { id: 'x', label: 'X', kind: 'desktop-app', conversationNoun: 'thread', settings: [],
-    capabilities: { canDiscoverConversations: false, canConfirmDelivery: false, canDetectUserActivity: false, canDetectCompletion: false, canDetectUsageLimit: false, canReportResetTime: false, requiresRunningApp: true, requiresUnlockedScreen: true, requiresAccessibilityPermission: true },
+    capabilities: { canDiscoverConversations: false, canConfirmDelivery: false, canDetectUserActivity: false, canDetectCompletion: false, canDetectUsageLimit: false, canReportResetTime: false, canReportAgentMessage: false, requiresRunningApp: true, requiresUnlockedScreen: true, requiresAccessibilityPermission: true },
     checkConnection() {}, listConversations() {}, inspectConversation() {}, prepareTurn() {}, submitTurn() {}, findDelivery() {} };
   assert.equal(typeof defineHarness({ ...base, checkCompatibility: async () => ({}) }).checkCompatibility, 'function');
   assert.throws(() => defineHarness({ ...base, checkCompatibility: true }), /checkCompatibility must be a function/);

@@ -40,6 +40,7 @@ contextBridge.exposeInMainWorld('autoContinue', {
   stopJob: (id) => ipcRenderer.invoke('jobs:stop', id),
   stopAllContinuations: () => ipcRenderer.invoke('jobs:stop-all'),
   resumeJob: (id) => ipcRenderer.invoke('jobs:resume', id),
+  markNotDelivered: (id, options) => ipcRenderer.invoke('jobs:mark-not-delivered', id, options),
   scheduleAgain: (id) => ipcRenderer.invoke('jobs:schedule-again', id),
   acknowledgeJob: (id) => ipcRenderer.invoke('jobs:acknowledge', id),
   reconcileJob: (id) => ipcRenderer.invoke('jobs:reconcile', id),

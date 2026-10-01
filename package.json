@@ -1,10 +1,17 @@
 {
-  "name": "t3code-auto-continue",
-  "version": "2.0.0",
-  "description": "Menu-bar helper that schedules a 'Continue' turn for T3 Code, OpenCode, Claude Code and Codex conversations",
+  "name": "agent-auto-continue",
+  "productName": "Agent Auto-Continue",
+  "version": "2.1.0",
+  "description": "macOS menu-bar app that schedules a \"Continue\" message for coding agent threads at a chosen time",
   "main": "main.js",
-  "author": "T3 Code users",
+  "author": "VelvetAcorn",
   "license": "MIT",
+  "homepage": "https://github.com/VelvetAcorn/agent-auto-continue",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/VelvetAcorn/agent-auto-continue.git"
+  },
+  "bugs": "https://github.com/VelvetAcorn/agent-auto-continue/issues",
   "scripts": {
     "start": "env -u ELECTRON_RUN_AS_NODE electron .",
     "build": "electron-builder --mac zip --publish never",
@@ -12,9 +19,11 @@
     "build:all": "electron-builder --publish never",
     "test": "node --test",
     "check:syntax": "node tools/check-syntax.cjs",
-    "test:electron": "env -u ELECTRON_RUN_AS_NODE electron tools/electron-smoke.cjs && node tools/keep-awake-e2e.cjs",
-    "icons": "env -u ELECTRON_RUN_AS_NODE electron tools/build-icons.cjs",
-    "lint": "eslint ."
+    "test:electron": "env -u ELECTRON_RUN_AS_NODE ApplePersistenceIgnoreState=YES electron tools/electron-smoke.cjs && node tools/keep-awake-e2e.cjs",
+    "icons": "env -u ELECTRON_RUN_AS_NODE ApplePersistenceIgnoreState=YES electron tools/build-icons.cjs",
+    "lint": "eslint .",
+    "build:release": "electron-builder --mac --universal --publish never",
+    "build:release:local": "sh tools/release-local.sh"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "^2.2.0",
@@ -26,20 +35,27 @@
     "@eslint/js": "^10.0.1",
     "@modelcontextprotocol/client": "^2.2.0",
     "@modelcontextprotocol/sdk": "^1.31.0",
-    "electron": "^33.2.0",
-    "electron-builder": "^24.13.3",
+    "electron": "^44.5.1",
+    "electron-builder": "^26.15.3",
     "eslint": "^10.11.0",
     "globals": "^17.13.0"
   },
   "build": {
-    "appId": "io.t3code.auto-continue",
+    "appId": "com.velvetacorn.agent-auto-continue",
+    "productName": "Agent Auto-Continue",
+    "artifactName": "${name}-${version}-${arch}.${ext}",
     "icon": "assets/icon.icns",
     "mac": {
       "category": "public.app-category.developer-tools",
       "target": [
         "dmg",
         "zip"
-      ]
+      ],
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "notarize": true
     },
     "files": [
       "main.js",

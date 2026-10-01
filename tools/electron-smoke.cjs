@@ -208,10 +208,14 @@ async function remoteJourney(js, click, fill) {
   await waitFor(() => js(`document.querySelector('.token-reveal img').complete && document.querySelector('.token-reveal img').naturalWidth > 0`), 'QR code rendered');
   const token = await js(`document.querySelector('#remote-new-token').textContent`);
   assert.match(token, /^aac_[A-Za-z0-9_-]{43}$/);
-  const previousClipboard = electron.clipboard.readText();
-  await click('[data-action="remote-copy"]');
-  await waitFor(() => electron.clipboard.readText() === token, 'token copied to the clipboard');
-  electron.clipboard.writeText(previousClipboard);
+  // Electron's clipboard API is asynchronous.
+  const previousClipboard = await electron.clipboard.readText();
+  try {
+    await click('[data-action="remote-copy"]');
+    await waitFor(async () => (await electron.clipboard.readText()) === token, 'token copied to the clipboard');
+  } finally {
+    await electron.clipboard.writeText(previousClipboard);
+  }
   await js(`document.querySelector('#toast-dismiss')?.click(); document.querySelector('.token-reveal').scrollIntoView({block:'center'})`);
   await capture('settings-remote-token');
   const call = (method, route, body) => fetch(`http://127.0.0.1:${port}${route}`, { method, headers: { Authorization: `Bearer ${token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });
@@ -263,6 +267,7 @@ async function rendererJourney(js, reducedMotion) {
   const fill = async (selector, value) => js(`(() => { const input=document.querySelector(${JSON.stringify(selector)}); input.value=${JSON.stringify(value)}; input.dispatchEvent(new Event('input',{bubbles:true})); })()`);
   const heading = expected => waitFor(() => js(`document.querySelector('h1')?.textContent === ${JSON.stringify(expected)}`), `view ${expected}`);
   await heading('New schedule');
+  assert.equal(await js('document.title'), 'Agent Auto-Continue', 'The window title uses the app name');
   await js('window.__jobsChanged = 0; window.autoContinue.onJobsChanged(() => window.__jobsChanged++); 0');
   await fill('#message', 'Fixture message from the production composer');
   await fill('#date', '2099-02-30');

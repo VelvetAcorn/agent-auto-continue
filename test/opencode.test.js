@@ -184,7 +184,12 @@ test('turn outcomes come from session status and the reply to the sent message',
   assert.equal(retrying.state, 'running');
   assert.equal(retrying.usageLimit.resetsAt, '2100-01-01T00:00:00.000Z');
   server.state.status = {};
-  assert.equal((await adapter.checkTurn(sent)).state, 'completed');
+  assert.deepEqual(await adapter.checkTurn(sent), { turnId: sent.deliveryKey, state: 'completed', completedAt: new Date(1_790_000_002_000).toISOString(), lastAgentMessage: null }, 'A reply without text parts reports no message');
+  // The last agent message is the text of the newest reply that has any, without synthetic or ignored parts.
+  server.state.sessions[S2].messages[1].parts = [{ id: 'p1', type: 'text', text: 'Fixed the parser.' }, { id: 'p2', type: 'tool', tool: 'bash' }, { id: 'p3', type: 'text', text: 'TASK COMPLETE' }, { id: 'p4', type: 'text', text: 'Reminder', synthetic: true }];
+  server.state.sessions[S2].messages.push({ info: { id: 'msg_0000000000030000000000000', sessionID: S2, role: 'assistant', parentID: 'msg_0000000000010000000000000', time: { created: 1_790_000_003_000, completed: 1_790_000_004_000 } }, parts: [{ id: 'p5', type: 'step-finish' }] });
+  assert.equal((await adapter.checkTurn(sent)).lastAgentMessage, 'Fixed the parser.\nTASK COMPLETE');
+  server.state.sessions[S2].messages.pop();
   const reply = server.state.sessions[S2].messages[1].info;
   reply.error = { name: 'APIError', data: { message: 'Too many requests', statusCode: 429, isRetryable: false } };
   const limited = await adapter.checkTurn(sent);

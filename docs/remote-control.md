@@ -7,9 +7,11 @@ Remote control is off by default.
 ## Security model
 
 - **Off until you turn it on.** Nothing listens until you enable remote control in Settings.
-- **Loopback first.** When enabled, the app always listens on `127.0.0.1` only.
-  You may add one private-network address, such as your Tailscale address; the app never binds `0.0.0.0`, `::`, link-local or public addresses.
-- **Never on the public internet.** Only loopback, Tailscale (`100.64.0.0/10`, `fd7a:115c:a1e0::/48`) and private ranges (`10/8`, `172.16/12`, `192.168/16`, `fc00::/7`) are accepted, and only if the address is currently on one of the Mac's interfaces.
+- **Loopback first.** When enabled, the app always listens on `127.0.0.1`.
+  To reach it from a phone, you may add one Tailscale address; the app never binds `0.0.0.0`, `::`, link-local, public or ordinary local-network addresses.
+- **Tailscale only.** Besides loopback, only Tailscale addresses (`100.64.0.0/10` and `fd7a:115c:a1e0::/48`) are accepted, and only while the address is on a tunnel interface of this Mac (`utunN`, where Tailscale runs on macOS).
+  Carrier-grade NAT, for example a phone hotspot, hands out addresses from the same `100.64.0.0/10` range on an ordinary interface, so those are never offered.
+  Local-network ranges (`10/8`, `172.16/12`, `192.168/16`, `fc00::/7`) are refused, because the token would cross a shared network unencrypted.
 - **A token for every request.** Every endpoint, including MCP, requires `Authorization: Bearer <token>`.
   Tokens are 256-bit random values shown once at creation; only their SHA-256 digests are stored, and they are compared in constant time.
 - **Per-device, revocable tokens.** Each token has a label, such as "Ryan's iPhone", a scope (full control or read only), a creation time and a last-used time.
@@ -26,18 +28,23 @@ Remote control is off by default.
   Routine reads are not logged, so a polling phone cannot push older entries out of the 500-entry log.
 
 The token travels in plain HTTP.
-Over loopback and Tailscale this is protected by the operating system or by WireGuard encryption.
-On an ordinary local network it is not encrypted, so the app warns when you choose such an address; prefer Tailscale.
+Over loopback and Tailscale this is protected by the operating system or by WireGuard encryption, which is why no other network is allowed.
+
+Earlier versions could also listen on a local-network address.
+At launch, a saved local-network address is dropped before any listener starts: remote control stays on, loopback keeps serving, and the change is recorded.
+The app shows a notification once, adds an entry to Settings, Remote activity, and keeps a notice in `remote-control.json` (`notices`, also returned as `notices` by the desktop state, newest first).
+If the file cannot be written, the address is still never used, and the change is made again at the next launch.
+A saved Tailscale address is kept even while Tailscale is disconnected.
 
 ## Turn it on
 
 1. Open **Settings** and find **Remote control**.
-2. Tick **Allow remote control**, choose **Network access**, and keep port `3799` unless it is taken.
+2. Tick **Allow remote control**, choose **Network access** (this Mac only, or your Tailscale address), and keep port `3799` unless it is taken.
 3. Choose **Save remote settings**; the listener status shows each address and whether it is listening.
 4. Under **Device tokens**, name the device, choose **Full control** or **Read only**, then **Create token**.
 5. Copy the token or scan its QR code with your phone now; it is never shown again.
 
-If the chosen private address is not available, for example because Tailscale is disconnected, the app keeps serving loopback and retries the address every 30 seconds.
+If the chosen Tailscale address is not available, for example because Tailscale is disconnected, the app keeps serving loopback and retries the address every 30 seconds.
 
 ## Reach it from your phone over Tailscale
 
@@ -47,7 +54,7 @@ If the chosen private address is not available, for example because Tailscale is
 4. Send the token as a bearer token with every request.
 
 Consider a Tailscale access rule that only lets your own devices reach port 3799 on the Mac.
-Do not use Tailscale Funnel or any other public tunnel; the app is designed for private networks only.
+Do not use Tailscale Funnel or any other public tunnel; the app is designed for your tailnet only.
 
 When the Mac is asleep or offline, requests fail to connect and nothing changes on the Mac.
 Retry `POST /v1/jobs` with the same `Idempotency-Key` once it is reachable; the Mac returns the original schedule instead of creating a duplicate.
@@ -106,6 +113,7 @@ A read-only token only sees the read tools.
 | `cancel_job` | Cancel a pending schedule | Yes |
 | `acknowledge_job` | Clear the attention badge of a failed or unconfirmed delivery | Yes |
 | `reconcile_job` | Check an unconfirmed delivery without resending | Yes |
+| `mark_not_delivered` | Assert that an unconfirmed delivery did not arrive; needs `confirm: true` | Yes |
 | `list_runs` | Automatic continuations that are running or paused | No |
 | `stop_run` | Stop one continuation; nothing further is sent | Yes |
 | `stop_all_runs` | Stop every running or paused continuation; plain schedules are left alone | Yes |
@@ -131,12 +139,13 @@ Responses are JSON with `Cache-Control: no-store`.
 | `GET /v1/threads` | read | query `harness`, `projectId`, `query`, `showSettled`, `limit` | `200 { threads, total }` |
 | `GET /v1/projects` | read | query `harness` | `200 { projects }` |
 | `GET /v1/jobs` | read | query `view` (`all`, `upcoming`, `history`), `status`, `offset`, `limit` | `200 { jobs, total, unacknowledgedFailures }` |
-| `POST /v1/jobs` | control | `threadId`, optional `message`, `whenISO` or `delayMinutes`, `timeZone`, `harness`, `trigger`, `turnLimit`, `continuous`, `idempotencyKey`; or an `Idempotency-Key` header | `201 { job, replayed: false }`, or `200 { job, replayed: true }` with `Idempotent-Replayed: true` |
+| `POST /v1/jobs` | control | `threadId`, optional `message`, `whenISO` or `delayMinutes`, `timeZone`, `harness`, `trigger`, `turnLimit`, `continuous`, `stopPhrase`, `idempotencyKey`; or an `Idempotency-Key` header | `201 { job, replayed: false }`, or `200 { job, replayed: true }` with `Idempotent-Replayed: true` |
 | `GET /v1/jobs/{id}` | read | none | `200 { job }` |
-| `PATCH /v1/jobs/{id}` | control | any of `message`, `whenISO`, `delayMinutes`, `timeZone` | `200 { job }` |
+| `PATCH /v1/jobs/{id}` | control | any of `message`, `whenISO`, `delayMinutes`, `timeZone`, `stopPhrase` | `200 { job }` |
 | `POST /v1/jobs/{id}/cancel` | control | none | `200 { job }` |
 | `POST /v1/jobs/{id}/acknowledge` | control | none | `200 { job }` |
 | `POST /v1/jobs/{id}/reconcile` | control | none | `200 { job }` |
+| `POST /v1/jobs/{id}/mark-not-delivered` | control | `{ "confirm": true }` | `200 { job }` |
 | `GET /v1/runs` | read | none | `200 { runs }` |
 | `POST /v1/runs/{id}/stop` | control | none | `200 { run }` |
 | `POST /v1/runs/stop-all` | control | none | `200 { runs }`, the continuations that were stopped |
@@ -146,13 +155,27 @@ Responses are JSON with `Cache-Control: no-store`.
 Omitted `PATCH` fields keep their saved values.
 The same rules as the desktop composer apply: future times only, real calendar dates, 1 to 4,000 characters and a valid IANA timezone.
 A job's `deliveryStatus` is `pending`, `dispatching`, `sent`, `failed`, `canceled` or `unconfirmed`; `sent` means the harness accepted the message, not that the agent finished.
+A pending one-off message held back by a busy agent, a locked Mac, or a harness that is unavailable or certainly could not be reached has `displayStatus: 'waiting'`, `waiting.nextCheckAt` and `waitingSince`; it is checked again for up to six hours before it fails (see [waiting one-off messages](harnesses.md#waiting-one-off-messages)).
+
+### Marking a delivery as not delivered
+
+When `reconcile` leaves a delivery unconfirmed and the user has checked the conversation, `POST /v1/jobs/{id}/mark-not-delivered` with the body `{ "confirm": true }`, or the MCP tool `mark_not_delivered`, records that the message did not arrive.
+Without `confirm: true` the request is refused with `400 validation_failed`.
+The Mac checks the conversation once more first; if it finds the message, it confirms the delivery instead and answers `409 invalid_state`.
+A one-off message then has `deliveryStatus: 'failed'` and `error.code: 'marked_not_delivered'`, and can be scheduled again.
+A paused continuation pauses with reason code `marked_not_delivered`, and `POST /v1/runs/{id}/resume` sends that turn again with a new delivery key.
+The job lists every such assertion in `notDeliveredMarks`, with the source `remote`, and the request appears under Remote activity like every other change.
+Only unconfirmed deliveries can be marked; anything else answers `409 invalid_state`.
 
 ### Continuations
 
 `trigger`, `turnLimit` and `continuous` on `POST /v1/jobs` create an [automatic continuation](continuations.md), exactly as the composer does.
 `trigger` is `time` (the default), `available` (start as soon as the agent is available; no time is needed) or `time-then-available`.
 `turnLimit` is the total number of turns including the first, at least 1 and 1 by default, and `continuous: true` removes the limit.
-Modes a harness cannot support are refused with `400 validation_failed` and the same explanation the composer shows; `GET /v1/harnesses` reports them in each harness's `automation: { whenAvailable, multipleTurns }`.
+`stopPhrase`, such as `TASK COMPLETE`, finishes the continuation when a completed turn's final agent message contains it; it needs more than one turn, and `null` or an empty string removes it on `PATCH` (see [stop phrase](continuations.md#stop-phrase)).
+A `PATCH` without `stopPhrase` keeps the saved phrase.
+A `PATCH` with only `stopPhrase` changes the phrase of an active or paused continuation at any time, even after its first turn; any other change, alone or alongside it, is refused with `409 invalid_state` once the first turn has been sent.
+Modes a harness cannot support are refused with `400 validation_failed` and the same explanation the composer shows; `GET /v1/harnesses` reports them in each harness's `automation: { whenAvailable, multipleTurns, stopPhrase }`.
 
 A run is a continuation that is running or paused:
 
@@ -234,13 +257,18 @@ curl -s -X POST "$BASE/jobs" -H "$AUTH" -H 'Content-Type: application/json' \
 curl -s -X PATCH "$BASE/jobs/JOB_ID" -H "$AUTH" -H 'Content-Type: application/json' -d '{"message":"Keep going"}'
 
 curl -s -X POST "$BASE/jobs/JOB_ID/cancel" -H "$AUTH"
+
+curl -s -X POST "$BASE/jobs" -H "$AUTH" -H 'Content-Type: application/json' \
+  -d '{"threadId":"thread-id","delayMinutes":30,"continuous":true,"stopPhrase":"TASK COMPLETE"}'
+
+curl -s -X POST "$BASE/jobs/JOB_ID/mark-not-delivered" -H "$AUTH" -H 'Content-Type: application/json' -d '{"confirm":true}'
 ```
 
 ### Status object
 
 ```json
 {
-  "desktop": { "app": "T3 Code Auto-Continue", "version": "2.0.0", "time": "2026-10-01T08:00:00.000Z", "timeZone": "Europe/London" },
+  "desktop": { "app": "Agent Auto-Continue", "version": "2.1.0", "time": "2026-10-01T08:00:00.000Z", "timeZone": "Europe/London" },
   "storage": { "ok": true },
   "defaultHarness": "t3",
   "harnesses": [

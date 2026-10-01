@@ -145,3 +145,29 @@ test('an interruption marker ends the turn as interrupted and is not user activi
   assert.equal(sessions.isHumanPrompt({ type: 'user', message: { role: 'user', content: '[Request interrupted by user for tool use]' } }), false);
 });
 
+
+test('the last agent message of a transcript turn is its newest assistant text, skipping tool calls, errors and side chains', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-message-'));
+  roots.push(dir);
+  const file = path.join(dir, 'session.jsonl');
+  const at = (s) => new Date(Date.UTC(2026, 8, 30, 12, 0, s)).toISOString();
+  const assistant = (uuid, s, content, extra = {}) => ({ type: 'assistant', uuid, timestamp: at(s), isSidechain: false, cwd: dir, message: { role: 'assistant', stop_reason: extra.stop || null, content }, ...extra.record });
+  const rows = [
+    { type: 'user', uuid: 'earlier', timestamp: at(0), isSidechain: false, cwd: dir, message: { role: 'user', content: 'Start' } },
+    assistant('a0', 1, [{ type: 'text', text: 'Earlier turn. TASK COMPLETE' }], { stop: 'end_turn' }),
+    { type: 'user', uuid: 'job-key', timestamp: at(2), isSidechain: false, cwd: dir, message: { role: 'user', content: [{ type: 'text', text: 'Continue' }] } },
+    assistant('a1', 3, [{ type: 'text', text: 'Looking at the tests.' }]),
+    assistant('a2', 4, [{ type: 'tool_use', id: 'x', name: 'Bash', input: {} }]),
+    assistant('side', 5, [{ type: 'text', text: 'Subagent says TASK COMPLETE' }], { record: { isSidechain: true } }),
+    assistant('a3', 6, [{ type: 'text', text: 'All tests pass.\n\nTASK   complete' }], { stop: 'end_turn' }),
+    assistant('a4', 7, [{ type: 'tool_use', id: 'y', name: 'Read', input: {} }]),
+    { type: 'system', subtype: 'turn_duration', timestamp: at(8), isSidechain: false, cwd: dir }
+  ];
+  fs.writeFileSync(file, rows.map((row) => JSON.stringify(row)).join('\n') + '\n');
+  const outcome = await sessions.turnOutcomeAfter(file, 'job-key');
+  assert.deepEqual([outcome.state, outcome.lastAgentMessage], ['completed', 'All tests pass.\n\nTASK   complete']);
+  // A turn without any assistant text reports no message rather than an earlier turn's.
+  fs.writeFileSync(file, [rows[0], rows[1], rows[2], rows[4], rows[8]].map((row) => JSON.stringify(row)).join('\n') + '\n');
+  const silent = await sessions.turnOutcomeAfter(file, 'job-key');
+  assert.deepEqual([silent.state, silent.lastAgentMessage], ['completed', undefined]);
+});

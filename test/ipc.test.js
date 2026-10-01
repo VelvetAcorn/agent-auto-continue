@@ -184,7 +184,7 @@ test('a desktop app change is checked on scheduling, logged, shown as a risk and
   assert.equal(JSON.parse(app.files.get('/fixture/compatibility.json')).harnesses.desk.problems[0].contactPoint, 'composer_label');
   const log = JSON.parse(app.files.get('/fixture/diagnostics.json'));
   assert.deepEqual(log.entries.map((entry) => [entry.harness, entry.appVersion, entry.contactPoint]), [['desk', '2.0', 'composer_label']]);
-  assert.equal(app.invoke('diagnostics:copy').ok, true);
+  assert.equal((await app.invoke('diagnostics:copy')).ok, true);
   assert.match(app.clipboard[0], /Agent Auto-Continue diagnostics[\s\S]*- desk: Desk App 2\.0, verified 1\.0[\s\S]*composer_label/);
   assert.doesNotMatch(app.clipboard[0] + app.files.get('/fixture/diagnostics.json'), /secret|Secret/, 'Neither message text nor titles reach diagnostics');
   fake.state.compatibility = healthy;
@@ -288,7 +288,7 @@ test('keep-awake IPC is opt-in, persists settings, shows the tray state and rele
   assert.deepEqual(JSON.parse(app.files.get('/fixture/config.json')).keepAwake, settings);
   assert.ok(app.events.some(([channel, snapshot]) => channel === 'keep-awake:changed' && snapshot.state === 'armed'));
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(app.trayTooltip, 'T3 Code Auto-Continue · Keeping Mac awake');
+  assert.equal(app.trayTooltip, 'Agent Auto-Continue · Keeping Mac awake');
   assert.ok(app.trayMenu.find((item) => item.label === 'Keeping Mac awake · 1 task'));
   app.trayMenu.find((item) => item.label === 'Let Mac sleep now').click();
   assert.equal(app.invoke('keep-awake:get').state, 'ended');
