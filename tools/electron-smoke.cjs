@@ -413,7 +413,9 @@ async function supportStarJourney(js, reducedMotion) {
   assert.equal(motion.changed, true);
   const steps = motion.samples.slice(1).map(([time, angle], index) => ({ elapsed: time - motion.samples[index][0], turned: (angle - motion.samples[index][1] + 360) % 360 }));
   const total = steps.reduce((sum, step) => sum + step.turned, 0), evidence = JSON.stringify({ frames: steps.length, total, span: motion.samples.at(-1)[0] - motion.samples[0][0] });
-  assert.ok(steps.length > 20, `the star animates frame by frame ${evidence}`);
+  // Frame-by-frame motion, not one jump: the per-step check below bounds every step by its elapsed time.
+  // The count only rules out a handful of jumps; CI runners paint as few as about 14 frames a second.
+  assert.ok(steps.length >= 10, `the star animates frame by frame ${evidence}`);
   for (const step of steps) assert.ok(step.turned <= 480 * Math.max(step.elapsed, 17) / 1000 + 0.5, `angle jumped ${JSON.stringify(step)}`);
   // Idle alone turns about 56 degrees in 1.4 s; the burst adds roughly 190 more.
   assert.ok(total > 150, `the click produced a fast burst ${evidence}`);
