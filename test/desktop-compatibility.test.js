@@ -34,7 +34,7 @@ function claude(t, { view = {}, live = null, files = () => true } = {}) {
   fake.state.version = '2.17.0';
   let slept = 0;
   const adapter = createClaudeDesktopHarness({ home, env: {}, isAlive: (pid) => pid === 13299, automation: fake.automation, isLocked: async () => false, platform: 'darwin',
-    exists: files, sleep: async (ms) => { slept += ms; }, appPath: null });
+    exists: files, sleep: async (ms) => { slept += ms; }, appPath: null, processes: async () => [] });
   return { adapter, fake, slept: () => slept };
 }
 

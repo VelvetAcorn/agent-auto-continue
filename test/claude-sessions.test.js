@@ -90,7 +90,8 @@ test('the live registry classifies every live entry and names what changed', asy
     '00000004': ['starting', '']
   }, 'A half-written file is skipped, as Claude Code does, and dead processes are ignored');
   assert.deepEqual(registry.unidentified, [{ pid: 5, hint: 'The live registry entry 5.json of a running process has no session ID (sessionId: missing).' }]);
-  assert.deepEqual(await sessions.readLiveRegistry({ home: '/nonexistent', env: {} }), { found: false, sessions: new Map(), unidentified: [] });
+  assert.deepEqual(registry.pids, [1, 2, 3, 4, 5]);
+  assert.deepEqual(await sessions.readLiveRegistry({ home: '/nonexistent', env: {} }), { found: false, pids: [], sessions: new Map(), unidentified: [] });
 });
 
 test('plan usage returns the newest valid sample, optionally for one organisation', async () => {
