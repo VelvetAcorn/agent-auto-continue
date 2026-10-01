@@ -1,14 +1,16 @@
 'use strict';
 // In-memory harness adapter for tests and the Electron smoke fixture.
 // It satisfies the full adapter contract and records every call.
-const { defineHarness } = require('../lib/harnesses/contract');
+const { compatibility: normaliseCompatibility, defineHarness } = require('../lib/harnesses/contract');
 const { HarnessError } = require('../lib/harnesses/errors');
 
-function createFakeHarness({ id = 'fake', label = 'Fake Agent', kind = 'cli', noun = 'session', capabilities = {}, conversations = [], settings = [] } = {}) {
+// Pass `compatibility` (a result, or a function of the check options) to give
+// the adapter a checkCompatibility(); change state.compatibility to simulate an app update.
+function createFakeHarness({ id = 'fake', label = 'Fake Agent', kind = 'cli', noun = 'session', capabilities = {}, conversations = [], settings = [], compatibility = null } = {}) {
   const state = {
     conversations: new Map(conversations.map((item) => [item.id, { messages: [], archived: false, ...item }])),
     calls: [], submitted: [], availability: { state: 'available', resetsAt: null, reason: '', source: 'reported' },
-    turn: { state: 'running' }, submitError: null, prepareError: null, turnError: null, completion: null, connectionError: null
+    turn: { state: 'running' }, submitError: null, prepareError: null, turnError: null, completion: null, connectionError: null, compatibility
   };
   const record = (name, ...args) => state.calls.push([name, ...args]);
   const find = (id) => {
@@ -54,7 +56,14 @@ function createFakeHarness({ id = 'fake', label = 'Fake Agent', kind = 'cli', no
     },
     async checkTurn(turn) { record('checkTurn', turn); if (state.turnError) throw state.turnError; return { ...state.turn }; },
     async probeAvailability() { record('probeAvailability'); return { ...state.availability, checkedAt: new Date().toISOString() }; },
-    async shutdown() { record('shutdown'); }
+    async shutdown() { record('shutdown'); },
+    ...(compatibility ? {
+      async checkCompatibility(options = {}) {
+        record('checkCompatibility', options);
+        const value = typeof state.compatibility === 'function' ? state.compatibility(options) : state.compatibility;
+        return normaliseCompatibility({ checkedAt: new Date().toISOString(), depth: options.depth, ...value });
+      }
+    } : {})
   });
   return { adapter, state };
 }

@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 function appHarness(initialJobs = [], { ownsInstance = true, rawJobs, extraHarnesses, env = { T3_TOKEN: 'test-secret' } } = {}) {
-  const handlers = {}, files = new Map(), events = [], windows = [], opened = [];
+  const handlers = {}, files = new Map(), events = [], windows = [], opened = [], clipboard = [];
   let trayMenu, failWrite = false;
   let ready, response = () => new Response('<!doctype html><html>test-secret</html>', { headers: { 'content-type': 'text/html' } });
   files.set('/fixture/jobs.json', rawJobs ?? JSON.stringify(initialJobs));
@@ -25,7 +25,8 @@ function appHarness(initialJobs = [], { ownsInstance = true, rawJobs, extraHarne
     Menu: { buildFromTemplate: value => value }, Notification: { isSupported: () => false },
     Tray: class { setToolTip() {} on() {} setContextMenu(menu) { trayMenu = menu; } },
     nativeImage: { createFromDataURL: () => ({ setTemplateImage() {} }) }, powerMonitor: { on() {} },
-    shell: { openExternal: async (url) => { opened.push(url); } }
+    shell: { openExternal: async (url) => { opened.push(url); } },
+    clipboard: { writeText: (text) => { clipboard.push(text); } }
   };
   const fakeFs = { readFileSync: name => { if (!files.has(name)) throw Object.assign(new Error('missing'), { code: 'ENOENT' }); return files.get(name); }, mkdirSync() {}, writeFileSync: (name, value) => { if (failWrite) throw new Error('Disk full'); files.set(name, value); }, renameSync: (from, to) => { files.set(to, files.get(from)); files.delete(from); } };
   const apiModule = require('../lib/api-client');
@@ -33,7 +34,7 @@ function appHarness(initialJobs = [], { ownsInstance = true, rawJobs, extraHarne
   const context = { require: name => name === 'electron' ? electron : name === 'node:fs' ? fakeFs : name === 'node-schedule' ? { scheduleJob: () => ({ cancel() {} }) } : name === './lib/api-client' ? { ...apiModule, createApiClient: options => apiModule.createApiClient({ ...options, fetchImpl: (...args) => response(...args) }) } : name === './lib/harnesses' && extraHarnesses ? { ...harnessModule, createHarnesses: options => harnessModule.createHarnessRegistry([require('../lib/harnesses/t3').createT3Harness({ api: options.api }), ...extraHarnesses(options)]) } : name.startsWith('./lib/') ? require(path.join(__dirname, '..', name)) : require(name), __dirname: path.join(__dirname, '..'), process: { env, pid: 123 }, console, Buffer };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8'), context);
   ready();
-  return { invoke: (name, ...args) => handlers[name]({}, ...args), setResponse: fn => { response = fn; }, files, events, windows, opened, setWriteFailure: value => { failWrite = value; }, get trayMenu() { return trayMenu; } };
+  return { invoke: (name, ...args) => handlers[name]({}, ...args), setResponse: fn => { response = fn; }, files, events, windows, opened, clipboard, setWriteFailure: value => { failWrite = value; }, get trayMenu() { return trayMenu; } };
 }
 
 test('dashboard IPC shows friendly HTML error and acknowledgment clears historical alert after restart', async () => {
@@ -193,6 +194,33 @@ test('conversations, schedules and connection checks are routed to the chosen ha
   await app.invoke('dashboard:schedule-thread', 'conv-1', 'fake');
   assert.equal(JSON.stringify(app.events.at(-1)[1]), JSON.stringify({ view: 'composer', threadId: 'conv-1', threadLabel: 'Fake conversation', harness: 'fake' }));
   assert.equal(fake.state.submitted.length, 0);
+});
+
+test('a desktop app change is checked on scheduling, logged, shown as a risk and copied for a bug report', async () => {
+  const { createFakeHarness } = require('../tools/fake-harness.cjs');
+  const healthy = { appVersion: '2.0', verifiedVersion: '1.0', problems: [], checked: ['app_path', 'composer_label'], unchecked: [] };
+  const fake = createFakeHarness({ id: 'desk', label: 'Desk App', kind: 'desktop-app', compatibility: healthy, conversations: [{ id: 'conv-1', title: 'Secret project plan' }] });
+  const app = appHarness([], { extraHarnesses: () => [fake.adapter] });
+  assert.equal(app.invoke('harnesses:compatibility').length, 0, 'Nothing is checked before it is needed');
+  await assert.rejects(app.invoke('harnesses:check-compatibility', 't3'), /no compatibility check/);
+  fake.state.compatibility = { ...healthy, problems: [{ contactPoint: 'composer_label', message: 'Desk App 2.0 changed how its message box is labelled. Scheduled messages for it may fail until Agent Auto-Continue supports this version.', hint: 'No "Prompt" text area.' }], checked: ['app_path'] };
+  const job = await app.invoke('schedule:create', { harness: 'desk', threadId: 'conv-1', message: 'Continue the secret plan', whenISO: '2099-01-01T12:00:00Z', timeZone: 'UTC' });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(fake.state.calls.filter((call) => call[0] === 'checkCompatibility').map((call) => call[1].depth), ['full'], 'Scheduling checks the app once');
+  const [state] = app.invoke('harnesses:compatibility');
+  assert.deepEqual([state.harness, state.label, state.appVersion, state.ok, state.problems[0].contactPoint], ['desk', 'Desk App', '2.0', false, 'composer_label']);
+  assert.match(app.invoke('jobs:get', job.id).risk.message, /changed how its message box is labelled/);
+  assert.equal(app.invoke('jobs:get', job.id).status, 'pending', 'A risk never cancels a schedule');
+  assert.ok(app.events.some((event) => event[0] === 'compatibility:changed'));
+  assert.equal(JSON.parse(app.files.get('/fixture/compatibility.json')).harnesses.desk.problems[0].contactPoint, 'composer_label');
+  const log = JSON.parse(app.files.get('/fixture/diagnostics.json'));
+  assert.deepEqual(log.entries.map((entry) => [entry.harness, entry.appVersion, entry.contactPoint]), [['desk', '2.0', 'composer_label']]);
+  assert.equal(app.invoke('diagnostics:copy').ok, true);
+  assert.match(app.clipboard[0], /Agent Auto-Continue diagnostics[\s\S]*- desk: Desk App 2\.0, verified 1\.0[\s\S]*composer_label/);
+  assert.doesNotMatch(app.clipboard[0] + app.files.get('/fixture/diagnostics.json'), /secret|Secret/, 'Neither message text nor titles reach diagnostics');
+  fake.state.compatibility = healthy;
+  assert.equal((await app.invoke('harnesses:check-compatibility', 'desk'))[0].ok, true);
+  assert.equal(app.invoke('jobs:get', job.id).risk, null);
 });
 
 test('harness settings are validated, persisted and never returned in clear text', () => {

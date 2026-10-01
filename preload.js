@@ -34,6 +34,14 @@ contextBridge.exposeInMainWorld('autoContinue', {
   listHarnesses: () => ipcRenderer.invoke('harnesses:list'),
   checkAvailability: (harness) => ipcRenderer.invoke('harnesses:availability', harness),
   openPermissionSettings: () => ipcRenderer.invoke('harnesses:open-permission-settings'),
+  getCompatibility: () => ipcRenderer.invoke('harnesses:compatibility'),
+  checkCompatibility: (harness) => ipcRenderer.invoke('harnesses:check-compatibility', harness),
+  copyDiagnostics: () => ipcRenderer.invoke('diagnostics:copy'),
+  onCompatibilityChanged: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on('compatibility:changed', listener);
+    return () => ipcRenderer.removeListener('compatibility:changed', listener);
+  },
   onJobsChanged: (callback) => {
     const listener = () => callback();
     ipcRenderer.on('jobs:changed', listener);
