@@ -74,10 +74,17 @@ test('permission errors carry the System Settings link', async () => {
   await assert.rejects(run(), (error) => error.details.permission === 'accessibility' && error.details.settingsUrl.startsWith('x-apple.systempreferences:'));
 });
 
-test('a conversation that never appears is a certain timeout and nothing is typed', async () => {
+test('a conversation that never appears is a certain timeout that names the app version and the deep link', async () => {
   const { fake, run } = setup();
   fake.state.navigationDelay = 100;
-  await rejects(run(), 'timeout', false);
+  fake.state.version = '2.0';
+  await assert.rejects(run({ verifiedVersion: '1.0' }), (error) => {
+    assert.equal(error.code, 'timeout');
+    assert.equal(error.deliveryUncertain, false);
+    assert.deepEqual([error.details.appVersion, error.details.verifiedVersion, error.details.contactPoint], ['2.0', '1.0', 'deep_link']);
+    assert.match(error.message, /Agent App 2\.0 did not show the session in time\. Nothing was sent\. If Agent App was updated recently/);
+    return true;
+  });
   assert.equal(calls(fake, 'setComposer').length, 0);
 });
 
@@ -112,12 +119,46 @@ test('text the app did not accept verbatim is reported as not sent and left alon
   assert.equal(fake.state.sent.length, 0);
 });
 
-test('a missing composer or send button means an unsupported app version, not a guess', async () => {
+test('a missing composer or send button next to the shown conversation is reported as an unsupported app version', async () => {
   const composer = setup({ view: { urlSegment: 'conv-1', composerLabel: 'Something else' } });
-  await rejects(composer.run(), 'timeout', false);
+  composer.fake.state.version = '9.9.9';
+  await assert.rejects(composer.run({ verifiedVersion: '1.0' }), (error) => {
+    assert.equal(error.code, 'app_version_unsupported');
+    assert.equal(error.deliveryUncertain, false);
+    assert.deepEqual([error.details.app, error.details.appVersion, error.details.verifiedVersion, error.details.contactPoint], ['Agent App', '9.9.9', '1.0', 'composer_label']);
+    assert.match(error.message, /^Agent App 9\.9\.9 changed how its message box is labelled, so Agent Auto-Continue could not send\. Nothing was sent\.$/);
+    assert.match(error.details.hint, /"Prompt"/);
+    assert.doesNotMatch(JSON.stringify(error.details), /Continue/, 'The message text never reaches the details');
+    return true;
+  });
+  assert.equal(calls(composer.fake, 'setComposer').length, 0);
+
   const send = setup({ view: { urlSegment: 'conv-1', sendLabel: 'Submit' } });
-  await rejects(send.run(), 'unexpected', false);
+  await assert.rejects(send.run({ verifiedVersion: '1.0' }), (error) => error.code === 'app_version_unsupported' && error.details.contactPoint === 'send_label' && error.deliveryUncertain === false && /Agent App 1\.0 did not match/.test(error.message));
   assert.equal(send.fake.state.view.composer, '', 'The inserted text is removed again');
+  assert.equal(send.fake.state.sent.length, 0);
+});
+
+test('a missing composer is not blamed on the app while the agent is busy or waiting', async () => {
+  const stop = setup({ view: { urlSegment: 'conv-1', composerLabel: 'Something else', stop: true } });
+  await rejects(stop.run(), 'conversation_busy', false);
+  const waiting = setup({ view: { urlSegment: 'conv-1', composerLabel: 'Something else' } });
+  await rejects(waiting.run({ isBusy: async () => { throw new HarnessError('awaiting_input', 'Waiting.'); } }), 'awaiting_input', false);
+});
+
+test('a message box that vanishes between steps is a plain certain failure, not an app change', async () => {
+  const { fake, run } = setup({ view: { urlSegment: 'conv-1' } });
+  fake.state.faults.setComposer = { ok: false, error: 'composer_missing' };
+  await rejects(run(), 'unexpected', false);
+});
+
+test('every desktop failure carries the app version', async () => {
+  const busy = setup({ view: { urlSegment: 'conv-1' }, busy: () => true });
+  busy.fake.state.version = '3.1';
+  await assert.rejects(busy.run(), (error) => error.code === 'conversation_busy' && error.details.appVersion === '3.1');
+  const denied = setup();
+  denied.fake.state.trusted = false;
+  await assert.rejects(denied.run(), (error) => error.code === 'permission_required' && error.details.appVersion === '1.0' && Boolean(error.details.settingsUrl));
 });
 
 test('localised labels are used once the content language is known', async () => {

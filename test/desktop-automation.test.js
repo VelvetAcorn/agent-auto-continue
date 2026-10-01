@@ -109,6 +109,23 @@ test('desktop error codes are part of the contract and keep their details', () =
   assert.deepEqual(info, { code: 'permission_required', message: 'Allow access.', details: { permission: 'accessibility', settingsUrl: ACCESSIBILITY_SETTINGS_URL }, deliveryUncertain: false });
 });
 
+test('an app change is a certain, sanitised failure that names the app, its version and what changed', () => {
+  const { CONTACT_POINTS, ERROR_CODES, appVersionUnsupported, driftMessage, toErrorInfo } = require('../lib/harnesses/errors');
+  assert.ok(ERROR_CODES.has('app_version_unsupported'));
+  const error = appVersionUnsupported({ app: 'Claude Desktop', appVersion: '2.17.0', verifiedVersion: '2.16120.0', contactPoint: 'composer_label', hint: `Token Bearer abcdefghijklmnop ${'x'.repeat(400)}` });
+  assert.equal(error.message, 'Claude Desktop 2.17.0 changed how its message box is labelled, so Agent Auto-Continue could not send. Nothing was sent.');
+  const info = toErrorInfo(error);
+  assert.equal(info.deliveryUncertain, false);
+  assert.deepEqual(Object.keys(info.details), ['app', 'appVersion', 'verifiedVersion', 'contactPoint', 'hint']);
+  assert.doesNotMatch(info.details.hint, /abcdefghijklmnop/);
+  assert.ok(info.details.hint.length <= 300);
+  assert.equal(appVersionUnsupported({ app: 'ChatGPT (Codex)', contactPoint: 'made_up' }).details.contactPoint, 'unknown', 'Unknown contact points are not passed through');
+  assert.match(appVersionUnsupported({ app: 'ChatGPT (Codex)', contactPoint: 'deep_link' }).message, /^ChatGPT \(Codex\) changed how its links open a conversation/, 'An unknown version is left out');
+  assert.match(driftMessage({ app: 'A', appVersion: '1', verifiedVersion: '1', contactPoint: 'send_label' }), /^A 1 did not match what this version of Agent Auto-Continue expects/);
+  assert.match(driftMessage({ app: 'A', appVersion: '2', contactPoint: 'send_label', sending: false }), /^A 2 changed how its send button is labelled\. Scheduled messages for it may fail/);
+  for (const id of Object.keys(CONTACT_POINTS)) assert.match(id, /^[a-z_]+$/);
+});
+
 test('a child that exits before reading its input is a failed call, not a crash', async () => {
   const { run } = require('../lib/desktop/mac-automation');
   // Writing to a pipe whose reader is gone raises EPIPE on stdin, which must not go unhandled.

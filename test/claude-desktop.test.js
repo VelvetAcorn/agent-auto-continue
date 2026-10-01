@@ -222,6 +222,22 @@ test('end to end: a locked screen fails the job without touching the app', async
   assert.equal(fake.state.calls.filter((call) => call[0] !== 'environment').length, 0);
 });
 
+test('end to end: a Claude Desktop update that renames the message box fails the job clearly and sends nothing', async (t) => {
+  const { adapter, fake, now, advance } = setup(t);
+  fake.state.version = '2.17.0';
+  fake.state.view.composerLabel = 'Message Claude';
+  const { service, notifications } = jobService(adapter, now);
+  const job = await schedule(service, now);
+  advance(120_000);
+  await service.run(job.id);
+  const failed = service.present(service.get(job.id));
+  assert.deepEqual([failed.status, failed.deliveryCertainty, failed.error.code], ['failed', 'not-delivered', 'app_version_unsupported']);
+  assert.equal(failed.note, 'Claude Desktop 2.17.0 changed how its message box is labelled, so Agent Auto-Continue could not send. Nothing was sent.');
+  assert.deepEqual([failed.error.details.appVersion, failed.error.details.verifiedVersion, failed.error.details.contactPoint], ['2.17.0', '2.16120.0', 'composer_label']);
+  assert.equal(notifications.at(-1)[1], failed.note);
+  assert.equal(fake.state.calls.filter((call) => call[0] === 'setComposer').length, 0);
+});
+
 test('end to end: user activity after scheduling cancels the send', async (t) => {
   const { adapter, fake, fixture, now, advance } = setup(t);
   const { service } = jobService(adapter, now);

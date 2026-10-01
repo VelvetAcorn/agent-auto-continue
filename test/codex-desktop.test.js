@@ -127,6 +127,21 @@ test('checkTurn and availability use the Codex protocol results', async () => {
   assert.deepEqual([available.state, available.resetsAt, available.source], ['limited', resetsAt, 'reported']);
 });
 
+test('a ChatGPT update that renames the send button is reported with its version, and the text is removed', async () => {
+  const { adapter, fake } = setup();
+  fake.state.version = '27.1.0';
+  fake.state.view.sendLabel = 'Submit';
+  await assert.rejects(adapter.submitTurn(turn(), { threadId: THREAD, name: 'Update live Ko-fi account' }), (error) => {
+    assert.equal(error.code, 'app_version_unsupported');
+    assert.equal(error.deliveryUncertain, false);
+    assert.deepEqual([error.details.app, error.details.appVersion, error.details.verifiedVersion, error.details.contactPoint], ['ChatGPT (Codex)', '27.1.0', '26.915.31945', 'send_label']);
+    assert.match(error.message, /^ChatGPT \(Codex\) 27\.1\.0 changed how its send button is labelled/);
+    return true;
+  });
+  assert.equal(fake.state.sent.length, 0);
+  assert.equal(fake.state.view.composer, '');
+});
+
 test('without the app the harness reports it as not installed', async () => {
   const reader = fakeReader();
   const adapter = createCodexDesktopHarness({ createReader: reader.createReader, platform: 'darwin', codexPath: () => null });
