@@ -160,6 +160,15 @@ test('the production registry is described over IPC without touching any harness
   assert.equal(harnesses.find((item) => item.id === 'opencode').settings.map((setting) => setting.key).join(), 'port,password');
 });
 
+test('the permission IPC opens only the fixed Accessibility pane, whatever the renderer passes', async () => {
+  const { ACCESSIBILITY_SETTINGS_URL } = require('../lib/desktop/mac-automation');
+  const app = appHarness();
+  await app.invoke('harnesses:open-permission-settings');
+  await app.invoke('harnesses:open-permission-settings', 'https://evil.example', { url: 'file:///etc/passwd' });
+  assert.deepEqual(app.opened, [ACCESSIBILITY_SETTINGS_URL, ACCESSIBILITY_SETTINGS_URL]);
+  assert.equal(ACCESSIBILITY_SETTINGS_URL, 'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility');
+});
+
 test('conversations, schedules and connection checks are routed to the chosen harness', async () => {
   const { createFakeHarness } = require('../tools/fake-harness.cjs');
   const fake = createFakeHarness({ conversations: [{ id: 'conv-1', title: 'Fake conversation', projectName: 'Repo' }] });

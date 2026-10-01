@@ -186,3 +186,19 @@ test('text inserted by a write whose result is lost is removed again', async () 
     assert.equal(fake.state.view.composer, '', 'Our own text does not stay behind in the message box');
   }
 });
+
+test('the fake app refuses what the real driver refuses', async () => {
+  const target = { bundleId: BUNDLE, match: { urlSegment: 'conv-1' }, composerLabels: ['Prompt'], sendLabels: ['Send'] };
+  const { fake } = setup({ view: { urlSegment: 'conv-1', composer: 'Continue', sendEnabled: false } });
+  assert.deepEqual(await fake.automation.submit(target, 'Continue'), { ok: false, error: 'send_disabled' }, 'A disabled send button is never pressed');
+  assert.equal(fake.state.sent.length, 0);
+  fake.state.view.urlSegment = 'other';
+  assert.deepEqual(await fake.automation.clearComposer(target, 'Continue'), { ok: false, error: 'content_mismatch' }, 'Another conversation is never cleared');
+  assert.equal(fake.state.view.composer, 'Continue');
+  fake.state.view.urlSegment = 'conv-1';
+  fake.state.screenLocked = true;
+  assert.deepEqual(await fake.automation.clearComposer(target, 'Continue'), { ok: false, error: 'content_mismatch' }, 'A locked session exposes no content');
+  fake.state.screenLocked = false;
+  assert.equal((await fake.automation.clearComposer(target, 'Continue\n')).ok, true, 'Clearing compares normalised text, like the real driver');
+  assert.equal(fake.state.view.composer, '');
+});

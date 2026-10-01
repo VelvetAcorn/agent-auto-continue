@@ -3,6 +3,7 @@
 // app window with a conversation view, a composer and a send button, records
 // every call, and lets tests inject failures. No real user interface is used.
 const { ACCESSIBILITY_SETTINGS_URL } = require('../lib/desktop/mac-automation');
+const { normaliseText } = require('../lib/desktop/ui-delivery');
 
 function createFakeDesktopAutomation({ bundleId, pid = 4242, view = {}, navigate = () => null, onSend = () => {} } = {}) {
   const state = {
@@ -28,6 +29,8 @@ function createFakeDesktopAutomation({ bundleId, pid = 4242, view = {}, navigate
   }
   function locate(target) {
     if (!state.running) return { error: 'not_running' };
+    // A locked session exposes no content at all, so nothing can be located.
+    if (state.screenLocked) return { error: 'content_mismatch' };
     if (state.pendingView && --state.navigationDelay < 0) { state.view = { ...state.view, ...state.pendingView }; state.pendingView = null; }
     if (!shows(target.match)) return { error: 'content_mismatch' };
     const composer = (target.composerLabels || []).includes(state.view.composerLabel);
@@ -39,15 +42,17 @@ function createFakeDesktopAutomation({ bundleId, pid = 4242, view = {}, navigate
     return {
       content: { url: view.urlSegment ? `https://example.test/${view.urlSegment}` : 'app://-/index.html', title: view.title || '', language: view.language },
       composer: found.composer ? { value: view.composer, focused: true } : null,
-      send: found.send ? { enabled: view.sendEnabled ?? view.composer.trim() !== '' } : null,
+      send: found.send ? { enabled: sendEnabled() } : null,
       stop: view.stop
     };
   }
-  const guard = () => {
+  // Mirrors guard() in jxa-program.js: clearing needs trust but not an unlocked screen.
+  const guard = (mutating = true) => {
     if (!state.trusted) return { ok: false, error: 'untrusted' };
-    if (state.screenLocked) return { ok: false, error: 'screen_locked' };
+    if (mutating && state.screenLocked) return { ok: false, error: 'screen_locked' };
     return null;
   };
+  const sendEnabled = () => state.view.sendEnabled ?? state.view.composer.trim() !== '';
   const automation = {
     accessibilitySettingsUrl: ACCESSIBILITY_SETTINGS_URL,
     async environment(bundleIds) {
@@ -92,8 +97,9 @@ function createFakeDesktopAutomation({ bundleId, pid = 4242, view = {}, navigate
       const found = locate(target);
       if (found.error) return { ok: false, error: found.error };
       if (!found.composer) return { ok: false, error: 'composer_missing' };
-      if (state.view.composer !== text) return { ok: false, error: 'value_mismatch' };
+      if (normaliseText(state.view.composer) !== normaliseText(text)) return { ok: false, error: 'value_mismatch' };
       if (!found.send) return { ok: false, error: 'send_missing' };
+      if (!sendEnabled()) return { ok: false, error: 'send_disabled' };
       state.sent.push({ view: { ...state.view }, text });
       state.view.composer = '';
       onSend(text, state);
@@ -101,7 +107,12 @@ function createFakeDesktopAutomation({ bundleId, pid = 4242, view = {}, navigate
     },
     async clearComposer(target, text) {
       record('clearComposer', target, text);
-      if (state.view.composer !== text) return { ok: false, error: 'value_mismatch' };
+      const blocked = guard(false);
+      if (blocked) return blocked;
+      const found = locate(target);
+      if (found.error) return { ok: false, error: found.error };
+      if (!found.composer) return { ok: false, error: 'composer_missing' };
+      if (normaliseText(state.view.composer) !== normaliseText(text)) return { ok: false, error: 'value_mismatch' };
       state.view.composer = '';
       return { ok: true };
     },
