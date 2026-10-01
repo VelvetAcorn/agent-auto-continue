@@ -87,3 +87,23 @@ test('transcripts yield human prompts and the outcome after a prompt', async () 
   const env = { CLAUDE_CONFIG_DIR: path.join(options.home, '.claude') };
   assert.equal(sessions.claudePaths({ home: '/elsewhere', env }).projectsDir, path.join(options.home, '.claude', 'projects'));
 });
+
+test('an interruption marker ends the turn as interrupted and is not user activity', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-interrupt-'));
+  roots.push(dir);
+  const file = path.join(dir, 'session.jsonl');
+  const at = (s) => new Date(Date.UTC(2026, 8, 30, 12, 0, s)).toISOString();
+  const rows = [
+    { type: 'user', uuid: 'job-key', timestamp: at(0), isSidechain: false, cwd: dir, message: { role: 'user', content: [{ type: 'text', text: 'Continue' }] } },
+    { type: 'assistant', uuid: 'a1', timestamp: at(5), isSidechain: false, cwd: dir, message: { role: 'assistant', stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 'x', name: 'Bash', input: {} }] } },
+    // Shape recorded by Claude Code 2.1.278 when the user presses Esc: a plain user text record.
+    { type: 'user', uuid: 'i1', timestamp: at(9), isSidechain: false, cwd: dir, message: { role: 'user', content: [{ type: 'text', text: '[Request interrupted by user]' }] } }
+  ];
+  fs.writeFileSync(file, rows.map((row) => JSON.stringify(row)).join('\n') + '\n');
+  const scan = await sessions.scanTranscript(file, 'job-key');
+  assert.deepEqual(sessions.outcomeFromScan(scan, { running: false }), { state: 'interrupted', completedAt: at(9) });
+  assert.equal(scan.latestUserActivityAt, null, 'The marker is not a typed prompt');
+  assert.deepEqual((await sessions.readHumanPrompts(file)).map((prompt) => prompt.uuid), ['job-key']);
+  assert.equal(sessions.isHumanPrompt({ type: 'user', message: { role: 'user', content: '[Request interrupted by user for tool use]' } }), false);
+});
+

@@ -32,6 +32,13 @@ process.stdin.on('end', () => {
     process.exit(1);
   }
   if (mode === 'crash') process.exit(2);
+  if (mode === 'late-write') {
+    // The transcript record lands after this process has exited, as when the file system is slow to flush.
+    const line = JSON.stringify(record({ type: 'user', uuid: message.uuid, message: message.message, promptSource: 'sdk' }));
+    const writer = require('node:child_process').spawn(process.execPath, ['-e', `setTimeout(() => require('fs').appendFileSync(${JSON.stringify(transcript)}, ${JSON.stringify(line + '\n')}), 800)`], { detached: true, stdio: 'ignore' });
+    writer.unref();
+    process.exit(1);
+  }
   if (mode === 'hang') { setInterval(() => {}, 1000); return; }
   append(record({ type: 'user', uuid: message.uuid, message: message.message, promptSource: 'sdk' }));
   if (mode !== 'slow-ack') emit({ ...message, session_id: session });

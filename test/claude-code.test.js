@@ -153,6 +153,14 @@ test('failures before the message reaches the transcript are certain non-deliver
   await assert.rejects(send(setup({ mode: 'crash' })), (error) => error.code === 'process_failed' && error.deliveryUncertain === false);
 });
 
+test('a transcript entry that lands just after exit still counts as delivered', async () => {
+  const late = setup({ mode: 'late-write' });
+  const result = await send(late, late.make({ flushGraceMs: 2500 }));
+  assert.equal((await result.completion).state, 'failed', 'The run itself ended without a result');
+  const hasty = setup({ mode: 'late-write' });
+  await assert.rejects(send(hasty, hasty.make({ flushGraceMs: 0 })), (error) => error.deliveryUncertain === false, 'Without the grace the early read decides non-delivery');
+});
+
 test('a missing acknowledgement defers to the transcript, and a hung process is stopped without delivery', async () => {
   const slow = setup({ mode: 'slow-ack' });
   const result = await send(slow, slow.make({ ackTimeoutMs: 1000 }));
