@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+    <polygon points="128.0,10.0 146.3,35.8 173.2,19.0 180.2,49.8 211.4,44.6 206.2,75.8 237.0,82.8 220.2,109.7 246.0,128.0 220.2,146.3 237.0,173.2 206.2,180.2 211.4,211.4 180.2,206.2 173.2,237.0 146.3,220.2 128.0,246.0 109.7,220.2 82.8,237.0 75.8,206.2 44.6,211.4 49.8,180.2 19.0,173.2 35.8,146.3 10.0,128.0 35.8,109.7 19.0,82.8 49.8,75.8 44.6,44.6 75.8,49.8 82.8,19.0 109.7,35.8" fill="#796B98" stroke="currentColor" stroke-width="10" stroke-linejoin="round"/>
+    <polygon points="86.96000000000001,72 198.95999999999998,128 86.96000000000001,184" fill="#F8F6F1" stroke="currentColor" stroke-width="10" stroke-linejoin="round"/>
+    <text x="118" y="139" text-anchor="middle" font-family="Fraunces, Georgia, serif" font-weight="900" font-size="30" letter-spacing="-1" fill="currentColor">aac.</text>
+  </svg>
