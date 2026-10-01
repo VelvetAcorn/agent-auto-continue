@@ -72,11 +72,16 @@ async function runTurn(threadId, turnId) {
   if (mode === 'long' || mode === 'user-input') { const state = load(); state.decisions = decisions; save(state); return; }
   const state = load();
   const turn = state.threads[threadId].turns.find((item) => item.id === turnId);
-  turn.status = mode === 'limit' ? 'failed' : mode === 'approval' ? 'interrupted' : 'completed';
+  turn.status = mode.startsWith('limit') ? 'failed' : mode === 'approval' ? 'interrupted' : 'completed';
   turn.completedAt = Math.floor(Date.now() / 1000);
-  if (mode === 'limit') turn.error = { message: "You've hit your usage limit.", codexErrorInfo: 'usageLimitExceeded' };
+  if (mode.startsWith('limit')) turn.error = { message: "You've hit your usage limit.", codexErrorInfo: 'usageLimitExceeded' };
   state.decisions = decisions;
   save(state);
+  if (mode === 'limit-exit') {
+    const message = JSON.stringify({ jsonrpc: '2.0', method: 'turn/completed', params: { threadId, turn } });
+    process.stdout.write(proxy ? frame(message) : message + '\n', () => process.exit(0));
+    return;
+  }
   send({ method: 'turn/completed', params: { threadId, turn } });
 }
 function onMessage(message) {
@@ -91,7 +96,9 @@ function onMessage(message) {
   switch (message.method) {
     case 'initialize': return reply({ userAgent: 'fake', codexHome: '/tmp', platformOs: 'macos' });
     case 'account/read': return reply(state.account);
-    case 'account/rateLimits/read': return reply(state.rateLimits);
+    case 'account/rateLimits/read':
+      if (mode === 'limit-exit') return setTimeout(() => reply(state.rateLimits), 200);
+      return reply(state.rateLimits);
     case 'thread/list': return reply({ data: Object.values(state.threads).map(bare), nextCursor: null });
     case 'thread/read': return thread ? reply({ thread: bare(thread) }) : fail(-32600, `thread/read failed: no rollout found for thread id ${message.params.threadId}`);
     case 'thread/turns/list': return thread ? reply({ data: [...thread.turns].reverse().slice(0, message.params.limit), nextCursor: null }) : fail(-32600, 'no rollout found');
@@ -114,6 +121,15 @@ function onMessage(message) {
       if (mode === 'crash') process.exit(3);
       if (mode === 'hang-start') return;
       if (mode === 'malformed-start') return reply({ turn: {} });
+      if (mode.startsWith('coalesced-')) {
+        const params = { threadId: thread.id, ...(mode.endsWith('-id') ? { turnId: turn.id } : {}) };
+        const messages = [
+          { jsonrpc: '2.0', id: message.id, result: { turn: { ...turn, items: [] } } },
+          { jsonrpc: '2.0', id: ++serverRequest, method: mode.includes('elicitation') ? 'mcpServer/elicitation/request' : 'item/tool/requestUserInput', params }
+        ].map((value) => JSON.stringify(value));
+        process.stdout.write(proxy ? Buffer.concat(messages.map((text) => frame(text))) : messages.join('\n') + '\n');
+        return;
+      }
       reply({ turn: { ...turn, items: [] } });
       send({ method: 'turn/started', params: { threadId: thread.id, turn } });
       setTimeout(() => void runTurn(thread.id, turn.id), 20);

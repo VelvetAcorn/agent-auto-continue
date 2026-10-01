@@ -340,3 +340,40 @@ test('the run deadline supervises turn/start before its RPC timeout', async () =
   assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
   await adapter.shutdown();
 });
+
+test('coalesced start responses and human requests interrupt with or without a request turn ID', async (t) => {
+  for (const transport of ['private', 'daemon']) {
+    for (const mode of ['coalesced-input', 'coalesced-input-id', 'coalesced-elicitation', 'coalesced-elicitation-id']) {
+      const s = setup({ mode });
+      const adapter = s.make({ transport, maxTurnMs: 5000 });
+      t.after(() => adapter.shutdown());
+      const began = Date.now();
+      const result = await send(s, adapter);
+      const outcome = await result.completion;
+      assert.ok(Date.now() - began < 4000, 'Human requests must interrupt before the run deadline');
+      assert.equal(outcome.state, 'interrupted');
+      assert.equal(outcome.error.code, 'approval_required');
+      const interrupts = s.log().filter((entry) => entry.method === 'turn/interrupt');
+      assert.equal(interrupts.length, 1);
+      assert.deepEqual(interrupts[0].params, { threadId: THREAD, turnId: result.turnId });
+      assert.equal(s.state().threads[THREAD].turns.at(-1).status, 'interrupted');
+    }
+  }
+});
+
+test('a terminal usage limit survives client exit during quota enrichment', async (t) => {
+  for (const transport of ['private', 'daemon']) {
+    const s = setup({ mode: 'limit-exit', rateLimits: { rateLimits: { primary: { usedPercent: 100, resetsAt: 4_102_444_800 }, secondary: null, rateLimitReachedType: 'rate_limit_reached' } } });
+    const adapter = s.make({ transport });
+    t.after(() => adapter.shutdown());
+    const result = await send(s, adapter);
+    const outcome = await result.completion;
+    assert.equal(outcome.state, 'failed');
+    assert.equal(outcome.error.code, 'usage_limited');
+    assert.equal(outcome.usageLimit.resetsAt, '2100-01-01T00:00:00.000Z');
+    assert.deepEqual(await adapter.checkTurn(turn()), outcome);
+    const writer = s.log().filter((entry) => entry.start).find((entry) => fs.realpathSync(entry.cwd) === fs.realpathSync(s.project));
+    assert.ok(writer);
+    assert.throws(() => process.kill(writer.pid, 0), { code: 'ESRCH' });
+  }
+});
