@@ -114,3 +114,14 @@ test('a child that exits before reading its input is a failed call, not a crash'
   // Writing to a pipe whose reader is gone raises EPIPE on stdin, which must not go unhandled.
   await assert.rejects(run('/bin/sh', ['-c', 'exit 3'], { timeout: 5000, input: 'x'.repeat(8 * 1024 * 1024) }), (error) => error.code === 3);
 });
+
+test('a call that times out stops the whole process group it started', { skip: process.platform === 'win32' }, async () => {
+  const { run } = require('../lib/desktop/mac-automation');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mac-run-'));
+  const pidFile = path.join(dir, 'pid');
+  await assert.rejects(run('/bin/sh', ['-c', `sleep 30 & echo $! > "${pidFile}"; wait`], { timeout: 300 }), (error) => error.killed === true);
+  const pid = Number(fs.readFileSync(pidFile, 'utf8'));
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' }, 'The helper the child started is gone too');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
