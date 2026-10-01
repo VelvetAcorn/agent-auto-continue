@@ -63,12 +63,15 @@
   function connection() {
     return `<span class="connection ${state.online === false ? 'offline' : ''}" id="connection-state">${state.online === null ? 'Connecting…' : state.online ? escape(harnessLabel()) + ' connected' : 'Offline · queue saved'}</span>`;
   }
+  // Short names for the contact points in lib/harnesses/errors.js, shown beside the ID for bug reports.
+  const CONTACT_POINT_NAMES = { app_path: 'App files', deep_link: 'Conversation links', content_match: 'Open conversation title', composer_label: 'Message box label', send_label: 'Send button label', stop_label: 'Stop button label', label_catalogue: 'Translated labels', session_store: 'Session store', live_registry: 'Working status', transcript: 'Transcript format', originator: 'Conversation owner', app_server: 'Codex server replies' };
+  const contactPointName = (id) => CONTACT_POINT_NAMES[id] ? `${CONTACT_POINT_NAMES[id]} (${id})` : id;
   // One notice per desktop app whose installed version changed in a way this version does not understand.
   function compatibilityNotices() {
     return state.compatibility.filter(item => item.problems?.length).map(item => {
       const name = `${item.label}${item.appVersion ? ' ' + item.appVersion : ''}`;
       const atRisk = state.upcoming.filter(job => job.harness === item.harness && job.risk).length;
-      const facts = [item.verifiedVersion ? `Verified with ${item.verifiedVersion}` : '', `Changed: ${item.problems.map(problem => problem.contactPoint).join(', ')}`, item.checkedAt ? `Last checked ${relative(item.checkedAt).toLocaleLowerCase()}` : ''].filter(Boolean);
+      const facts = [item.verifiedVersion ? `Verified with ${item.verifiedVersion}` : '', `Changed: ${item.problems.map(problem => contactPointName(problem.contactPoint)).join(', ')}`, item.checkedAt ? `Last checked ${relative(item.checkedAt).toLocaleLowerCase()}` : ''].filter(Boolean);
       return `<div class="notice" role="status"><div><strong>${escape(name)} isn’t supported yet</strong><p>${escape(item.problems[0].message)}</p>${atRisk ? `<p>${atRisk === 1 ? 'One scheduled message is' : `${atRisk} scheduled messages are`} at risk. ${atRisk === 1 ? 'It stays' : 'They stay'} scheduled, and if the problem remains when ${atRisk === 1 ? 'it is' : 'one is'} due, nothing is sent.</p>` : ''}<details><summary>Technical details</summary><p>${facts.map(escape).join(' · ')}</p></details></div><button type="button" data-action="copy-diagnostics">Copy diagnostics</button><button type="button" class="ghost" data-action="recheck-compatibility" data-harness="${escape(item.harness)}">Check again</button></div>`;
     }).join('');
   }
@@ -80,7 +83,7 @@
     if (!info?.details && !info?.code) return '';
     const details = info.details || {};
     const app = details.appVersion ? `${details.app || 'App'} ${details.appVersion}${details.verifiedVersion && details.verifiedVersion !== details.appVersion ? ` (verified with ${details.verifiedVersion})` : ''}` : '';
-    return `<details><summary>Technical details</summary><p>${[info.code, details.status ? 'HTTP ' + details.status : '', details.endpoint, details.contentType, app, details.contactPoint, details.hint].filter(Boolean).map(escape).join(' · ')}</p></details>`;
+    return `<details><summary>Technical details</summary><p>${[info.code, details.status ? 'HTTP ' + details.status : '', details.endpoint, details.contentType, app, details.contactPoint && contactPointName(details.contactPoint), details.hint].filter(Boolean).map(escape).join(' · ')}</p></details>`;
   }
   function render(focusSelector) {
     const active = document.activeElement;
