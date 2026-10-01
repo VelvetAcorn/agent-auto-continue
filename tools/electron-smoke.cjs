@@ -280,6 +280,12 @@ async function harnessJourney(js) {
   await click('[data-action="cancel"]');
   await click('[data-action="confirm-cancel"]');
   await waitFor(() => js(`window.autoContinue.getJob(${JSON.stringify(job.id)}).then(item=>item.status==='canceled')`), 'fake schedule canceled');
+  // In-place status refreshes must keep naming the current harness.
+  await click('[data-nav="history"]');
+  await heading('History');
+  await js('window.autoContinue.listJobs({view:"history"})');
+  await new Promise(resolve => setTimeout(resolve, 500));
+  assert.equal(await js(`document.querySelector('#connection-state').textContent`), 'Fake Agent connected');
   await click('[data-nav="settings"]');
   await waitFor(() => js(`Boolean(document.querySelector('#harness-form'))`), 'agent settings card');
   assert.match(await js(`document.querySelector('#harness-form').textContent`), /Works while locked/);
