@@ -61,9 +61,10 @@ Electron and Chromium apps build their web accessibility tree on request, so the
 Locked-screen detection is `lib/harnesses/session-lock.js`, which reads the IORegistry console sessions with `/usr/sbin/ioreg` and needs no permission.
 While the screen is locked, both apps expose their application element as its own descendant and no content at all, so the automation program refuses every operation while locked.
 `probeAvailability()` reports `{ state: 'unavailable', reason: 'screen_locked', source: 'reported' }` while locked.
-A one-off schedule (start at a time, one turn) that fires while the screen is locked fails as not sent, with error code `screen_locked`, and nothing is typed.
-An automatic continuation, including a single-turn schedule that starts when the agent is available, keeps the same unsent turn instead: it checks again every minute and at once on `unlock-screen`, as described in [automatic continuations](continuations.md).
-Whether one-off schedules should also be deferred until the next unlock is an open decision for the owner.
+A schedule that fires while the screen is locked types nothing and keeps the same unsent turn: it checks again every minute and at once on `unlock-screen`.
+A one-off schedule (start at a time, one turn) waits like this for up to six hours and then fails as not sent with error code `screen_locked` (see [waiting one-off messages](harnesses.md#waiting-one-off-messages)).
+An automatic continuation, including a single-turn schedule that starts when the agent is available, waits until it is stopped, as described in [automatic continuations](continuations.md).
+A busy session or thread is waited for in the same way.
 Keep-awake reports these tasks with `requiresUnlockedScreen`, so it keeps the display on while they wait or run, which also stops an idle display sleep from locking the Mac.
 
 ## Surviving app updates
@@ -165,7 +166,7 @@ Discovery and evidence come from local files, read through `lib/harnesses/claude
 Busy and waiting-for-input state come from the registry status.
 Claude Code 2.1.286 knows the statuses `busy`, `shell`, `idle` and `waiting`, and its own interface shows `shell`, a running shell command, as working.
 A process that started less than 30 seconds ago and has not reported a status yet counts as working.
-The job service refuses a busy session with `conversation_busy` and a waiting one with `awaiting_input`, and the harness checks the registry again right before typing and before pressing send.
+The job service waits for a busy session (`conversation_busy`) and refuses one waiting for input with `awaiting_input`, and the harness checks the registry again right before typing and before pressing send.
 A Stop button near the message box is a second, independent busy signal, so a session where Claude is responding is refused even if the registry says otherwise.
 
 Delivery is confirmed when the transcript gains a typed prompt with exactly the scheduled text, written no earlier than five seconds before the send attempt.

@@ -7,7 +7,7 @@
     createJob: 'Scheduled a message', editJob: 'Edited a schedule', cancelJob: 'Canceled a schedule',
     acknowledgeJob: 'Acknowledged a delivery', reconcileJob: 'Checked a delivery', stopRun: 'Stopped a continuation', stopAllRuns: 'Stopped all continuations', resumeRun: 'Resumed a continuation',
     authenticate: 'Rejected a sign-in', reject_request: 'Blocked a request', token_created: 'Created a device token', token_revoked: 'Revoked a device token',
-    settings_changed: 'Changed remote settings'
+    settings_changed: 'Changed remote settings', markNotDelivered: 'Marked a delivery as not delivered', lan_bind_removed: 'Stopped listening on a local-network address'
   };
   const OUTCOMES = { ok: ['sent', 'Done'], replayed: ['canceled', 'Repeat, no change'], error: ['failed', 'Failed'], denied: ['unconfirmed', 'Denied'] };
   const local = { state: null, draft: null, tokenDraft: { label: '', scope: 'control' }, reveal: null, confirmRevoke: null };

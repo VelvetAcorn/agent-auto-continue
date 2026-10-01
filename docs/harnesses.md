@@ -58,6 +58,7 @@ Every capability is required, so consumers never guess a default.
 | `canDetectCompletion` | `checkTurn()` reports when the agent finished; requires `checkTurn()` |
 | `canDetectUsageLimit` | `probeAvailability()` reports provider usage limits; requires `probeAvailability()` |
 | `canReportResetTime` | Usage-limit signals include the reset time; requires `canDetectUsageLimit` |
+| `canReportAgentMessage` | Finished turn outcomes include the agent's last message text (`lastAgentMessage`) when the turn produced one; requires `canDetectCompletion` |
 | `requiresRunningApp` | The harness app or server must already be running |
 | `requiresUnlockedScreen` | Delivery drives a user interface, so the Mac must be awake and unlocked |
 | `requiresAccessibilityPermission` | Delivery needs macOS Accessibility permission |
@@ -108,9 +109,13 @@ An availability is `{ state, resetsAt, reason, source, checkedAt }`.
 `source` is `reported` when the harness returned the value, `inferred` when the adapter derived it from local records, or `none`.
 All timestamps are ISO 8601 UTC strings or `null`.
 
-A turn outcome is `{ state, turnId, completedAt, error, usageLimit }`.
+A turn outcome is `{ state, turnId, completedAt, error, usageLimit, lastAgentMessage }`.
 `state` is `running`, `completed`, `failed`, `interrupted` or `unknown`.
 `usageLimit` is `{ resetsAt, message }` when a turn stopped at a provider usage limit.
+`lastAgentMessage` is optional: the text of the agent's last message in the turn, or `null`.
+Adapters with `canReportAgentMessage` set it for finished turns, and only from what the harness itself recorded as the agent's message; they never guess from tool output, errors or another turn.
+The normaliser keeps at most the last 65,536 characters (`MAX_AGENT_MESSAGE_CHARS`), and blank text becomes `null`.
+The job service only reads it to check a continuation's [stop phrase](continuations.md#stop-phrase) and never stores it.
 `error` is `{ code, message }`.
 `error.code` is `usage_limited` for a provider limit, `approval_required` when an unattended turn stopped because the agent asked for approval or input, `agent_error` for other agent failures, `process_failed` when a supervised process died, or `tracking_expired` when the job service stopped following a turn that stayed unresolved for 24 hours.
 Automations must treat `approval_required` as a stop condition rather than scheduling another turn.
@@ -165,14 +170,14 @@ Absence of a key from a partial or windowed read is not proof of non-delivery, s
 | --- | --- |
 | `missing_credentials` | Required credentials are not configured |
 | `authentication_rejected` | The harness rejected the credentials |
-| `connection_refused` | The harness is not running or not reachable |
+| `connection_refused` | The harness is not running or not reachable; a one-off message waits when it is certain nothing arrived |
 | `timeout` | The harness did not answer in time |
 | `http_failure` | A local HTTP API returned a failure status |
 | `unexpected_response_format` | The response was not the expected format |
 | `unsupported_response_shape` | The response parsed but did not match the expected shape |
 | `conversation_not_found` | The conversation no longer exists; a pending job is canceled |
 | `awaiting_input` | The agent is waiting for the user's answer, so a scheduled message is not sent |
-| `conversation_busy` | The conversation cannot accept a turn right now, for example because the agent is still working |
+| `conversation_busy` | The conversation cannot accept a turn right now, for example because the agent is still working; the job service waits and checks again |
 | `harness_not_installed` | The harness executable or app is missing |
 | `harness_not_configured` | A required harness setting is missing |
 | `owned_by_other_harness` | Another harness owns the conversation; `details.harness` names it |
@@ -182,6 +187,13 @@ Absence of a key from a partial or windowed read is not proof of non-delivery, s
 | `permission_required` | A macOS permission is missing; `details.permission` names it and `details.settingsUrl` opens its System Settings pane |
 | `screen_locked` | The Mac is locked or another user is on the console, so a desktop app cannot be driven; always a certain non-delivery |
 | `app_version_unsupported` | The app changed in a way this version of Agent Auto-Continue does not understand; always a certain non-delivery, with `details` `{ app, appVersion, verifiedVersion, contactPoint, hint }` |
+
+The job service adds two codes of its own to `job.error.code`; adapters never throw them.
+
+| Code | Meaning |
+| --- | --- |
+| `harness_unavailable` | A one-off message gave up after its harness reported itself `unavailable` for the whole [wait limit](#waiting-one-off-messages) |
+| `marked_not_delivered` | The user marked an unconfirmed delivery as not delivered; `details` `{ markedAt, source }` |
 
 Build `app_version_unsupported` with `appVersionUnsupported({ app, appVersion, verifiedVersion, contactPoint, hint, during })`, so every adapter words it the same way.
 Its message names the app, its installed version and what changed, for example "Claude Desktop 2.17.0 changed how its message box is labelled, so Agent Auto-Continue could not send. Nothing was sent."
@@ -213,9 +225,46 @@ Older app versions refuse newer files without changing them, rather than sending
 
 Before sending, the job service inspects the conversation, cancels on archive or newer user activity, and fails without sending when `probeAvailability()` reports a limit whose reset time is still in the future.
 A limit without a reset time blocks only when its `source` is `reported`; an inferred limit without a reset time is sent, and the turn outcome records the limit if it still applies.
-It also fails without sending, as a certain non-delivery the user is notified about, when `awaitingInput` is `true` (error code `awaiting_input`) or `busy` is `true` (error code `conversation_busy`).
-A `null` value for either never blocks.
 That failure has error code `usage_limited`, `deliveryCertainty: 'not-delivered'`, and `error.details.resetsAt`, so Schedule again remains available.
+It also fails without sending, as a certain non-delivery the user is notified about, when `awaitingInput` is `true` (error code `awaiting_input`), because only the user can answer the agent.
+When `busy` is `true`, the message waits instead, as described below.
+A `null` value for either never blocks.
+
+### Waiting one-off messages
+
+A one-off message, meaning a timed schedule of one turn, waits and retries instead of failing when the send is certainly refused for a reason that time fixes:
+
+| Cause | Next check |
+| --- | --- |
+| `busy: true`, or a certain `conversation_busy` error | After 1, 2, 5, 10, then every 15 minutes, the same backoff continuations use; shown as Waiting for the agent to finish |
+| A certain `screen_locked` error, or `probeAvailability()` reporting `unavailable` with reason `screen_locked` | Every minute, and at once when the Mac is unlocked; shown as Waiting for unlock |
+| `probeAvailability()` reporting `unavailable` for another reason | The same backoff; shown as Waiting for availability |
+| A `connection_refused` or `timeout` error with `deliveryUncertain: false`, from inspecting, preparing or submitting | The same backoff; shown as Waiting to reach the agent |
+
+The job stays `pending` with `displayStatus: 'waiting'`, the same unsent turn and its IDs, and `nextAttemptAt` for the next check.
+`waitingSince` records the first refusal, and the note says when the wait gives up.
+The first refusal raises one notification; later checks are quiet.
+The wait is capped by `MAX_ONE_OFF_WAIT_MS` in `lib/job-service.js`, six hours from the first refusal, across changes of cause and restarts.
+A message still refused at the cap fails as certainly not delivered, keeping the last error code (`conversation_busy`, `screen_locked`, `connection_refused`, `timeout` or `harness_unavailable`), with a message that says how long it waited, and `error.details` `{ waitedSince, waitLimitMs }` added to the error's own details.
+A `connection_refused` or `timeout` failure with `deliveryUncertain: true` is never waited out: the message may have arrived, so it becomes unconfirmed as before.
+After a sleep longer than the cap, the message is sent on wake if the conversation is free, like any missed schedule, and fails at once if it is still blocked.
+`awaiting_input` is never waited out, and new user activity in the conversation still cancels the message.
+Editing a waiting message starts it afresh, and Cancel works as for any pending message.
+Keep-awake tracks the wait as a `waiting` task with the cause and the next check.
+A probe that throws never blocks, as before.
+Automatic continuations keep waiting without a cap for a busy agent, a locked Mac or an unavailable harness, and pause (`send_failed`) on an unreachable harness, as described in [automatic continuations](continuations.md).
+
+### Marking a delivery as not delivered
+
+`service.markNotDelivered(id, { confirm: true, source })` lets the user assert that an unconfirmed delivery did not arrive, for example after Check delivery could not find it and the user looked in the conversation.
+`confirm: true` is required, and `source` is `desktop`, `tray` or `remote`.
+It first runs `findDelivery()` once more; if that proves the delivery, the job is confirmed instead and the call is refused with `invalid_state`.
+A check that cannot run does not block the assertion.
+The job then becomes `failed` with `deliveryCertainty: 'not-delivered'` and error code `marked_not_delivered`, and its attention badge is acknowledged.
+Each assertion is appended to `job.notDeliveredMarks` as `{ at, source, messageId, deliveryKey, attemptedAt }`, which survives later turns, so the record of what the user asserted is never lost.
+A one-off message can then be scheduled again.
+A paused continuation pauses with reason code `marked_not_delivered`, and Resume sends that turn again with new IDs and a new delivery key, as after any certain failure.
+Nothing is ever sent by marking.
 For adapters with `canDetectCompletion`, a sent job carries `turn: { state, turnId, completedAt, error, usageLimit, updatedAt }`.
 The main process calls `service.pollTurns()` every 30 seconds, and a `completion` promise records the outcome immediately.
 Finished turn outcomes are final.
@@ -231,6 +280,8 @@ These interfaces are stable for other features.
 | --- | --- |
 | `service.activeWork()` | Returns `{ jobId, harness, conversationId, phase, effectiveAt, nextCheckAt, requiresUnlockedScreen, chain }` for scheduled, waiting, sending and running work, including every active continuation; `phase` is `scheduled`, `waiting`, `sending` or `running`, and `chain` is `null` for plain schedules. Keep-awake tracks it through `lib/active-work-source.js` |
 | `service.stop(id)`, `service.stopAll()`, `service.resumeChain(id)` | Stop a schedule or continuation, stop every continuation, or resume a paused one; see [automatic continuations](continuations.md) |
+| `service.markNotDelivered(id, { confirm, source })` | Assert that an unconfirmed delivery did not arrive; see [marking a delivery](#marking-a-delivery-as-not-delivered) |
+| `present(job).canMarkNotDelivered` | True while the delivery is unconfirmed and no send or check is running for the job |
 | `onChange` passed to `JobService` | Fires after every persisted job change |
 | `adapter.probeAvailability()` | Current usage-limit state and reset time |
 | `job.error.code === 'usage_limited'` with `job.error.details.resetsAt` | A schedule that was skipped because of a usage limit |
@@ -243,12 +294,13 @@ These interfaces are stable for other features.
 
 | Channel | Payload |
 | --- | --- |
-| `harnesses:list` | Resolves `{ harnesses, defaultHarness }`, where each entry is `describe()` plus `automation: { whenAvailable, multipleTurns }` |
+| `harnesses:list` | Resolves `{ harnesses, defaultHarness }`, where each entry is `describe()` plus `automation: { whenAvailable, multipleTurns, stopPhrase }` |
 | `harnesses:availability` | Takes a harness ID and resolves `{ ok, availability }` or `{ ok: false, error }` |
 | `dashboard:threads` | Accepts `{ harness, showSettled }` |
 | `connection:check` | Accepts a harness ID |
-| `schedule:create` | Accepts `harness`, `trigger`, `turnLimit` and `continuous` alongside the existing fields |
+| `schedule:create`, `jobs:edit` | Accept `harness`, `trigger`, `turnLimit`, `continuous` and `stopPhrase` alongside the existing fields |
 | `jobs:stop`, `jobs:stop-all`, `jobs:resume` | Stop a schedule or continuation, stop every continuation, resume a paused continuation |
+| `jobs:mark-not-delivered` | Takes a job ID and `{ confirm: true }`, and resolves the presented job; the preload exposes it as `markNotDelivered(id, options)` |
 | `dashboard:schedule-thread` | Accepts a conversation ID and harness ID |
 | `settings:save` | Accepts `harnesses: { <id>: { <key>: value } }` alongside the existing fields |
 | `harnesses:open-permission-settings` | Takes no arguments and opens the Accessibility pane of System Settings |
@@ -268,8 +320,8 @@ Desktop-app adapters use `kind: 'desktop-app'` and must set `requiresUnlockedScr
 They should report `delivered` only from evidence read back from the app, and should throw `deliveryUncertain: true` whenever input may have reached the app without confirmation.
 They keep every app-specific detail in a profile under `lib/desktop/profiles`, locate the app with `createAppLocator()`, implement `checkCompatibility()` with `checkDesktopCompatibility()`, and pass the profile's `verifiedVersion` to delivery.
 They send through `deliverThroughUi()` in `lib/desktop/ui-delivery.js`, and report `{ state: 'unavailable', reason: 'screen_locked', source: 'reported' }` from `probeAvailability()` while the screen is locked.
-A one-off schedule that fires while the screen is locked fails as not sent with `screen_locked`.
-An automatic continuation waits instead: the same unsent turn is checked again every minute and when the Mac is unlocked (see [automatic continuations](continuations.md)).
+A schedule that fires while the screen is locked waits: the same unsent turn is checked again every minute and when the Mac is unlocked.
+A one-off schedule gives up after six hours (see [waiting one-off messages](#waiting-one-off-messages)); an automatic continuation waits until it is stopped (see [automatic continuations](continuations.md)).
 Keep-awake keeps the display on for these tasks, but it cannot unlock a locked screen, so desktop-app schedules need the Mac left unlocked.
 See [desktop-harnesses.md](desktop-harnesses.md) for the design and the investigation behind it.
 
@@ -293,7 +345,7 @@ Functions accept `{ home, env }` so tests can point them at fixtures.
 | `readHumanPrompts(file)` | Typed prompts `{ uuid, timestamp, text }`, excluding tool results, meta, synthetic, compact-summary and sidechain records |
 | `scanTranscript(file, promptUuid)` | Working directory, permission mode, latest human prompt time, whether `promptUuid` is present, the records after it, whether Claude Desktop wrote to the session (`desktopOwned`) and a format-change hint (`drift`) |
 | `transcriptDrift(records)` | A hint when transcript records no longer look like the known format, or an empty string |
-| `turnOutcomeAfter(file, promptUuid, { running, now })` | A turn outcome for the turn after `promptUuid` |
+| `turnOutcomeAfter(file, promptUuid, { running, now })` | A turn outcome for the turn after `promptUuid`, with `lastAgentMessage` when the turn has assistant text |
 | `listTranscripts`, `summariseTranscript`, `recentLimitSignal`, `isHumanPrompt` | Listing and usage-limit helpers |
 
 Pass `isAlive` in `options` to replace the process liveness check in tests, and `now` to fix the clock.
@@ -307,7 +359,7 @@ It requests every top-level source kind by default (`TOP_LEVEL_SOURCE_KINDS`), b
 `rateLimits()` returns `{ reached, resetsAt, usedPercent, reason }` or `null`.
 Each call uses its own short-lived connection, so `close()` has nothing to release.
 `executable` is a path or a function returning one, so the desktop adapter can use the app-bundled binary.
-The module also exports `ownerOfThread(thread)`, which returns `codex-desktop`, `t3`, `codex` or `other`, `isDesktopThread(thread)`, `limitFromRateLimits()`, `outcomeFromTurn()` and `daemonAvailable(socketPath)`.
+The module also exports `ownerOfThread(thread)`, which returns `codex-desktop`, `t3`, `codex` or `other`, `isDesktopThread(thread)`, `limitFromRateLimits()`, `outcomeFromTurn()`, `lastAgentMessage(turn)` and `daemonAvailable(socketPath)`.
 
 `lib/harnesses/codex-locks.js` exports `codexThreadWriter(threadId, { selfPids, run })`, which resolves `{ pid, owner }` with `owner` of `self`, `daemon`, `codex-desktop` or `other`.
 It resolves `null` when no process holds the lock, and `undefined` when holders cannot be determined.
@@ -335,6 +387,7 @@ Completion was derived from the T3 Code 0.0.40 server sources and has not yet be
 The thread's `latestTurn.requestedAt` is the `createdAt` of the `thread.turn.start` command that started it, so the adapter records that time as the turn key and maps `latestTurn.state` to the turn outcome.
 A `provider.turn.start.failed` activity whose `payload.requestId` is the message ID means the turn failed to start.
 A failed turn reports a usage limit when the session's `lastError` reads as one, with its reset time when the text states one.
+The last agent message of a finished turn is the thread message named by `latestTurn.assistantMessageId`, which T3 Code 0.0.40's projector sets to each assistant message the turn sends, or otherwise the newest assistant message whose `turnId` is the turn's; messages still `streaming` are skipped.
 When a later turn has replaced the scheduled one, or the turn has not started within 15 minutes, the outcome is `unknown`.
 Turns confirmed through reconciliation have no recorded command time, so their outcome is `unknown`.
 T3 Code does not expose account-level usage limits, so availability is not reported.
@@ -355,6 +408,7 @@ When the server sets `OPENCODE_SERVER_PASSWORD`, enter the password in Settings 
 | Sending | `POST /session/:id/prompt_async` with `messageID`, the session's last `agent`, `model` and `variant`, and a text part; `204` means accepted |
 | Delivery evidence | `GET /session/:id/message/:messageID`; resending the same `messageID` was verified to be idempotent |
 | Completion | `GET /session/status`, then the assistant reply whose `parentID` is the message |
+| Last agent message | The `text` parts of the newest such reply that has any, without `synthetic` or `ignored` parts |
 | Usage limits | A `retry` session status whose message reads as a usage limit, with `next` as the earliest retry time, or an assistant `APIError` with status 429 |
 
 A session that is busy or waiting on a permission or question when a schedule is due is refused rather than sent, so the message is not queued behind the current work.
@@ -383,6 +437,7 @@ A transcript whose records no longer look like the known format refuses with `ap
 Exit that Claude Code session after scheduling so the turn can resume it.
 
 Completion comes from the supervised process's final `result` event, or from the transcript after a restart.
+The last agent message is that event's `result` text, or after a restart the newest main-thread assistant text record after the prompt; tool calls, API error notices and sidechain records are skipped.
 Usage limits come from Claude Desktop's account-wide plan-usage samples when one is under 20 minutes old.
 Otherwise they come from the most recent limit message in recent transcripts, with its reset time when the message states one.
 Both signals are `inferred`, so a limit without a reset time does not block sending.
@@ -410,6 +465,7 @@ Private-server turns are interrupted cleanly when the app quits.
 | User activity and delivery evidence | `thread/turns/list`; user message items carry `clientId` |
 | Sending | `thread/resume`, then `turn/start` with `clientUserMessageId` set to the job's message ID |
 | Completion | The `turn/completed` notification, or the turn's status from `thread/turns/list` |
+| Last agent message | The turn's `agentMessage` items from `thread/turns/list`, preferring the one with `phase: 'final_answer'`; `turn/completed` carries no items, so the adapter reads the turn back once it completes |
 | Usage limits | `account/rateLimits/read`, which Codex reports with reset times |
 
 `codex exec resume` uses the same requests internally but cannot carry a client message ID, so it cannot prove delivery.
@@ -440,7 +496,7 @@ The outcome is then `interrupted` with error code `approval_required`.
 
 The adapter was built against Claude Desktop 2.16120.0 and covers its Code sessions; sending in the real app awaits the owner's check.
 It opens a session with `claude://code/continue?session=local_<uuid>`, sets the message through Accessibility and presses send; it never starts `claude` itself.
-Discovery, activity, busy state, delivery evidence, completion and usage limits come from `claude-sessions.js`.
+Discovery, activity, busy state, delivery evidence, completion, the last agent message and usage limits come from `claude-sessions.js`, which reads the last agent message from the transcript as for Claude Code.
 A Stop button near the message box is a second busy signal, independent of the live registry.
 Delivery is confirmed by a typed prompt with exactly the scheduled text in the session transcript, written after the send attempt.
 An unrecognised live status, transcript format or session store refuses with `app_version_unsupported` before anything is typed, and `checkCompatibility()` probes all three and the label catalogue.
@@ -452,5 +508,5 @@ Chat conversations are not supported; [desktop-harnesses.md](desktop-harnesses.m
 The adapter was built against the merged ChatGPT and Codex app 26.915.31945, bundle `com.openai.codex`; sending in the real app awaits the owner's check.
 It covers the Codex threads the app created, which the app keeps loaded with their writer locks held.
 It opens a thread with `codex://threads/<threadId>`, verifies it by the thread name, sets the message through Accessibility and presses send.
-Everything else uses `codex-reader.js` with the codex binary bundled in the app, including busy state, delivery evidence, completion and usage limits with reset times.
+Everything else uses `codex-reader.js` with the codex binary bundled in the app, including busy state, delivery evidence, completion, the last agent message (as for Codex) and usage limits with reset times.
 ChatGPT chats are not supported; [desktop-harnesses.md](desktop-harnesses.md) explains why and lists every detail.

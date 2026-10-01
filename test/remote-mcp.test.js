@@ -10,7 +10,7 @@ const { Client, StreamableHTTPClientTransport } = require('@modelcontextprotocol
 const { startRemote } = require('./remote-fixture');
 
 const READ_TOOLS = ['check_connection', 'get_availability', 'get_job', 'get_status', 'list_harnesses', 'list_jobs', 'list_projects', 'list_threads'];
-const CONTROL_TOOLS = [...READ_TOOLS, 'acknowledge_job', 'cancel_job', 'edit_job', 'reconcile_job', 'schedule_message'].sort();
+const CONTROL_TOOLS = [...READ_TOOLS, 'acknowledge_job', 'cancel_job', 'edit_job', 'mark_not_delivered', 'reconcile_job', 'schedule_message'].sort();
 
 async function connect(f, { era, token = f.control.token, headers = {} }) {
   const requestInit = { headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...headers } };

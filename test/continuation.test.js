@@ -53,10 +53,10 @@ const create = (h, patch = {}) => h.service.create({ harness: 'fake', threadId: 
 const job = (h, id) => h.service.get(id);
 
 test('turn limit input: default 1, whole numbers only, zero and negatives rejected, continuous removes the limit', () => {
-  assert.deepEqual(continuation.validateAutomation({}), { trigger: 'time', limit: 1 });
-  assert.deepEqual(continuation.validateAutomation({ turnLimit: 250_000 }), { trigger: 'time', limit: 250_000 });
-  assert.deepEqual(continuation.validateAutomation({ turnLimit: '12' }), { trigger: 'time', limit: 12 });
-  assert.deepEqual(continuation.validateAutomation({ trigger: 'available', continuous: true, turnLimit: 0 }), { trigger: 'available', limit: null });
+  assert.deepEqual(continuation.validateAutomation({}), { trigger: 'time', limit: 1, stopPhrase: null });
+  assert.deepEqual(continuation.validateAutomation({ turnLimit: 250_000 }), { trigger: 'time', limit: 250_000, stopPhrase: null });
+  assert.deepEqual(continuation.validateAutomation({ turnLimit: '12' }), { trigger: 'time', limit: 12, stopPhrase: null });
+  assert.deepEqual(continuation.validateAutomation({ trigger: 'available', continuous: true, turnLimit: 0 }), { trigger: 'available', limit: null, stopPhrase: null });
   assert.throws(() => continuation.validateAutomation({ turnLimit: 0 }), /at least 1/);
   assert.throws(() => continuation.validateAutomation({ turnLimit: -3 }), /at least 1/);
   assert.throws(() => continuation.validateAutomation({ turnLimit: 2.5 }), /whole number/);
@@ -660,7 +660,7 @@ test('schedule again keeps the trigger and turn settings of a finished chain', a
   const h = setup();
   const created = await create(h, { turnLimit: 2 });
   h.service.stop(created.id);
-  assert.deepEqual(h.service.scheduleAgain(created.id), { harness: 'fake', threadId: 'conv', message: 'Continue', timeZone: 'UTC', trigger: 'available', turnLimit: 2, continuous: false });
+  assert.deepEqual(h.service.scheduleAgain(created.id), { harness: 'fake', threadId: 'conv', message: 'Continue', timeZone: 'UTC', trigger: 'available', turnLimit: 2, continuous: false, stopPhrase: null });
 });
 
 test('chain records persist in store version 4 and malformed chains are refused, not dropped', async () => {

@@ -8,27 +8,26 @@ const { AuditLog } = require('../lib/remote/audit');
 const { ListenerSet, hostAllowed } = require('../lib/remote/server');
 const { RemoteControl, readState } = require('../lib/remote');
 
-test('only loopback, Tailscale and private ranges are bindable; wildcard, public and link-local never are', () => {
+test('only loopback and Tailscale ranges are bindable; local-network, wildcard, public and link-local addresses never are', () => {
   for (const [address, kind] of [
-    ['127.0.0.1', 'loopback'], ['100.64.0.1', 'tailscale'], ['100.127.255.254', 'tailscale'], ['100.101.102.103', 'tailscale'],
-    ['10.0.0.5', 'private'], ['172.16.0.1', 'private'], ['172.31.255.1', 'private'], ['192.168.1.20', 'private'],
-    ['fd7a:115c:a1e0::1234', 'tailscale'], ['fd00::1', 'private'], ['fc12:3456::1', 'private']
+    ['127.0.0.1', 'loopback'], ['100.64.0.1', 'tailscale'], ['100.127.255.254', 'tailscale'], ['100.101.102.103', 'tailscale'], ['fd7a:115c:a1e0::1234', 'tailscale']
   ]) assert.equal(classifyAddress(address), kind, address);
-  for (const address of ['0.0.0.0', '::', '::1', '8.8.8.8', '100.63.255.255', '100.128.0.1', '172.32.0.1', '169.254.1.1', 'fe80::1', 'fe80::1%en0', '2001:4860::8888', 'localhost', '', undefined, '127.0.0.2']) {
+  for (const address of ['10.0.0.5', '172.16.0.1', '172.31.255.1', '192.168.1.20', 'fd00::1', 'fc12:3456::1',
+    '0.0.0.0', '::', '::1', '8.8.8.8', '100.63.255.255', '100.128.0.1', '172.32.0.1', '169.254.1.1', 'fe80::1', 'fe80::1%en0', '2001:4860::8888', 'localhost', '', undefined, '127.0.0.2']) {
     assert.equal(classifyAddress(address), null, String(address));
   }
 });
 
-test('bindable address list comes from real interfaces, puts Tailscale first and skips loopback and public', () => {
+test('bindable addresses are Tailscale addresses on a tunnel interface only, IPv4 first', () => {
   const list = listBindableAddresses({
     lo0: [{ address: '127.0.0.1', family: 'IPv4', internal: true }, { address: '::1', family: 'IPv6', internal: true }],
-    en0: [{ address: '192.168.1.20', family: 'IPv4', internal: false }, { address: 'fe80::1', family: 'IPv6', internal: false }],
-    en1: [{ address: '81.2.69.160', family: 'IPv4', internal: false }],
+    en0: [{ address: '192.168.1.20', family: 'IPv4', internal: false }, { address: 'fe80::1', family: 'IPv6', internal: false }, { address: 'fd00::20', family: 'IPv6', internal: false }],
+    en1: [{ address: '81.2.69.160', family: 'IPv4', internal: false }, { address: '10.0.0.7', family: 'IPv4', internal: false }],
+    // A phone hotspot's carrier-grade NAT uses the same 100.64.0.0/10 range on an ordinary interface.
+    en5: [{ address: '100.72.10.4', family: 'IPv4', internal: false }],
     utun4: [{ address: 'fd7a:115c:a1e0::1', family: 'IPv6', internal: false }, { address: '100.100.1.2', family: 'IPv4', internal: false }]
   });
-  assert.deepEqual(list.map((item) => [item.address, item.kind, item.interface]), [
-    ['100.100.1.2', 'tailscale', 'utun4'], ['fd7a:115c:a1e0::1', 'tailscale', 'utun4'], ['192.168.1.20', 'private', 'en0']
-  ]);
+  assert.deepEqual(list.map((item) => [item.address, item.kind, item.interface]), [['100.100.1.2', 'tailscale', 'utun4'], ['fd7a:115c:a1e0::1', 'tailscale', 'utun4']]);
   assert.match(list[0].label, /^Tailscale · 100\.100\.1\.2 \(utun4\)$/);
 });
 
@@ -135,8 +134,8 @@ test('remote settings default to off and loopback only, and reject unsafe bind c
   assert.equal(state.bindAddress, null);
   assert.equal(state.running, false);
   assert.deepEqual(state.interfaces.map((item) => item.address), ['100.100.1.2']);
-  for (const bindAddress of ['0.0.0.0', '::', '203.0.113.9', '127.0.0.1', '100.100.9.9', 'localhost']) {
-    await assert.rejects(remote.configure({ bindAddress }), /Tailscale or private network address/, bindAddress);
+  for (const bindAddress of ['0.0.0.0', '::', '203.0.113.9', '127.0.0.1', '100.100.9.9', 'localhost', '192.168.1.20', '10.0.0.5', '172.16.4.4', 'fd00::1']) {
+    await assert.rejects(remote.configure({ bindAddress }), /Choose a Tailscale address currently on this Mac/, bindAddress);
   }
   for (const port of [0, 80, 1023, 65536, 3799.5, 'abc']) await assert.rejects(remote.configure({ port }), /port must be/);
   for (const allowedOrigins of [['*'], ['https://example.com/path'], ['file://x'], 'https://example.com', Array(11).fill('https://a.example')]) {
@@ -161,4 +160,48 @@ test('an unreadable remote settings file disables remote control without overwri
   }
   assert.equal(writes, 0);
   assert.throws(() => readState(null), /invalid/);
+});
+
+test('a saved local-network listener from an earlier version is dropped at launch: loopback stays, with a notice and an audit entry', async () => {
+  const interfaces = { en0: [{ address: '192.168.1.20', family: 'IPv4', internal: false }], utun4: [{ address: '100.100.1.2', family: 'IPv4', internal: false }] };
+  const options = (load, save, notify = () => {}) => ({ load, save, notify, getService: () => null, ensureStorage() {}, getStorageError: () => null, now: () => Date.parse('2026-10-01T08:00:00Z'),
+    harnesses: { defaultHarness: 't3', describe: () => [], has: () => false, get() { throw new Error('none'); } }, appInfo: { name: 'test', version: '0' }, networkInterfaces: () => interfaces });
+  for (const lan of ['192.168.1.20', '10.0.0.5', '172.20.1.1', 'fd00::1']) {
+    let saved;
+    const notified = [];
+    const earlier = { version: 1, enabled: true, port: 3799, bindAddress: lan, allowedOrigins: [], tokens: [], audit: [] };
+    const remote = new RemoteControl(options(() => earlier, (state) => { saved = state; }, (...args) => notified.push(args)));
+    const state = remote.getState();
+    assert.equal(state.enabled, true, 'remote control stays on');
+    assert.equal(state.bindAddress, null, lan);
+    assert.equal(saved.bindAddress, null, 'the migration is saved');
+    assert.deepEqual([state.notices[0].code, state.notices[0].address], ['lan_bind_removed', lan]);
+    assert.match(state.notices[0].message, /no longer listens on .* still listens on 127\.0\.0\.1/);
+    assert.deepEqual(saved.notices, [...state.notices].reverse());
+    assert.deepEqual([state.audit[0].action, state.audit[0].target, state.audit[0].transport], ['lan_bind_removed', lan, 'desktop']);
+    assert.equal(notified.length, 1);
+    assert.ok(!state.interfaces.some((item) => item.address === lan), 'the old address is not offered again');
+    // A second launch from the saved file changes nothing more.
+    const again = new RemoteControl(options(() => saved, () => { throw new Error('must not save'); }, () => { throw new Error('must not notify'); }));
+    assert.equal(again.getState().bindAddress, null);
+    assert.equal(again.getState().notices.length, 1);
+  }
+  // A Tailscale address is kept as it is, even while Tailscale is disconnected.
+  let writes = 0;
+  const kept = new RemoteControl(options(() => ({ version: 1, enabled: true, port: 3799, bindAddress: '100.90.1.1', allowedOrigins: [], tokens: [] }), () => { writes++; }));
+  assert.equal(kept.getState().bindAddress, '100.90.1.1');
+  assert.equal(writes, 0);
+  assert.deepEqual(kept.getState().notices, []);
+});
+
+test('a local-network migration that cannot be saved still never listens on the old address', async () => {
+  const started = [];
+  const remote = new RemoteControl({ load: () => ({ version: 1, enabled: true, port: 45123, bindAddress: '192.168.1.20', allowedOrigins: [], tokens: [] }),
+    save: () => { throw Object.assign(new Error('Disk full'), { code: 'ENOSPC' }); }, getService: () => null, ensureStorage() {}, getStorageError: () => null,
+    harnesses: { defaultHarness: 't3', describe: () => [], has: () => false, get() { throw new Error('none'); } }, appInfo: { name: 'test', version: '0' }, networkInterfaces: () => ({}),
+    createServer: () => { const server = require('node:http').createServer(); const listen = server.listen.bind(server); server.listen = (options, ...rest) => { started.push(options.host); return listen({ ...options, port: 0 }, ...rest); }; return server; } });
+  assert.equal(remote.getState().bindAddress, null);
+  await remote.start();
+  await remote.stop();
+  assert.deepEqual(started, ['127.0.0.1']);
 });

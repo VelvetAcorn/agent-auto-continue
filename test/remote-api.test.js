@@ -254,7 +254,7 @@ test('transport hardening: host, origin/CORS, size, media type, JSON, routing', 
   assert.equal(allowed.headers.get('x-content-type-options'), 'nosniff');
 });
 
-test('an unavailable private address is reported and retried without affecting loopback', async (t) => {
+test('an unavailable Tailscale address is reported and retried without affecting loopback', async (t) => {
   // 100.64.0.1 is a valid Tailscale-range address that is not on this machine, so binding fails like a disconnected tailnet.
   const f = await startRemote({ networkInterfaces: () => ({ utun9: [{ address: '100.64.0.1', family: 'IPv4', internal: false }] }) });
   t.after(f.close);
