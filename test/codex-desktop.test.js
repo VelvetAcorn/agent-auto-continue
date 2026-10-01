@@ -156,6 +156,7 @@ test('the title must be unique across every thread the app could show, not only 
   const name = 'Update live Ko-fi account';
   for (const twin of [
     { id: '01a0f499-0000-7000-8000-000000000003', name, originator: 'codex_cli_rs', source: 'cli', cwd: '/work/app', updatedAt: 1790806000 },
+    { id: '01a0f499-0000-7000-8000-000000000006', name, originator: 'codex_exec', source: 'exec', cwd: '/work/app', updatedAt: 1790806000 },
     { id: '01a0f499-0000-7000-8000-000000000004', name, originator: 'Codex Desktop', source: 'vscode', cwd: '/work/app', updatedAt: 1790806000, archived: true }
   ]) {
     reader.state.threads.push(twin);
@@ -178,3 +179,34 @@ test('a twin older than the most recent 100 threads is still found, and a listin
   await assert.rejects(adapter.prepareTurn(turn(), state), (error) => error.code === 'conversation_busy' && /could not all be checked/.test(error.message));
 });
 
+test('reads open read-only app-server connections that leave approval prompts to the app', async (t) => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-desktop-readonly-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const executable = path.join(root, 'codex');
+  const log = path.join(root, 'answers.jsonl');
+  // An app-server that asks for approval on the very thread being read, and logs any answer.
+  fs.writeFileSync(executable, `#!/usr/bin/env node
+const fs = require('node:fs');
+const send = (value) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...value }) + '\\n');
+const thread = { id: '${THREAD}', name: 'Update live Ko-fi account', originator: 'Codex Desktop', source: 'vscode', cwd: '/work/app' };
+require('node:readline').createInterface({ input: process.stdin }).on('line', (line) => {
+  const message = JSON.parse(line);
+  if (message.method === 'initialize') return send({ id: message.id, result: {} });
+  if (message.method === 'initialized') return send({ id: 9001, method: 'item/commandExecution/requestApproval', params: { threadId: thread.id, turnId: 't', itemId: 'i', startedAtMs: 0, command: 'git push' } });
+  if (message.id === 9001 && message.method === undefined) return fs.appendFileSync(process.env.FAKE_LOG, line + '\\n');
+  if (message.method === 'thread/read') return send({ id: message.id, result: { thread } });
+  if (message.method === 'thread/turns/list') return send({ id: message.id, result: { data: [], nextCursor: null } });
+  if (message.method === 'account/rateLimits/read') return send({ id: message.id, result: { rateLimits: null } });
+});
+`);
+  fs.chmodSync(executable, 0o755);
+  const adapter = createCodexDesktopHarness({ env: { PATH: path.dirname(process.execPath), FAKE_LOG: log }, home: root, platform: 'darwin', isLocked: async () => false, codexPath: () => executable });
+  const state = await adapter.inspectConversation({ conversationId: THREAD });
+  assert.equal(state.busy, false);
+  assert.equal((await adapter.probeAvailability()).state, 'unknown');
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal(fs.existsSync(log), false, 'The approval prompt was left for the ChatGPT app');
+});
