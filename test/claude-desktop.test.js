@@ -266,6 +266,68 @@ test('end to end: user activity in a changed transcript format fails the job ins
   assert.equal(fake.state.sent.length, 0);
 });
 
+const storeDrift = (error) => error.code === 'app_version_unsupported' && error.details.contactPoint === 'session_store' && error.deliveryUncertain === false;
+const storeDir = (fixture) => path.join(fixture.home, 'Library', 'Application Support', 'Claude', 'claude-code-sessions');
+// Rewrites every session file through `change`, as an update that renamed fields would.
+function rewriteStore(fixture, change) {
+  const index = path.join(storeDir(fixture), 'account', 'org');
+  for (const name of fs.readdirSync(index)) fs.writeFileSync(path.join(index, name), JSON.stringify(change(JSON.parse(fs.readFileSync(path.join(index, name), 'utf8')))));
+}
+
+test('session files that no longer parse into sessions are a store change, not an empty list', async (t) => {
+  const { adapter, fixture } = setup(t);
+  rewriteStore(fixture, ({ cliSessionId, ...rest }) => ({ ...rest, cliSessionID: cliSessionId }));
+  await assert.rejects(adapter.listConversations({}), (error) => storeDrift(error)
+    && error.message === 'Claude Desktop 1.0 changed how it stores its sessions, so Agent Auto-Continue cannot work with it until it supports this version.'
+    && /3 of 3 session files/.test(error.details.hint));
+  await assert.rejects(adapter.inspectConversation({ conversationId: SESSION }), storeDrift, 'A scheduled session is not reported as gone');
+});
+
+test('a clear majority of unreadable session files is a store change, but one odd or brand-new file is not', async (t) => {
+  const { adapter, fixture } = setup(t);
+  const index = path.join(storeDir(fixture), 'account', 'org');
+  // A session created moments ago may not have its Claude Code session yet.
+  fs.writeFileSync(path.join(index, 'local_22222222-2222-4333-8444-555555555555.json'), JSON.stringify({ sessionId: 'local_22222222-2222-4333-8444-555555555555', cwd: fixture.work, title: 'New' }));
+  fs.writeFileSync(path.join(index, 'local_33333333-2222-4333-8444-555555555555.json'), '[]');
+  assert.equal((await adapter.listConversations({})).length, 2, 'One odd file among readable ones is skipped');
+  for (const n of [4, 5, 6, 7]) fs.writeFileSync(path.join(index, `local_${n}${n}${n}${n}${n}${n}${n}${n}-2222-4333-8444-555555555555.json`), JSON.stringify({ id: 'x' }));
+  await assert.rejects(adapter.listConversations({}), storeDrift);
+});
+
+test('session files that moved to another folder depth are a store change', async (t) => {
+  const { adapter, fixture } = setup(t);
+  const deeper = path.join(storeDir(fixture), 'account', 'org', 'workspace');
+  fs.mkdirSync(deeper);
+  const index = path.join(storeDir(fixture), 'account', 'org');
+  for (const name of fs.readdirSync(index).filter((item) => item.endsWith('.json'))) fs.renameSync(path.join(index, name), path.join(deeper, name));
+  await assert.rejects(adapter.listConversations({}), (error) => storeDrift(error) && /unexpected folder depth/.test(error.details.hint));
+});
+
+test('no session store means no Code sessions when listing, but a scheduled session is not silently canceled', async (t) => {
+  const { adapter, fake, fixture, now, advance } = setup(t);
+  const { service } = jobService(adapter, now);
+  const job = await schedule(service, now);
+  fs.rmSync(storeDir(fixture), { recursive: true });
+  assert.deepEqual(await adapter.listConversations({}), []);
+  advance(120_000);
+  await service.run(job.id);
+  const failed = service.present(service.get(job.id));
+  assert.deepEqual([failed.status, failed.error?.code, failed.error?.details.contactPoint], ['failed', 'app_version_unsupported', 'session_store']);
+  assert.equal(fake.state.sent.length, 0);
+});
+
+test('end to end: a session store change fails the job instead of canceling it as gone', async (t) => {
+  const { adapter, fake, fixture, now, advance } = setup(t);
+  const { service } = jobService(adapter, now);
+  const job = await schedule(service, now);
+  rewriteStore(fixture, ({ sessionId, ...rest }) => ({ ...rest, id: sessionId }));
+  advance(120_000);
+  await service.run(job.id);
+  const failed = service.present(service.get(job.id));
+  assert.deepEqual([failed.status, failed.error?.code, failed.error?.details.contactPoint], ['failed', 'app_version_unsupported', 'session_store']);
+  assert.equal(fake.state.sent.length, 0);
+});
+
 test('off macOS the adapter lists nothing and refuses to send', async () => {
   const adapter = createClaudeDesktopHarness({ platform: 'linux', home: os.tmpdir() });
   assert.deepEqual(await adapter.listConversations({}), []);

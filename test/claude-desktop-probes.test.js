@@ -145,3 +145,20 @@ test('a recent transcript in an unfamiliar format is a problem before any schedu
   assert.deepEqual(s.about(result, 'transcript').problems, ['The newest message is recorded under the unknown record type "prompt". Seen in 1 of 1 recent session.']);
   assert.equal(result.problems[0].message, 'Claude Desktop 1.0 changed how it records conversations. Scheduled messages for it may fail until Agent Auto-Continue supports this version.');
 });
+
+test('the session store passes when its files parse into sessions, and a missing store is not a problem', async (t) => {
+  const s = setup(t);
+  assert.deepEqual(s.about(await s.check('quick'), 'session_store'), { checked: true, problems: [], unchecked: [] });
+  fs.rmSync(path.dirname(path.dirname(s.index)), { recursive: true });
+  assert.deepEqual(s.about(await s.check('quick'), 'session_store'), { checked: false, problems: [], unchecked: ['not_found'] });
+  fs.mkdirSync(s.index, { recursive: true });
+  assert.deepEqual(s.about(await s.check('quick'), 'session_store').unchecked, ['no_sessions']);
+});
+
+test('session files with renamed fields are a session store problem', async (t) => {
+  const s = setup(t);
+  fs.writeFileSync(path.join(s.index, `${SESSION}.json`), JSON.stringify({ id: SESSION, cliSessionId: CLI, workingDirectory: s.home }));
+  const result = await s.check('quick');
+  assert.deepEqual(s.about(result, 'session_store').problems, ['1 of 1 session files lack the expected fields (most often no usable sessionId, in 1).']);
+  assert.equal(result.problems[0].message, 'Claude Desktop 1.0 changed how it stores its sessions. Scheduled messages for it may fail until Agent Auto-Continue supports this version.');
+});

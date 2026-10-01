@@ -43,7 +43,7 @@ test('a passing check reads the shown session and touches nothing', async (t) =>
   const result = await adapter.checkCompatibility();
   assert.equal(result.ok, true);
   assert.deepEqual([result.appVersion, result.verifiedVersion, result.depth], ['2.17.0', '2.16120.0', 'full']);
-  assert.deepEqual([...result.checked].sort(), ['app_path', 'composer_label', 'content_match', 'deep_link', 'label_catalogue', 'send_label']);
+  assert.deepEqual([...result.checked].sort(), ['app_path', 'composer_label', 'content_match', 'deep_link', 'label_catalogue', 'send_label', 'session_store']);
   assert.deepEqual(result.problems, []);
   assert.deepEqual(writes(fake), [], 'No navigation, typing, pressing or focus change');
   assert.deepEqual(ops(fake), ['environment', 'contentAreas', 'inspect']);

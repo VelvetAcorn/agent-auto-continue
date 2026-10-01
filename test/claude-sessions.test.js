@@ -53,6 +53,14 @@ test('Claude Desktop sessions are read defensively and own their CLI session IDs
   assert.deepEqual(await sessions.readDesktopCodeSessions({ home: '/nonexistent', env: {} }), []);
 });
 
+test('the session store reports files that no longer parse, and calls a missing store empty', async () => {
+  const { options } = fixture();
+  const store = await sessions.readDesktopCodeSessionStore(options);
+  assert.deepEqual([store.found, store.files, store.sessions.length, store.unrecognised], [true, 3, 1, 2]);
+  assert.match(store.drift, /^2 of 3 session files lack the expected fields \(most often .+, in 1\)\.$/, 'A clear majority of unreadable files is a change');
+  assert.deepEqual(await sessions.readDesktopCodeSessionStore({ home: '/nonexistent', env: {} }), { found: false, files: 0, sessions: [], unrecognised: 0, drift: '' });
+});
+
 test('the live registry returns only live processes with normalised status', async () => {
   const { options } = fixture();
   const desktop = await sessions.readLiveSession(DESKTOP_CLI.toUpperCase(), options);

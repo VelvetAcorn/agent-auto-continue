@@ -217,6 +217,20 @@ test('availability is inferred from recent usage-limit messages', async () => {
   assert.equal((await probe([ok('2026-10-01T13:00:00Z')])).state, 'unknown');
 });
 
+test('sessions Claude Desktop wrote are recognised from the transcript too, so a changed Desktop store cannot expose them', async () => {
+  const s = setup();
+  // Claude Desktop's store is unreadable after an update, but its transcript records name Claude Desktop as the entrypoint.
+  const org = path.join(s.home, 'Library', 'Application Support', 'Claude', 'claude-code-sessions', 'acct', 'org');
+  fs.mkdirSync(org, { recursive: true });
+  fs.writeFileSync(path.join(org, 'local_aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee.json'), JSON.stringify({ id: 'local_aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', cli: OTHER }));
+  fs.appendFileSync(path.join(s.store, `${OTHER}.jsonl`), JSON.stringify({ type: 'user', uuid: 'o2', entrypoint: 'claude-desktop', cwd: s.project, timestamp: s.at(21), message: { role: 'user', content: 'From the app' } }) + '\n');
+  const adapter = s.make();
+  assert.deepEqual((await adapter.listConversations()).map((item) => item.id), [SESSION]);
+  const state = await adapter.inspectConversation({ conversationId: OTHER, deliveryKey: null });
+  assert.throws(() => adapter.prepareTurn(turn({ conversationId: OTHER }), state), (error) => error.code === 'owned_by_other_harness');
+  assert.equal(s.log().length, 0, 'Nothing was started');
+});
+
 test('sessions owned by Claude Desktop are hidden and refused with a pointer to that harness', async () => {
   const s = setup();
   const org = path.join(s.home, 'Library', 'Application Support', 'Claude', 'claude-code-sessions', 'acct', 'org');
