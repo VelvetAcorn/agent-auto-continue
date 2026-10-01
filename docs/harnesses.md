@@ -142,6 +142,9 @@ Absence of a key from a partial or windowed read is not proof of non-delivery, s
 | `permission_required` | A macOS permission is missing; `details.permission` names it and `details.settingsUrl` opens its System Settings pane |
 | `screen_locked` | The Mac is locked or another user is on the console, so a desktop app cannot be driven; always a certain non-delivery |
 
+Remote control keeps the codes that describe the conversation or the Mac in its errors: `conversation_busy`, `awaiting_input` and `owned_by_other_harness` answer `409`, and `screen_locked`, `permission_required` and `usage_limited` answer `503`.
+`conversation_not_found` answers `404 thread_not_found`, `unknown_harness` answers `400`, and every other code answers `502 harness_unavailable`; see [remote control](remote-control.md#errors).
+
 ### Settings
 
 A setting descriptor is `{ key, type, label, help?, env?, default? }` with `type` of `port`, `secret` or `text`.
@@ -177,7 +180,7 @@ These interfaces are stable for other features.
 
 | Interface | Use |
 | --- | --- |
-| `service.activeWork()` | Returns `{ jobId, harness, conversationId, phase, effectiveAt, nextCheckAt, requiresUnlockedScreen, chain }` for scheduled, waiting, sending and running work, including every active continuation; `phase` is `scheduled`, `waiting`, `sending` or `running`, and `chain` is `null` for plain schedules |
+| `service.activeWork()` | Returns `{ jobId, harness, conversationId, phase, effectiveAt, nextCheckAt, requiresUnlockedScreen, chain }` for scheduled, waiting, sending and running work, including every active continuation; `phase` is `scheduled`, `waiting`, `sending` or `running`, and `chain` is `null` for plain schedules. Keep-awake tracks it through `lib/active-work-source.js` |
 | `service.stop(id)`, `service.stopAll()`, `service.resumeChain(id)` | Stop a schedule or continuation, stop every continuation, or resume a paused one; see [automatic continuations](continuations.md) |
 | `onChange` passed to `JobService` | Fires after every persisted job change |
 | `adapter.probeAvailability()` | Current usage-limit state and reset time |
@@ -209,8 +212,9 @@ These interfaces are stable for other features.
 Desktop-app adapters use `kind: 'desktop-app'` and must set `requiresUnlockedScreen` and `requiresAccessibilityPermission` truthfully.
 They should report `delivered` only from evidence read back from the app, and should throw `deliveryUncertain: true` whenever input may have reached the app without confirmation.
 They send through `deliverThroughUi()` in `lib/desktop/ui-delivery.js`, and report `{ state: 'unavailable', reason: 'screen_locked', source: 'reported' }` from `probeAvailability()` while the screen is locked.
-The job service does not act on that state yet, so a schedule that fires while the screen is locked fails as not sent with `screen_locked`.
-Keep-awake cannot help with a locked screen, so desktop-app schedules need the Mac left unlocked.
+A one-off schedule that fires while the screen is locked fails as not sent with `screen_locked`.
+An automatic continuation waits instead: the same unsent turn is checked again every minute and when the Mac is unlocked (see [automatic continuations](continuations.md)).
+Keep-awake keeps the display on for these tasks, but it cannot unlock a locked screen, so desktop-app schedules need the Mac left unlocked.
 See [desktop-harnesses.md](desktop-harnesses.md) for the design and the investigation behind it.
 
 ## Shared helpers

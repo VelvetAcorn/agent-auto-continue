@@ -246,3 +246,17 @@ test('confirmed pre-dispatch failures remain eligible for a draft after restart'
   assert.equal(restored.service.scheduleAgain('job').message, 'Continue');
   assert.equal(h.calls + restored.calls, 0);
 });
+
+test('a delivery confirmed long after its send is not tracked as a running turn, so it never keeps the Mac awake', async () => {
+  const now = Date.parse('2026-10-01T09:00:00.000Z');
+  const job = { id: 'old', harness: 't3', commandId: 'c', messageId: 'm', threadId: 'thread', message: 'Continue', scheduleAt: '2026-08-01T10:00:00.000Z', createdAt: '2026-08-01T09:00:00.000Z', timeZone: 'UTC', bufferSeconds: 5,
+    status: 'sent', deliveryCertainty: 'delivered', dispatchAttemptedAt: '2026-08-01T10:00:05.000Z', confirmedAt: '2026-10-01T08:59:00.000Z', lastReconciledAt: '2026-10-01T08:59:00.000Z',
+    turn: { state: 'running', turnId: null, completedAt: null, error: null, usageLimit: null, updatedAt: '2026-10-01T08:59:00.000Z' } };
+  const recent = { ...job, id: 'recent', dispatchAttemptedAt: '2026-10-01T08:30:00.000Z', dispatchedAt: '2026-10-01T08:30:01.000Z' };
+  const service = new JobService({ jobs: { version: 4, jobs: [job, recent] }, api: { fetchSnapshot: async () => ({ threads: [], projects: [] }), fetchThread: async () => ({ id: 'thread', messages: [] }) }, now: () => now });
+  assert.deepEqual(service.activeWork().map((work) => [work.jobId, work.phase]), [['recent', 'running']]);
+  await service.pollTurns();
+  assert.equal(service.get('old').turn.state, 'unknown');
+  assert.equal(service.get('old').turn.error.code, 'tracking_expired');
+  assert.notEqual(service.get('recent').turn.error?.code, 'tracking_expired', 'a recent send is still followed through the harness');
+});

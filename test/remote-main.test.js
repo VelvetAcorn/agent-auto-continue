@@ -9,8 +9,9 @@ const { freePort } = require('./remote-fixture');
 const json = (value) => new Response(JSON.stringify(value), { headers: { 'content-type': 'application/json' } });
 const thread = { id: 'thread', title: 'Harnessed thread', projectId: 'p', updatedAt: '2026-09-30T10:00:00.000Z', settledOverride: null, messages: [] };
 
+// Only T3 Code is registered, so status checks never start real harness processes (claude, codex, osascript).
 async function enabledApp(t, options) {
-  const app = appHarness([], options);
+  const app = appHarness([], { extraHarnesses: () => [], ...options });
   app.setResponse(async (url) => url.includes('/threads/') ? json({ thread }) : json({ threads: [thread], projects: [{ id: 'p', title: 'Project' }] }));
   t.after(async () => { await app.emit('before-quit'); });
   const port = await freePort();
@@ -70,7 +71,7 @@ test('remote changes land in the desktop queue, notify open windows and survive 
   assert.ok(state.audit.some((entry) => entry.action === 'createJob' && entry.tokenLabel === 'Phone'));
   await app.emit('before-quit');
 
-  const restarted = appHarness(JSON.parse(app.files.get('/fixture/jobs.json')).jobs, { extraFiles: { '/fixture/remote-control.json': saved } });
+  const restarted = appHarness(JSON.parse(app.files.get('/fixture/jobs.json')).jobs, { extraHarnesses: () => [], extraFiles: { '/fixture/remote-control.json': saved } });
   restarted.setResponse(async (url) => url.includes('/threads/') ? json({ thread }) : json({ threads: [thread], projects: [] }));
   t.after(async () => { await restarted.emit('before-quit'); });
   const again = restarted.invoke('remote:get');

@@ -123,6 +123,10 @@ It never sends, takes effect at once, and works in every state:
 
 For a plain schedule, `stop()` is the same as `cancel()`.
 `service.stopAll()` stops every active or paused chain, leaves plain schedules alone, and resolves `{ stopped: [ids] }`.
+
+Remote control calls the same methods: `POST /v1/runs/{id}/stop`, `POST /v1/runs/stop-all` and `POST /v1/runs/{id}/resume`, or the MCP tools `stop_run`, `stop_all_runs` and `resume_run`.
+`POST /v1/jobs` and `schedule_message` accept `trigger`, `turnLimit` and `continuous`, with the same validation and capability checks as the composer.
+Refusals such as stopping an ended chain or resuming while delivery is unconfirmed carry error code `invalid_state` and answer `409`; see [remote control](remote-control.md#continuations).
 The Upcoming view shows Stop all whenever a continuation is running, each continuation's detail view has Stop continuing, and the tray offers Stop continuing per schedule and Stop all continuations.
 The tray lists running and paused continuations alike, with their progress and state, and offers Resume continuation on a paused one whenever Resume is allowed.
 
@@ -160,7 +164,7 @@ An outcome recorded for an earlier turn is ignored, so a late completion can nev
 | Interface | Use |
 | --- | --- |
 | `service.activeWork()` | Items gain `nextCheckAt` and `chain: { state, limit, unlimited, currentTurn, sentTurns, remainingTurns }`; `phase` gains `waiting` |
-| `service.stop(id)`, `service.stopAll()`, `service.resumeChain(id)` | Stop and resume, for the UI, tray and remote control |
+| `service.stop(id)`, `service.stopAll()`, `service.resumeChain(id)` | Stop and resume, for the UI, tray and remote control (`lib/remote/continuations.js`); refusals carry `code: 'invalid_state'` |
 | `service.retryAfterUnlock()` | Called on `unlock-screen` so turns waiting for the unlock are checked at once |
 | `present(job).automation` | Trigger, limit, state, reason, `progressLabel`, `sentTurns`, `countedTurns`, `remainingTurns` and the full `turns` list |
 | `present(job).deliveryLabel` | For a waiting turn, the latest cause: Waiting for unlock, Waiting for the agent to finish, or Waiting for availability |
@@ -168,6 +172,7 @@ An outcome recorded for an earlier turn is ignored, so a late completion can nev
 | `present(job).canStop`, `canResume`, `needsAttention` | Which controls to offer |
 
 `activeWork()` includes every active chain, including the moment between one turn finishing and the next being sent, and excludes paused chains, which wait for the user.
+Keep-awake tracks it through `lib/active-work-source.js`: a `waiting` turn keeps the Mac awake while it waits, when its next check falls within the keep-awake time limit, and its task names the cause, such as the usage limit or the locked screen, and the turn progress.
 A send already in flight stays in `activeWork()` as `sending` even if its chain is stopped meanwhile.
 Upcoming lists active chains, and History lists paused, stopped and finished ones.
 A paused chain counts toward the History attention badge until it is resumed, stopped or acknowledged.

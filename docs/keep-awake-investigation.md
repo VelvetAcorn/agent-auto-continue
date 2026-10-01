@@ -283,9 +283,23 @@ The source polls the snapshot once a minute, and only while a delivery or agent 
 An optional setting also tracks every running T3 Code agent turn, even without a schedule.
 Those tasks are supplementary and are dropped only when a job retained after deferral filtering already covers the same thread.
 
-[`lib/active-work-source.js`](../lib/active-work-source.js) adapts the harness-neutral `service.activeWork()` view from #2.
-Both sources use `job:<id>` task IDs, so the registry reports each job once when both are registered.
+[`lib/active-work-source.js`](../lib/active-work-source.js) adapts the harness-neutral `service.activeWork()` view from #2 and the continuations of #3.
+`main.js` registers it first and the T3 Code source second.
+
+| `activeWork()` phase | Task state | Ends when |
+| --- | --- | --- |
+| `scheduled` | `waiting` until its effective send time | It dispatches, is edited, canceled or stopped |
+| `waiting` (a continuation or auto-start held back by a usage limit, a busy agent or a locked screen) | `waiting` until its next check; the detail names the cause and the turn progress | It sends, or the chain is paused or stopped |
+| `sending` | `running` | The dispatch settles |
+| `running` | `running` while the job service tracks the agent turn, for any harness that reports completion | The harness reports the turn finished, or after the 24-hour tracking limit |
+
+`activeWork()` covers every harness, every active chain including the gap between turns, and excludes paused chains, which wait for the user.
+Both sources use `job:<id>` task IDs, and the registry keeps the first report of each ID, so a T3 Code job is reported once, by the chain-aware source.
+The T3 Code source still adds what the job service cannot follow: deliveries whose outcome is unconfirmed, legacy records without turn tracking, and the optional supplementary agent turns.
+It skips pending turns of paused chains and sent jobs whose turn the job service already saw finish, so neither source keeps the Mac awake for them.
 `requiresUnlockedScreen` from a desktop-app harness makes the controller hold the display assertion and warn the user.
+
+Remote control reports the controller's status read-only in `GET /v1/status` and the MCP `get_status` tool, through `remoteStatus()` in `lib/keep-awake.js`, without the settings or source errors.
 
 ### State machine
 

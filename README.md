@@ -96,6 +96,7 @@ The environment token takes precedence for that launch.
 Settings includes an optional **Remote control** section, off by default.
 When enabled, the app serves a REST API and an MCP server on `127.0.0.1`, and optionally on a Tailscale or other private address you choose; it never listens on public or all-interface addresses.
 Each phone or agent gets its own revocable bearer token, shown once with a QR code, and every remote change appears under Remote activity.
+Remote clients can schedule for any harness, start, stop and resume automatic continuations, and read the keep-awake status.
 See [remote control](docs/remote-control.md) for the security model, Tailscale setup, MCP client configuration and the API reference.
 
 ## Build a macOS app
@@ -115,22 +116,24 @@ After editing `assets/icon.svg`, `assets/trayTemplate.svg` or `assets/trayAwakeT
 
 Keep-awake is off by default; turn it on in **Settings → Keep awake**.
 While it is on, the app holds a macOS power assertion for as long as tracked work is waiting or running.
-Tracked work includes pending schedules, deliveries in flight, and the T3 Code agent turn a delivery started.
+Tracked work covers every harness: pending schedules, automatic continuations while they wait for availability or for the next turn, deliveries in flight, and the agent turn a delivery started.
+Paused continuations wait for you, so they do not keep the Mac awake.
 You can also track every running T3 Code agent turn.
 By default the display may sleep; choose **Keep the display on too** to keep it lit.
+Work for Claude Desktop or ChatGPT Codex threads drives the app's interface, so the display stays on while it is tracked.
 The assertion is released when the work finishes, when you choose **Let Mac sleep**, at the battery floor, at the time limit, and when the app quits or crashes.
 A notice above every view and the menu-bar icon show when the Mac is being kept awake, why, and until when.
 
 The app uses Electron's `powerSaveBlocker`, never `sudo`, and never changes system settings.
 macOS still sleeps when a laptop lid closes, unless the Mac is in closed-display mode with power, an external display and an external keyboard or mouse.
 It also sleeps when you choose Sleep or the battery is critically low; missed schedules catch up after waking.
-Locking the screen or letting the display sleep does not stop scheduled work.
+Locking the screen or letting the display sleep does not stop scheduled work, except for Claude Desktop and ChatGPT Codex threads, which need the Mac unlocked to send.
 
 | Configuration | Scheduled work keeps running? |
 | --- | --- |
 | Desktop Mac | Yes |
 | Laptop, lid open, on power or battery | Yes, down to the battery floor you set |
-| Laptop, lid open, screen locked or display asleep | Yes |
+| Laptop, lid open, screen locked or display asleep | Yes, except desktop-app harnesses, which wait for the unlock (continuations) or fail as not sent (one-off schedules) |
 | Laptop, lid closed, with power, an external display and an external keyboard or mouse | Yes |
 | Laptop, lid closed, without an external display, or on battery only | No; the Mac sleeps and catches up after waking |
 

@@ -5,18 +5,19 @@ const { execFile } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
-const { setInterval, setTimeout } = require('node:timers');
+const { clearTimeout, setInterval, setTimeout } = require('node:timers');
 const schedule = require('node-schedule');
 const { normaliseConfig, validateSettingsInput } = require('./lib/model');
 const { createApiClient, toErrorInfo } = require('./lib/api-client');
 const { RemoteControl } = require('./lib/remote');
 const { registerRemoteIpc } = require('./lib/remote/ipc');
-const { createT3HarnessSource } = require('./lib/remote/harnesses');
+const { createContinuationRuns } = require('./lib/remote/continuations');
 const { JobService } = require('./lib/job-service');
 const { automationSupport } = require('./lib/continuation');
 const { DEFAULT_HARNESS, applyHarnessSettingsInput, createHarnesses, normaliseHarnessSettings, publicHarnessSettings, resolveHarnessSettings } = require('./lib/harnesses');
 const { ACCESSIBILITY_SETTINGS_URL } = require('./lib/desktop/mac-automation');
-const { KeepAwakeController, WorkSourceRegistry, parseBatteryStatus, validateKeepAwakeInput } = require('./lib/keep-awake');
+const { KeepAwakeController, WorkSourceRegistry, parseBatteryStatus, remoteStatus, validateKeepAwakeInput } = require('./lib/keep-awake');
+const { createActiveWorkSource } = require('./lib/active-work-source');
 const { createT3WorkSource } = require('./lib/t3-work-source');
 
 const APP_NAME = 'T3 Code Auto-Continue';
@@ -31,6 +32,7 @@ let dashboardReady = false;
 let pendingNavigation;
 let menuRevision = 0;
 let workSources;
+let activeWorkSource;
 let t3WorkSource;
 let keepAwake;
 let trayKeepAwakeKey = '';
@@ -68,6 +70,7 @@ function loadState() {
     scheduleTimer: (when, callback) => schedule.scheduleJob(when, callback),
     onChange: () => {
       for (const window of BrowserWindow.getAllWindows()) window.webContents.send('jobs:changed');
+      activeWorkSource?.changed();
       t3WorkSource?.changed();
       void rebuildMenu();
     },
@@ -100,12 +103,23 @@ function harnessFor(id) {
   return harnesses.get(id === undefined || id === null || id === '' ? DEFAULT_HARNESS : id);
 }
 
+// Every harness with its capabilities, settings and which automatic continuations it supports.
+function describeHarnesses() {
+  const described = harnesses.describe();
+  return harnesses.list().map((adapter, index) => ({ ...described[index], automation: automationSupport(adapter) }));
+}
+
 function createRemoteControl() {
   return new RemoteControl({
     load: () => readJson(dataPath('remote-control.json'), undefined),
     save: (state) => writeJson(dataPath('remote-control.json'), state),
     getService: () => service, ensureStorage, getStorageError: () => storageError,
-    harnesses: createT3HarnessSource(api), appInfo: { name: APP_NAME, version: app.getVersion?.() || '' },
+    // The production registry, so every harness is listed and can be scheduled remotely.
+    harnesses: { defaultHarness: DEFAULT_HARNESS, describe: describeHarnesses, has: (id) => harnesses.has(id), get: (id) => harnesses.get(id) },
+    // Remote stop, stop-all and resume use the same job service calls as the detail view and the tray.
+    automation: createContinuationRuns({ getService: () => service, ensureStorage }),
+    keepAwake: { status: () => remoteStatus(requireKeepAwake().snapshot()) },
+    appInfo: { name: APP_NAME, version: app.getVersion?.() || '' },
     onChange: () => { for (const window of BrowserWindow.getAllWindows()) window.webContents.send('remote:changed'); }
   });
 }
@@ -164,12 +178,18 @@ function publishKeepAwake(snapshot) {
 
 function startKeepAwake() {
   workSources = new WorkSourceRegistry();
+  // The job service is read through getters: a storage failure at startup replaces it with an empty one.
+  const jobs = { get jobs() { return service?.jobs || []; }, activeWork: () => service?.activeWork() || [] };
+  // Every harness and every active continuation, including its waiting phase and whether it needs an unlocked screen.
+  activeWorkSource = createActiveWorkSource({ service: jobs });
+  // T3 Code deliveries the job service cannot follow (unconfirmed, or legacy records without turn tracking),
+  // and optionally every running T3 Code agent turn. Both sources name jobs `job:<id>` and the registry keeps
+  // the first report of each, so registering activeWork first means it wins and no job is counted twice.
   t3WorkSource = createT3WorkSource({
-    service: { get jobs() { return service?.jobs || []; } }, api,
+    service: jobs, api,
     getOptions: () => ({ includeRunningAgents: config.keepAwake.includeRunningAgents, horizonMs: config.keepAwake.maxHours * 3_600_000 })
   });
-  // Harness adapters register further sources here. The job service's activeWork() view (issue #2)
-  // plugs in with `workSources.register(createActiveWorkSource({ service }))` from lib/active-work-source.js.
+  workSources.register(activeWorkSource);
   workSources.register(t3WorkSource);
   keepAwake = new KeepAwakeController({ power: electronPower, registry: workSources, settings: config.keepAwake, onChange: publishKeepAwake, notify }).start();
 }
@@ -339,7 +359,7 @@ ipcMain.handle('connection:check', async (_event, harness) => {
 });
 // Opens only the Accessibility pane; the renderer cannot choose the URL.
 ipcMain.handle('harnesses:open-permission-settings', () => shell.openExternal(ACCESSIBILITY_SETTINGS_URL));
-ipcMain.handle('harnesses:list', () => ({ harnesses: harnesses.list().map((adapter, index) => ({ ...harnesses.describe()[index], automation: automationSupport(adapter) })), defaultHarness: DEFAULT_HARNESS }));
+ipcMain.handle('harnesses:list', () => ({ harnesses: describeHarnesses(), defaultHarness: DEFAULT_HARNESS }));
 ipcMain.handle('harnesses:availability', async (_event, harness) => {
   try {
     const adapter = harnessFor(harness);
@@ -412,7 +432,8 @@ app.whenReady().then(() => {
     if (harnessesStopped) return;
     event.preventDefault();
     harnessesStopped = true;
-    void Promise.race([harnesses.shutdown(), new Promise((resolve) => setTimeout(resolve, 6000))]).finally(() => app.quit());
+    let timeout;
+    void Promise.race([harnesses.shutdown(), new Promise((resolve) => { timeout = setTimeout(resolve, 6000); })]).finally(() => { clearTimeout(timeout); app.quit(); });
   });
   powerMonitor.on('suspend', () => keepAwake.handleSuspend());
   powerMonitor.on('resume', () => {

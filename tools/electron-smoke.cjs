@@ -217,10 +217,22 @@ async function remoteJourney(js, click, fill) {
   const listed = await mcp.callTool({ name: 'list_jobs', arguments: { view: 'upcoming' } });
   assert.ok(listed.structuredContent.jobs.some(item => item.id === job.id));
   assert.equal((await mcp.callTool({ name: 'cancel_job', arguments: { id: job.id } })).structuredContent.job.status, 'canceled');
+  // The production harness registry, continuation runs and keep-awake status are wired into remote control.
+  assert.deepEqual((await (await call('GET', '/v1/harnesses')).json()).harnesses.map(item => item.id), ['t3', 'fake']);
+  assert.deepEqual((await (await call('GET', '/v1/status')).json()).capabilities, { keepAwake: true, continuousRuns: true });
+  const started = await call('POST', '/v1/jobs', { harness: 'fake', threadId: 'conv-fake', message: 'Remote continuation', delayMinutes: 120, continuous: true });
+  assert.equal(started.status, 201);
+  const run = (await started.json()).job;
+  assert.ok((await mcp.callTool({ name: 'list_runs', arguments: {} })).structuredContent.runs.some(item => item.id === run.id));
+  await waitFor(() => js(`window.autoContinue.getJob(${JSON.stringify(run.id)}).then(item => item.automation?.unlimited === true)`), 'remote continuation visible on the desktop');
+  const stoppedRun = await call('POST', `/v1/runs/${run.id}/stop`);
+  assert.equal(stoppedRun.status, 200);
+  await waitFor(() => js(`window.autoContinue.getJob(${JSON.stringify(run.id)}).then(item => item.automation.state === 'stopped')`), 'remote stop reaches the desktop');
+  assert.equal((await call('POST', `/v1/runs/${run.id}/stop`)).status, 409, 'a stopped run cannot be stopped again');
   await mcp.close();
   await click('[data-action="remote-dismiss"]');
   assert.equal(await js(`document.body.innerText.includes(${JSON.stringify(token)})`), false, 'the token is not shown again');
-  await waitFor(() => js(`document.querySelector('.remote-audit')?.textContent.includes('Canceled a schedule')`), 'remote activity visible');
+  await waitFor(() => js(`(() => { const text = [...document.querySelectorAll('.remote-audit')].map(row => row.textContent).join('|'); return text.includes('Canceled a schedule') && text.includes('Stopped a continuation'); })()`), 'remote activity visible');
   await js(`document.querySelectorAll('.card')[3].scrollIntoView({block:'start'})`);
   await js(`document.querySelector('#toast-dismiss')?.click()`);
   await capture('settings-remote-activity');
@@ -604,6 +616,10 @@ async function keepAwakeJourney(js) {
   await waitFor(() => js(`Boolean(document.querySelector('#keep-awake-form'))`), 'keep-awake settings card');
   assert.match(await js(`document.querySelector('#ka-status').textContent`), /Off/);
   await held([]);
+  // The renderer journey confirmed a delivery, whose agent turn keep-awake follows until the job service's
+  // next turn poll (every 30 seconds in the app) settles it; poll now so this journey starts with nothing to track.
+  await vm.runInContext('service.pollTurns()', mainContext);
+  assert.equal(vm.runInContext('service.activeWork().length', mainContext), 0);
   await click('#ka-enabled');
   await submit();
   await waitFor(() => js(`window.autoContinue.getKeepAwake().then(state => state.enabled && state.state === 'off')`), 'enabled with nothing to track');

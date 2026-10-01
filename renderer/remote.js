@@ -5,7 +5,7 @@
 (() => {
   const ACTIONS = {
     createJob: 'Scheduled a message', editJob: 'Edited a schedule', cancelJob: 'Canceled a schedule',
-    acknowledgeJob: 'Acknowledged a delivery', reconcileJob: 'Checked a delivery', stopRun: 'Stopped a continuous run',
+    acknowledgeJob: 'Acknowledged a delivery', reconcileJob: 'Checked a delivery', stopRun: 'Stopped a continuation', stopAllRuns: 'Stopped all continuations', resumeRun: 'Resumed a continuation',
     authenticate: 'Rejected a sign-in', reject_request: 'Blocked a request', token_created: 'Created a device token', token_revoked: 'Revoked a device token',
     settings_changed: 'Changed remote settings'
   };

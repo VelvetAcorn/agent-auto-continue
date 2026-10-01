@@ -93,20 +93,23 @@ A read-only token only sees the read tools.
 
 | Tool | Operation | Changes data |
 | --- | --- | --- |
-| `get_status` | Mac, storage and harness reachability, queue counts, capabilities and optional keep-awake status | No |
-| `list_harnesses` | Harnesses and their capabilities | No |
+| `get_status` | Mac, storage and harness reachability, queue counts, capabilities and keep-awake status | No |
+| `list_harnesses` | Harnesses, their capabilities and which automatic continuations each supports | No |
 | `check_connection` | Live connection check for one harness | No |
 | `get_availability` | Usage-limit state and reset time, when the harness reports it | No |
 | `list_threads` | Threads (conversations), filterable by harness, project, text and settled state | No |
 | `list_projects` | Projects derived from a harness's threads | No |
 | `list_jobs` | Schedules and history, filterable by view and status | No |
 | `get_job` | One schedule with delivery details | No |
-| `schedule_message` | Schedule a message, `Continue` by default | Yes |
+| `schedule_message` | Schedule a message, `Continue` by default, optionally as an automatic continuation | Yes |
 | `edit_job` | Change the message or time of a pending schedule | Yes |
 | `cancel_job` | Cancel a pending schedule | Yes |
 | `acknowledge_job` | Clear the attention badge of a failed or unconfirmed delivery | Yes |
 | `reconcile_job` | Check an unconfirmed delivery without resending | Yes |
-| `list_runs`, `stop_run` | Continuous runs, when the app provides them | `stop_run` only |
+| `list_runs` | Automatic continuations that are running or paused | No |
+| `stop_run` | Stop one continuation; nothing further is sent | Yes |
+| `stop_all_runs` | Stop every running or paused continuation; plain schedules are left alone | Yes |
+| `resume_run` | Resume a paused continuation without resending | Yes |
 
 Tool errors are returned as results with `isError: true`, text such as `validation_failed: The scheduled time must be in the future.` and `structuredContent.error`.
 
@@ -128,19 +131,45 @@ Responses are JSON with `Cache-Control: no-store`.
 | `GET /v1/threads` | read | query `harness`, `projectId`, `query`, `showSettled`, `limit` | `200 { threads, total }` |
 | `GET /v1/projects` | read | query `harness` | `200 { projects }` |
 | `GET /v1/jobs` | read | query `view` (`all`, `upcoming`, `history`), `status`, `offset`, `limit` | `200 { jobs, total, unacknowledgedFailures }` |
-| `POST /v1/jobs` | control | `threadId`, optional `message`, `whenISO` or `delayMinutes`, `timeZone`, `harness`, `idempotencyKey`; or an `Idempotency-Key` header | `201 { job, replayed: false }`, or `200 { job, replayed: true }` with `Idempotent-Replayed: true` |
+| `POST /v1/jobs` | control | `threadId`, optional `message`, `whenISO` or `delayMinutes`, `timeZone`, `harness`, `trigger`, `turnLimit`, `continuous`, `idempotencyKey`; or an `Idempotency-Key` header | `201 { job, replayed: false }`, or `200 { job, replayed: true }` with `Idempotent-Replayed: true` |
 | `GET /v1/jobs/{id}` | read | none | `200 { job }` |
 | `PATCH /v1/jobs/{id}` | control | any of `message`, `whenISO`, `delayMinutes`, `timeZone` | `200 { job }` |
 | `POST /v1/jobs/{id}/cancel` | control | none | `200 { job }` |
 | `POST /v1/jobs/{id}/acknowledge` | control | none | `200 { job }` |
 | `POST /v1/jobs/{id}/reconcile` | control | none | `200 { job }` |
-| `GET /v1/runs` | read | none | `200 { runs }`, or `501` when continuous runs are unavailable |
-| `POST /v1/runs/{id}/stop` | control | none | `200 { run }`, or `501` |
+| `GET /v1/runs` | read | none | `200 { runs }` |
+| `POST /v1/runs/{id}/stop` | control | none | `200 { run }` |
+| `POST /v1/runs/stop-all` | control | none | `200 { runs }`, the continuations that were stopped |
+| `POST /v1/runs/{id}/resume` | control | none | `200 { run }` |
 
 `whenISO` must include an explicit offset, such as `2026-10-01T09:00:00+01:00`; use either `whenISO` or `delayMinutes`, not both.
 Omitted `PATCH` fields keep their saved values.
 The same rules as the desktop composer apply: future times only, real calendar dates, 1 to 4,000 characters and a valid IANA timezone.
 A job's `deliveryStatus` is `pending`, `dispatching`, `sent`, `failed`, `canceled` or `unconfirmed`; `sent` means the harness accepted the message, not that the agent finished.
+
+### Continuations
+
+`trigger`, `turnLimit` and `continuous` on `POST /v1/jobs` create an [automatic continuation](continuations.md), exactly as the composer does.
+`trigger` is `time` (the default), `available` (start as soon as the agent is available; no time is needed) or `time-then-available`.
+`turnLimit` is the total number of turns including the first, at least 1 and 1 by default, and `continuous: true` removes the limit.
+Modes a harness cannot support are refused with `400 validation_failed` and the same explanation the composer shows; `GET /v1/harnesses` reports them in each harness's `automation: { whenAvailable, multipleTurns }`.
+
+A run is a continuation that is running or paused:
+
+```json
+{ "id": "JOB_ID", "harness": "opencode", "harnessLabel": "OpenCode", "threadId": "ses_123", "threadTitle": "Refactor parser", "message": "Continue",
+  "state": "active", "status": "waiting", "deliveryStatus": "pending", "trigger": "available", "turnLimit": null, "continuous": true,
+  "turnsSent": 2, "currentTurn": 3, "remainingTurns": null, "progress": "Turn 3 · continuous", "reasonCode": null, "reason": "",
+  "nextCheckAt": "2026-10-01T05:00:05.000Z", "canStop": true, "canResume": false }
+```
+
+`state` is `active`, `paused`, `stopped` or `finished`, and `status` is the same display status the desktop shows, such as `waiting`, `running` or `paused`.
+Stop, stop all and resume call the job service's `stop`, `stopAll` and `resumeChain`, the same entry points as the detail view and the menu-bar tray, so the desktop updates at once.
+Stopping never sends; a turn already running keeps running in the agent, and nothing further is sent.
+Resume never resends and is refused with `409 invalid_state` while the last delivery is unconfirmed; use `reconcile` first.
+A job that is not a continuation answers `404 run_not_found`; cancel it through the job resources instead.
+Each of these changes needs writable schedule storage, like every other change.
+The job resources also report continuations, with `job.automation` and `job.displayStatus`.
 
 Idempotency keys are 1 to 128 characters from `A-Z a-z 0-9 . _ : -`, scoped to the token, and remembered for 24 hours across restarts.
 Reusing a key with a different request returns `409 idempotency_conflict`.
@@ -162,15 +191,31 @@ Errors use one shape:
 | `400` | `validation_failed`, `invalid_json`, `invalid_idempotency_key`, `unknown_harness` |
 | `401` | `unauthorized`, with `WWW-Authenticate: Bearer realm="agent-auto-continue"` |
 | `403` | `insufficient_scope`, `origin_not_allowed`, `host_not_allowed` |
-| `404` | `not_found`, `job_not_found`, `thread_not_found` |
+| `404` | `not_found`, `job_not_found`, `thread_not_found`, `run_not_found` |
 | `405` | `method_not_allowed`, with an `Allow` header |
-| `409` | `invalid_state`, `idempotency_conflict`, `idempotency_indeterminate` |
+| `409` | `invalid_state`, `idempotency_conflict`, `idempotency_indeterminate`, `conversation_busy`, `awaiting_input`, `owned_by_other_harness` |
 | `413` | `payload_too_large` |
 | `415` | `unsupported_media_type` |
 | `429` | `too_many_failures`, `rate_limited`, with `Retry-After`; `idempotency_capacity` |
 | `501` | `not_supported` |
 | `502` | `harness_unavailable`, with sanitized `details.upstream` |
-| `503` | `storage_unavailable` |
+| `503` | `storage_unavailable`; `screen_locked` with `Retry-After: 60`; `permission_required`; `usage_limited` |
+
+Errors from a harness keep the [harness error code](harnesses.md#error-codes) when it describes the conversation or the Mac rather than an unreachable harness, with the original in `details.upstream`:
+
+| Harness code | Remote answer | What to do |
+| --- | --- | --- |
+| `conversation_busy` | `409 conversation_busy` | The agent is still working; try again later |
+| `awaiting_input` | `409 awaiting_input` | The agent asked a question; answer it on the Mac |
+| `owned_by_other_harness` | `409 owned_by_other_harness` | Another harness owns the conversation; `details.upstream.details.harness` names it |
+| `screen_locked` | `503 screen_locked` | A desktop-app harness needs the Mac unlocked |
+| `permission_required` | `503 permission_required` | Grant the macOS permission in `details.upstream.details.permission` on the Mac |
+| `usage_limited` | `503 usage_limited` | The provider's usage limit is in force |
+| `conversation_not_found` | `404 thread_not_found` | Pick another thread |
+| `unknown_harness` | `400 unknown_harness` | Use an ID from `GET /v1/harnesses` |
+| any other | `502 harness_unavailable` | The harness is not running, not signed in, or answered unexpectedly |
+
+A scheduled message that later fails on the Mac reports the harness code in `job.error.code`.
 
 ### Examples
 
@@ -196,13 +241,22 @@ curl -s -X POST "$BASE/jobs/JOB_ID/cancel" -H "$AUTH"
   "desktop": { "app": "T3 Code Auto-Continue", "version": "2.0.0", "time": "2026-10-01T08:00:00.000Z", "timeZone": "Europe/London" },
   "storage": { "ok": true },
   "defaultHarness": "t3",
-  "harnesses": [{ "id": "t3", "label": "T3 Code", "conversationNoun": "thread", "online": true }],
+  "harnesses": [{ "id": "t3", "label": "T3 Code", "conversationNoun": "thread", "online": true, "checkedAt": "2026-10-01T08:00:00.000Z" }],
   "jobs": { "upcoming": 2, "unacknowledgedFailures": 0 },
-  "capabilities": { "keepAwake": false, "continuousRuns": false },
-  "keepAwake": null,
+  "capabilities": { "keepAwake": true, "continuousRuns": true },
+  "keepAwake": {
+    "enabled": true, "state": "armed", "holding": "system", "reason": "Waiting for 1 scheduled task.", "requiresUnlockedScreen": false,
+    "since": "2026-10-01T07:59:00.000Z", "deadline": "2026-10-01T19:59:00.000Z", "releaseAt": null, "ended": null,
+    "tasks": [{ "id": "job:JOB_ID", "harness": "opencode", "label": "Refactor parser", "state": "waiting", "detail": "Waiting for the usage limit to reset · turn 3, continuous", "until": "2026-10-01T09:00:05.000Z", "requiresUnlockedScreen": false }],
+    "capped": [], "deferred": [], "power": { "onBattery": false, "batteryPercent": 100 }, "lastSleep": null
+  },
   "caller": { "label": "Ryan's iPhone", "scope": "control" }
 }
 ```
+
+`harnesses` lists every harness in the app.
+Each connection result is reused for 30 seconds, as `checkedAt` shows, so a phone that polls status does not start a harness process on the Mac for every request; `GET /v1/harnesses/{harness}/connection` always checks live.
+`keepAwake` is read-only and has no settings; change keep-awake in the desktop app.
 
 ## Browser clients
 
@@ -216,9 +270,9 @@ The remote layer lives in `lib/remote/` and reaches the rest of the app through 
 | Dependency | Contract |
 | --- | --- |
 | `getService()` | The shared `JobService`; all validation and state rules come from it |
-| `harnesses` | A registry with `defaultHarness`, `describe()`, `has(id)` and `get(id)`, whose adapters provide `checkConnection()`, `listConversations({ showSettled })` and optionally `probeAvailability()`; `lib/remote/harnesses.js` provides the T3-only stand-in and the multi-harness registry can replace it directly |
-| `keepAwake` | Optional `{ status() }`, reported read-only in `get_status` |
-| `automation` | Optional `{ listRuns(), stopRun(id) }` for continuous runs; without it the run resources answer `501` and the MCP run tools are hidden |
+| `harnesses` | A registry with `defaultHarness`, `describe()`, `has(id)` and `get(id)`, whose adapters provide `checkConnection()`, `listConversations({ showSettled })` and optionally `probeAvailability()`; `main.js` passes the production registry, with `automation` support added to each description, and `lib/remote/harnesses.js` keeps a T3-only stand-in for tests |
+| `keepAwake` | Optional `{ status() }`, reported read-only in `get_status`; `main.js` passes `remoteStatus()` of the keep-awake controller |
+| `automation` | Optional `{ listRuns(), stopRun(id), stopAll(), resumeRun(id) }`; `main.js` passes `lib/remote/continuations.js`, backed by the job service. Without a method, its resource answers `501 not_supported` and its MCP tool is hidden |
 
 Settings, token digests, the audit log and idempotency keys are stored in `remote-control.json` beside `config.json`, with owner-only permissions.
 An unreadable file disables remote control and is never overwritten.

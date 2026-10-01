@@ -33,11 +33,12 @@ test('repeated authentication failures lock the address out with Retry-After, ev
 });
 
 test('status reports desktop, storage, harness reachability, queue counts and optional keep-awake', async (t) => {
-  const f = await startRemote({ keepAwake: { status: () => ({ available: true, active: false }) } });
+  let clock = Date.parse('2026-10-01T08:00:00Z');
+  const f = await startRemote({ keepAwake: { status: () => ({ available: true, active: false }) }, now: () => clock });
   t.after(f.close);
   const ok = await f.request('GET', '/v1/status');
   assert.equal(ok.status, 200);
-  assert.deepEqual(ok.body.harnesses, [{ id: 't3', label: 'T3 Code', conversationNoun: 'thread', online: true }]);
+  assert.deepEqual(ok.body.harnesses, [{ id: 't3', label: 'T3 Code', conversationNoun: 'thread', online: true, checkedAt: '2026-10-01T08:00:00.000Z' }]);
   assert.equal(ok.body.defaultHarness, 't3');
   assert.deepEqual(ok.body.capabilities, { keepAwake: true, continuousRuns: false });
   assert.deepEqual(ok.body.storage, { ok: true });
@@ -47,8 +48,16 @@ test('status reports desktop, storage, harness reachability, queue counts and op
   assert.equal(ok.body.desktop.version, '0.0.0-test');
   f.harness.online = false;
   f.setStorageError({ code: 'storage_unavailable', message: 'The local jobs.json file could not be read.' });
+  // Connection results are reused for 30 seconds so a polling phone does not start harness processes on every request.
+  const cached = await f.request('GET', '/v1/status');
+  assert.equal(cached.body.harnesses[0].online, true);
+  assert.equal(cached.body.harnesses[0].checkedAt, '2026-10-01T08:00:00.000Z');
+  assert.equal(cached.body.storage.ok, false, 'storage health is never cached');
+  assert.equal((await f.request('GET', '/v1/harnesses/t3/connection')).body.online, false, 'check_connection is always live');
+  clock += 30_000;
   const degraded = await f.request('GET', '/v1/status');
   assert.equal(degraded.body.harnesses[0].online, false);
+  assert.equal(degraded.body.harnesses[0].checkedAt, '2026-10-01T08:00:30.000Z');
   assert.equal(degraded.body.harnesses[0].error.code, 'connection_refused');
   assert.equal(degraded.body.storage.ok, false);
   const noProvider = await startRemote();

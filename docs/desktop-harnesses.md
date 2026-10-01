@@ -59,8 +59,10 @@ Electron and Chromium apps build their web accessibility tree on request, so the
 Locked-screen detection is `lib/harnesses/session-lock.js`, which reads the IORegistry console sessions with `/usr/sbin/ioreg` and needs no permission.
 While the screen is locked, both apps expose their application element as its own descendant and no content at all, so the automation program refuses every operation while locked.
 `probeAvailability()` reports `{ state: 'unavailable', reason: 'screen_locked', source: 'reported' }` while locked.
-The job service does not wait for an unlock: a schedule that fires while the screen is locked fails as not sent, with error code `screen_locked`, and nothing is typed.
-Whether one-off schedules should instead be deferred until the next unlock is an open decision for the owner.
+A one-off schedule (start at a time, one turn) that fires while the screen is locked fails as not sent, with error code `screen_locked`, and nothing is typed.
+An automatic continuation, including a single-turn schedule that starts when the agent is available, keeps the same unsent turn instead: it checks again every minute and at once on `unlock-screen`, as described in [automatic continuations](continuations.md).
+Whether one-off schedules should also be deferred until the next unlock is an open decision for the owner.
+Keep-awake reports these tasks with `requiresUnlockedScreen`, so it keeps the display on while they wait or run, which also stops an idle display sleep from locking the Mac.
 
 ## Claude Desktop (`claude-desktop`)
 

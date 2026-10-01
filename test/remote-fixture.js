@@ -43,6 +43,7 @@ async function freePort() {
 /**
  * Starts remote control on a free loopback port with one control token and one read token.
  * `harnesses`, when given, builds a registry from the fake harness.
+ * `automation` is a run provider, or a function given `{ getService, ensureStorage }` that builds one.
  */
 async function startRemote({ enabled = true, jobs = [], storageError = null, networkInterfaces = () => ({}), keepAwake, automation, harnesses, initialState, now } = {}) {
   const harness = fakeHarness();
@@ -50,9 +51,11 @@ async function startRemote({ enabled = true, jobs = [], storageError = null, net
   let storage = storageError;
   const service = new JobService({ jobs, api: harness.api, persist: () => { if (storage) throw new Error(storage.message); }, ...(now ? { now } : {}) });
   const timers = [];
+  const ensureStorage = () => { if (storage) throw new Error(storage.message); };
+  if (typeof automation === 'function') automation = automation({ getService: () => service, ensureStorage });
   const remote = new RemoteControl({
     load: () => files.saved, save: (state) => { if (files.failSave) throw Object.assign(new Error('Disk full'), { code: 'ENOSPC' }); files.saved = JSON.parse(JSON.stringify(state)); },
-    getService: () => service, ensureStorage: () => { if (storage) throw new Error(storage.message); }, getStorageError: () => storage,
+    getService: () => service, ensureStorage, getStorageError: () => storage,
     harnesses: harnesses ? harnesses(harness) : createT3HarnessSource(harness.api), keepAwake, automation, appInfo: { name: 'Agent Auto-Continue test', version: '0.0.0-test' },
     networkInterfaces, setTimer: (fn, ms) => { const timer = { fn, ms, unref() {} }; timers.push(timer); return timer; }, clearTimer: () => {},
     ...(now ? { now } : {})
