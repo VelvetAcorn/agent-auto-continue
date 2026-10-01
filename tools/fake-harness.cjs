@@ -34,7 +34,7 @@ function createFakeHarness({ id = 'fake', label = 'Fake Agent', kind = 'cli', no
       const users = item.messages.filter((message) => message.role === 'user').map((message) => Date.parse(message.createdAt)).filter(Number.isFinite);
       return { id: item.id, title: item.title || '(Untitled)', projectId: item.projectId || '', projectName: item.projectName || '', archived: item.archived,
         latestUserActivityAt: users.length ? new Date(Math.max(...users)).toISOString() : null,
-        delivered: Boolean(ref.deliveryKey) && item.messages.some((message) => message.id === ref.deliveryKey), busy: false, awaitingInput: item.awaitingInput ?? null, context: { item } };
+        delivered: Boolean(ref.deliveryKey) && item.messages.some((message) => message.id === ref.deliveryKey), busy: item.busy ?? false, awaitingInput: item.awaitingInput ?? null, context: { item } };
     },
     prepareTurn(turn, conversation) {
       record('prepareTurn', turn);

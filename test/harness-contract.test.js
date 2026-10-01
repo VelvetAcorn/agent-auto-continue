@@ -296,7 +296,7 @@ test('reconciliation restores turn tracking after interrupted dispatch recovery'
   const fake = createFakeHarness({ conversations: [{ id: 'conv' }] });
   const h = service([fake.adapter]);
   const job = await h.service.create(input('fake'));
-  h.service.patch(h.service.get(job.id), { status: 'dispatching' });
+  h.service.patch(h.service.get(job.id), { status: 'dispatching', dispatchAttemptedAt: iso(70_000) });
   fake.state.conversations.get('conv').messages.push({ id: job.messageId, role: 'user', createdAt: iso(70_000) });
   const restored = service([fake.adapter], h.stored);
   restored.service.recover();
@@ -350,5 +350,57 @@ test('a T3 job records the turn its command starts and reports completion', asyn
   await service.pollTurns();
   assert.equal(service.get(job.id).turn.state, 'completed');
   assert.deepEqual(service.activeWork(), []);
+});
+
+test('an interrupted send that never started runs again instead of becoming unconfirmed', async () => {
+  const fake = createFakeHarness({ conversations: [{ id: 'conv' }] });
+  const h = service([fake.adapter]);
+  const job = await h.service.create(input('fake'));
+  h.service.patch(h.service.get(job.id), { status: 'dispatching' });
+  const restored = service([fake.adapter], h.stored);
+  restored.service.recover();
+  assert.equal(restored.service.get(job.id).status, 'pending');
+  assert.equal(restored.service.get(job.id).deliveryCertainty, 'not-delivered');
+  restored.setClock(70_000);
+  await restored.service.resume();
+  assert.equal(restored.service.get(job.id).status, 'sent');
+  assert.equal(fake.state.submitted.length, 1);
+});
+
+test('a conversation that is waiting for the user or still working is refused, while unknown never blocks', async () => {
+  for (const [patch, code] of [[{ awaitingInput: true }, 'awaiting_input'], [{ busy: true }, 'conversation_busy'], [{ awaitingInput: null }, null]]) {
+    const fake = createFakeHarness({ conversations: [{ id: 'conv', ...patch }] });
+    const h = service([fake.adapter]);
+    const job = await h.service.create(input('fake'));
+    h.setClock(70_000);
+    await h.service.run(job.id);
+    const result = h.service.get(job.id);
+    if (code) {
+      assert.equal(result.status, 'failed', code);
+      assert.equal(result.error.code, code);
+      assert.equal(result.deliveryCertainty, 'not-delivered');
+      assert.equal(fake.state.submitted.length, 0);
+      assert.equal(h.notifications.at(-1)[0], 'Scheduled message not sent');
+    } else {
+      assert.equal(result.status, 'sent');
+    }
+  }
+});
+
+test('a turn that cannot be followed is closed as unknown after a day', async () => {
+  const fake = createFakeHarness({ conversations: [{ id: 'conv' }] });
+  const h = service([fake.adapter]);
+  const job = await h.service.create(input('fake'));
+  h.setClock(70_000);
+  await h.service.run(job.id);
+  fake.state.turnError = new HarnessError('connection_refused', 'Harness is not running');
+  h.setClock(70_000 + 23 * 3_600_000);
+  await h.service.pollTurns();
+  assert.equal(h.service.get(job.id).turn.state, 'running', 'Still tracked within a day');
+  h.setClock(70_000 + 7 * 24 * 3_600_000);
+  await h.service.pollTurns();
+  assert.equal(h.service.get(job.id).turn.state, 'unknown');
+  assert.equal(h.service.get(job.id).turn.error.code, 'tracking_expired');
+  assert.deepEqual(h.service.activeWork(), []);
 });
 
