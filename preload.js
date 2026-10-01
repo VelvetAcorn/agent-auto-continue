@@ -71,5 +71,8 @@ contextBridge.exposeInMainWorld('autoContinue', {
     return () => ipcRenderer.removeListener('keep-awake:changed', listener);
   },
   scheduleThread: (threadId, harness) => ipcRenderer.invoke('dashboard:schedule-thread', threadId, harness),
-  openSettings: () => ipcRenderer.invoke('dashboard:open-settings')
+  openSettings: () => ipcRenderer.invoke('dashboard:open-settings'),
+  getLayout: () => ipcRenderer.invoke('layout:get'),
+  setLayout: (layout) => ipcRenderer.invoke('layout:set', layout),
+  fitWindow: (height) => ipcRenderer.invoke('window:fit', height)
 });

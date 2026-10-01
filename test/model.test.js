@@ -3,9 +3,12 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
+  arrangeAgents,
   buildTurnStartCommand,
   hasMessageId,
   normaliseConfig,
+  validateAgentsInput,
+  validateLayoutInput,
   readJobs,
   validateSettingsInput,
   validateScheduleInput
@@ -27,8 +30,31 @@ test('normaliseConfig applies safe defaults to malformed values', () => {
     httpPort: 3773,
     bufferSeconds: 5,
     t3Token: 'token',
-    keepAwake: { enabled: false, keepDisplayOn: false, powerSource: 'any', batteryFloorPercent: 20, maxHours: 12, includeRunningAgents: false }
+    keepAwake: { enabled: false, keepDisplayOn: false, powerSource: 'any', batteryFloorPercent: 20, maxHours: 12, includeRunningAgents: false },
+    agents: { order: [], hidden: [] },
+    layout: 'rail'
   });
+});
+
+test('normaliseConfig keeps a valid agent arrangement and layout and repairs invalid ones', () => {
+  const saved = normaliseConfig({ agents: { order: ['codex', 't3', 'codex', 'Bad Id', 7], hidden: ['claude-desktop'] }, layout: 'window' });
+  assert.deepEqual(saved.agents, { order: ['codex', 't3'], hidden: ['claude-desktop'] });
+  assert.equal(saved.layout, 'window');
+  assert.deepEqual(normaliseConfig({ agents: 'all', layout: 'popover' }).agents, { order: [], hidden: [] });
+  assert.equal(normaliseConfig({ layout: 'popover' }).layout, 'rail');
+});
+
+test('validateAgentsInput keeps only known agents and arrangeAgents never loses a harness', () => {
+  const known = ['t3', 'opencode', 'claude-code'];
+  assert.deepEqual(validateAgentsInput({ order: ['claude-code', 'nope', 't3'], hidden: ['opencode', 'nope'] }, known), { order: ['claude-code', 't3'], hidden: ['opencode'] });
+  assert.throws(() => validateAgentsInput({ order: 'claude-code', hidden: [] }, known), /arrangement/);
+  assert.throws(() => validateAgentsInput(null, known), /arrangement/);
+  assert.deepEqual(arrangeAgents(known, { order: ['claude-code'], hidden: ['opencode'] }), [
+    { id: 'claude-code', hidden: false }, { id: 't3', hidden: false }, { id: 'opencode', hidden: true }
+  ]);
+  assert.deepEqual(arrangeAgents(known, { order: ['gone'], hidden: [] }).map((item) => item.id), known);
+  assert.equal(validateLayoutInput('window'), 'window');
+  assert.throws(() => validateLayoutInput('sheet'), /rail or the window/);
 });
 
 test('normaliseConfig keeps valid keep-awake preferences and repairs invalid ones', () => {

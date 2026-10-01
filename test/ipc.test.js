@@ -308,3 +308,78 @@ test('keep-awake IPC is opt-in, persists settings, shows the tray state and rele
   await restarted.emit('will-quit');
   assert.equal(restarted.blockers.size, 0, 'Quitting releases the assertion');
 });
+
+test('the agent arrangement is validated, saved, published and reflected in the tray', () => {
+  const app = appHarness();
+  app.windows[0].finishLoad();
+  const before = app.invoke('settings:get');
+  assert.deepEqual(before.agents.map((item) => item.id), ['t3', 'opencode', 'claude-code', 'claude-desktop', 'codex', 'codex-desktop']);
+  assert.equal(before.agents.every((item) => item.hidden === false), true);
+  assert.equal(before.layout, 'rail');
+  app.invoke('settings:save', { httpPort: 3773, bufferSeconds: 5, agents: { order: ['codex', 'claude-code', 'nope'], hidden: ['t3', 'nope'] } });
+  const saved = JSON.parse(app.files.get('/fixture/config.json'));
+  assert.deepEqual(saved.agents, { order: ['codex', 'claude-code'], hidden: ['t3'] });
+  const shown = app.invoke('settings:get');
+  assert.deepEqual(shown.agents.map((item) => [item.id, item.hidden]), [['codex', false], ['claude-code', false], ['t3', true], ['opencode', false], ['claude-desktop', false], ['codex-desktop', false]]);
+  assert.deepEqual(app.events.at(-1)[1].agents.map((item) => item.id), shown.agents.map((item) => item.id), 'settings:changed carries the arrangement');
+  assert.throws(() => app.invoke('settings:save', { httpPort: 3773, bufferSeconds: 5, agents: { order: 'codex' } }), /arrangement/);
+  assert.deepEqual(JSON.parse(app.files.get('/fixture/config.json')).agents, saved.agents, 'An invalid arrangement changes nothing');
+  const restarted = appHarness([], { config: saved });
+  assert.deepEqual(restarted.invoke('settings:get').agents.slice(0, 2).map((item) => item.id), ['codex', 'claude-code']);
+});
+
+test('the rail is a hidden popover at launch and the layout switch rebuilds the window', async () => {
+  const app = appHarness([], { config: { httpPort: 3773, bufferSeconds: 5 } });
+  const rail = app.windows[0];
+  assert.equal(rail.options.frame, false);
+  assert.equal(rail.options.width, 380);
+  assert.equal(rail.options.show, false, 'The window is created hidden');
+  assert.equal(rail.shown, undefined, 'The rail does not pop up at launch when setup is complete');
+  assert.equal(app.invoke('layout:get').layout, 'rail');
+  assert.ok(app.trayEvents.click, 'Left-clicking the menu-bar icon toggles the rail');
+  app.trayEvents.click[0]();
+  assert.equal(rail.visible, true);
+  app.trayEvents.click[0]();
+  assert.equal(rail.visible, false);
+  // Clicking the icon while the rail is open blurs it first: the deferred hide lets that click close the rail instead of reopening it.
+  app.trayEvents.click[0]();
+  rail.handlers.blur();
+  assert.equal(rail.visible, true, 'A blur does not hide the rail at once');
+  app.trayEvents.click[0]();
+  assert.equal(rail.visible, false, 'The click that caused the blur closes the rail');
+  app.trayEvents.click[0]();
+  rail.handlers.blur();
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(rail.visible, false, 'Focus moving elsewhere hides the rail after the grace period');
+  app.invoke('window:fit', 9999);
+  assert.equal(rail.contentSize.join(), '380,760', 'Height follows the content within the limits');
+  app.invoke('window:fit', 10);
+  assert.equal(rail.contentSize.join(), '380,360');
+  assert.throws(() => app.invoke('layout:set', 'sheet'), /rail or the window/);
+  assert.equal(app.invoke('layout:set', 'window').layout, 'window');
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  assert.equal(rail.destroyed, true, 'The popover is replaced');
+  const expanded = app.windows[1];
+  assert.equal(expanded.options.frame, undefined);
+  assert.equal(expanded.options.minWidth, 640);
+  assert.equal(expanded.visible, true, 'The window opens at once');
+  assert.equal(JSON.parse(app.files.get('/fixture/config.json')).layout, 'window');
+  for (let attempt = 0; attempt < 50 && !app.trayMenu.find((item) => item.label === 'Back to the menu bar'); attempt++) await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.ok(app.trayMenu.find((item) => item.label === 'Back to the menu bar'), 'The tray menu follows the layout');
+  app.invoke('window:fit', 500);
+  assert.equal(expanded.contentSize, undefined, 'Only the rail follows its content');
+  const restarted = appHarness([], { config: { httpPort: 3773, bufferSeconds: 5, layout: 'window' } });
+  assert.equal(restarted.windows[0].options.frame, undefined);
+  assert.equal(restarted.windows[0].visible, true, 'The window layout opens at launch');
+});
+
+test('a first run opens Settings in the rail so the agents can be set up', () => {
+  const fresh = appHarness();
+  fresh.windows[0].finishLoad();
+  assert.equal(fresh.events.find(([name]) => name === 'app:navigate')[1].view, 'settings');
+  assert.equal(fresh.windows[0].visible, true);
+  const configured = appHarness([], { config: { httpPort: 3773, bufferSeconds: 5 } });
+  configured.windows[0].finishLoad();
+  assert.equal(configured.events.find(([name]) => name === 'app:navigate')[1].view, 'home');
+  assert.equal(configured.windows[0].visible, undefined);
+});

@@ -17,7 +17,7 @@ const path = require('node:path');
  * @param {Record<string, string>} [options.env] The process environment main.js sees.
  */
 function appHarness(initialJobs = [], { ownsInstance = true, rawJobs, config, extraFiles = {}, extraHarnesses, wrapRegistry, env = { T3_TOKEN: 'test-secret' } } = {}) {
-  const handlers = {}, files = new Map(), events = [], windows = [], opened = [], clipboard = [], appEvents = {}, powerEvents = {}, blockers = new Map(), dialogs = [];
+  const handlers = {}, files = new Map(), events = [], windows = [], opened = [], clipboard = [], appEvents = {}, powerEvents = {}, trayEvents = {}, blockers = new Map(), dialogs = [];
   let dialogResponse = 1;
   let nextBlocker = 0;
   let trayMenu, trayTooltip, failWrite = false;
@@ -32,14 +32,17 @@ function appHarness(initialJobs = [], { ownsInstance = true, rawJobs, config, ex
       this.webContents = { send: (...args) => events.push(args), once: (name, callback) => { this.listeners[name] = callback; } };
     }
     finishLoad() { this.loaded = true; this.listeners['did-finish-load']?.(); }
-    removeMenu() {} loadFile(file) { this.file = file; } on() {} focus() {} isDestroyed() { return false; }
+    removeMenu() {} loadFile(file) { this.file = file; } focus() {} isDestroyed() { return this.destroyed === true; }
+    on(name, fn) { (this.handlers ||= {})[name] = fn; } removeAllListeners(name) { if (this.handlers) delete this.handlers[name]; }
+    show() { this.shown = (this.shown || 0) + 1; this.visible = true; } hide() { this.visible = false; } isVisible() { return this.visible === true; }
+    destroy() { this.destroyed = true; this.handlers?.closed?.(); } getSize() { return [this.options.width, this.options.height]; } setPosition() {} setContentSize(width, height) { this.contentSize = [width, height]; }
   }
   const electron = {
     // Every listener is kept, because main.js registers more than one for some app events (before-quit).
     app: { requestSingleInstanceLock: () => ownsInstance, quit() {}, on: (name, fn) => { (appEvents[name] ||= []).push(fn); }, whenReady: () => ({ then: fn => { ready = fn; } }), getPath: () => '/fixture', getLoginItemSettings: () => ({ openAtLogin: false }) },
     ipcMain: { handle: (name, fn) => { handlers[name] = fn; } }, BrowserWindow: Window,
-    Menu: { buildFromTemplate: value => value }, Notification: { isSupported: () => false },
-    Tray: class { setToolTip(value) { trayTooltip = value; } setImage() {} on() {} setContextMenu(menu) { trayMenu = menu; } },
+    Menu: { buildFromTemplate: value => { trayMenu = value; return value; } }, Notification: { isSupported: () => false },
+    Tray: class { setToolTip(value) { trayTooltip = value; } setImage() {} on(name, fn) { (trayEvents[name] ||= []).push(fn); } popUpContextMenu() {} },
     nativeImage: { createFromPath: () => ({ setTemplateImage() {} }) },
     powerMonitor: { on: (name, fn) => { powerEvents[name] = fn; }, isOnBatteryPower: () => false },
     powerSaveBlocker: { start: (type) => { blockers.set(nextBlocker, type); return nextBlocker++; }, stop: (id) => blockers.delete(id), isStarted: (id) => blockers.has(id) },
@@ -64,7 +67,7 @@ function appHarness(initialJobs = [], { ownsInstance = true, rawJobs, config, ex
     emit: (name) => { const event = { defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } }; return Promise.all((appEvents[name] || []).map((fn) => fn(event))); },
     setResponse: fn => { response = fn; }, files, events, windows, opened, clipboard, appEvents, powerEvents, blockers, handlers, dialogs,
     setDialogResponse: (value) => { dialogResponse = value; },
-    setWriteFailure: value => { failWrite = value; }, get trayMenu() { return trayMenu; }, get trayTooltip() { return trayTooltip; }
+    setWriteFailure: value => { failWrite = value; }, get trayMenu() { return trayMenu; }, get trayTooltip() { return trayTooltip; }, trayEvents
   };
 }
 

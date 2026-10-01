@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agent-auto-continue - simple direction</title>
+<link rel="stylesheet" href="sketch.css">
+<style>.content{max-width:620px;margin:40px auto;padding:0 20px}.list{border:2px solid var(--outline);border-radius:14px;background:var(--surface);box-shadow:4px 4px 0 var(--shadow);margin-top:16px;overflow:hidden}.list a{display:block;padding:14px 18px;border-top:1px solid var(--line);text-decoration:none;color:inherit}.list a:first-child{border-top:0}.list a:hover{background:var(--raised)}.list b{display:block;font-size:13px}.list small{display:block;margin-top:3px}</style>
+</head>
+<body>
+<div class="sketchbar"><span>Simple direction for issue #6. One screen, plain words, settings behind a gear.</span><button type="button" data-toggle-theme>Bone Outline</button></div>
+<main class="content">
+  <h1>One screen, one button</h1>
+  <p style="margin-top:10px">The app does one thing: send Continue to a conversation at the right moment. Both sketches put that on a single screen: pick a conversation, pick when, press Continue, with the queue underneath. Every explanation becomes a tooltip, and every rarely-touched knob moves behind the gear.</p>
+  <div class="list">
+    <a href="01-rail.html"><b>01 Rail</b><small>A 380 px popover from the menu bar. Picker, settings and the custom time are states of the same popover.</small></a>
+    <a href="02-app.html"><b>02 App window</b><small>The same screen as a small standalone window: compose on the left, queue on the right, settings as a sheet.</small></a>
+  </div>
+  <p style="margin-top:14px"><small>Each sketch has buttons in the top strip for the custom time, picker, settings, empty and dark states. Rendered shots are in <code>shots/</code>.</small></p>
+</main>
+<script src="sketch.js"></script>
+</body>
+</html>

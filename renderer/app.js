@@ -1,76 +1,100 @@
 'use strict';
+// The one-screen interface: pick a conversation, pick when, press Continue. The queue sits
+// underneath, and everything else (agents, keep-awake, remote control, appearance) is behind
+// the gear. The same renderer serves the menu-bar rail and the expanded window; only the
+// body class differs.
 (() => {
   const api = window.autoContinue;
   const time = window.SchedulerTime;
   const sticker = window.SupportStar;
   const remote = window.RemoteSettings;
+  const compose = window.Compose;
+  const icons = window.AgentIcons;
   const app = document.getElementById('app');
   const $ = (selector) => document.querySelector(selector);
-  const escape = (value) => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]));
+  const escape = (value) => String(value ?? '').replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]));
   const localZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
   function preference(key, fallback) { try { return localStorage.getItem(key) || fallback; } catch { return fallback; } }
+  const RECENT_ROWS = 5;
+  const RAIL_MIN_HEIGHT = 360;
+  const RAIL_MAX_HEIGHT = 760;
   const state = {
-    view: 'upcoming', returnView: 'upcoming', threads: [], upcoming: [], history: [], upcomingTotal: 0, historyTotal: 0,
-    limit: 50, historyLimit: 50, historyFilter: '', search: '', showSettled: false, online: null, connectionError: null,
-    settings: null, storageError: null, jobsError: '', actionError: '', unacknowledged: 0, selected: null, draftKey: 'new', drafts: new Map(),
-    picking: false, loading: true, busy: false, confirmCancel: false, calendarMonth: '', calendarOpen: false,
+    layout: 'rail', view: 'home', returnView: 'home',
+    harnesses: [], agents: [], settings: null, storageError: null,
+    sources: {}, availability: {}, keepAwake: null, compatibility: [],
+    upcoming: [], history: [], upcomingTotal: 0, historyTotal: 0, unacknowledged: 0, historyLimit: 50, historyFilter: '', search: '',
+    draft: null, messageOpen: false, showSettled: false, pickerQuery: '',
+    selected: null, selectedJob: null, confirmCancel: false, confirmMark: false,
+    sections: new Set(['agents']), settingsDraft: null, harnessDraft: null, keepAwakeDraft: null, tipOpen: false,
     theme: preference('scheduler-theme', 'system'), reduceMotion: preference('scheduler-motion', 'system') === 'reduce',
-    settingsDraft: null, harnesses: [], harness: preference('scheduler-harness', 't3'), harnessDraft: null, availability: {}, keepAwake: null, keepAwakeDraft: null, compatibility: []
+    loading: true, busy: false, actionError: '', jobsError: ''
   };
-  let jobRequest = 0, threadRequest = 0, timer, toastTimer, lastRefresh = 0, stopped = false, failuresKnown = false;
+  let jobRequest = 0, timer, toastTimer, lastRefresh = 0, stopped = false, failuresKnown = false, lastHeight = 0;
+  const sourceRequests = new Map();
   const knownProblems = new Set();
-  const listContexts = new Map();
-  function saveListContext(){if(['upcoming','history','threads'].includes(state.view)&&!state.picking)listContexts.set(state.view,{search:state.search,scroll:window.scrollY});}
   const mediaTheme = matchMedia('(prefers-color-scheme: dark)');
   const mediaMotion = matchMedia('(prefers-reduced-motion: reduce)');
   // The sticker's phrase and spin live outside the DOM so re-renders never reset or stutter it.
   const starState = { phrase: '', spin: sticker.idle(performance.now()), frame: 0, paintedAt: 0, held: false, layouts: new Map() };
   let measureContext;
   const cleanup = [];
-  const draft = () => state.drafts.get(state.draftKey);
-  function newDraft(threadId = '', message = 'Continue', zone = localZone, harness = state.harness) {
-    const when = time.quickTime(5, zone);
-    return { harness, threadId, message, date: when.date, time: when.time, timeZone: zone, occurrence: '', bufferSeconds: state.settings?.bufferSeconds ?? 5, threadTitle: '', projectName: '',
-      trigger: 'time', waitIfLimited: false, turnLimit: '1', continuous: false };
+
+  // ---------- Agents ----------
+  const harnessInfo = (id) => state.harnesses.find((item) => item.id === id);
+  const harnessLabel = (id) => harnessInfo(id)?.label || (id === 't3' ? 'T3 Code' : id || 'Agent');
+  const noun = (id) => harnessInfo(id)?.conversationNoun || 'conversation';
+  // Agents in display order; everything is visible until the arrangement arrives.
+  function arrangedAgents() {
+    if (!state.harnesses.length) return [];
+    const ids = state.harnesses.map((item) => item.id);
+    const arranged = state.agents.length ? state.agents.filter((item) => ids.includes(item.id)) : [];
+    const missing = ids.filter((id) => !arranged.some((item) => item.id === id)).map((id) => ({ id, hidden: false }));
+    return arranged.concat(missing);
   }
-  // Automation fields of a job or scheduleAgain payload, in draft form.
-  function automationDraft(source) {
-    const trigger = source.trigger || source.automation?.trigger || 'time';
-    const limit = source.automation ? source.automation.limit : source.turnLimit;
-    const continuous = source.automation ? source.automation.unlimited : source.continuous === true;
-    return { trigger: trigger === 'available' ? 'available' : 'time', waitIfLimited: trigger === 'time-then-available', turnLimit: String(continuous ? 1 : limit || 1), continuous };
-  }
-  const harnessInfo = (id = state.harness) => state.harnesses.find(item => item.id === id);
-  const harnessLabel = (id = state.harness) => harnessInfo(id)?.label || (id === 't3' ? 'T3 Code' : id);
-  const noun = (id = state.harness) => harnessInfo(id)?.conversationNoun || 'thread';
-  function harnessOptions(selected) {
-    const list = state.harnesses.length ? state.harnesses : [{ id: 't3', label: 'T3 Code' }];
-    return list.map(item => `<option value="${escape(item.id)}" ${item.id === selected ? 'selected' : ''}>${escape(item.label)}</option>`).join('');
-  }
-  function useHarness(id) {
-    if (!id || id === state.harness) return;
-    state.harness = id; state.threads = []; state.online = null; state.connectionError = null;
-    try { localStorage.setItem('scheduler-harness', id); } catch { /* Preference can remain session-only. */ }
-  }
+  const visibleAgents = () => arrangedAgents().filter((item) => !item.hidden).map((item) => harnessInfo(item.id)).filter(Boolean);
+  const isVisible = (id) => visibleAgents().some((item) => item.id === id);
   // What a harness supports automatically; until metadata loads, nothing automatic is offered.
   function support(id) {
-    const label = harnessLabel(id);
-    const loading = { supported: false, reason: `Checking what ${label} supports…` };
+    const loading = { supported: false, reason: `Checking what ${harnessLabel(id)} supports…` };
     return harnessInfo(id)?.automation || { whenAvailable: loading, multipleTurns: loading };
   }
-  // Keeps a draft within what its harness supports, for example after choosing another harness.
-  function fitDraft(d) {
-    if (!d) return;
-    const can = support(d.harness);
-    if (!can.whenAvailable.supported) { d.trigger = 'time'; d.waitIfLimited = false; }
-    if (!can.multipleTurns.supported) { d.continuous = false; d.turnLimit = '1'; }
+  function badge(id, { small = false, title } = {}) {
+    const info = harnessInfo(id);
+    const { mark, round } = icons.markFor(id, info?.kind);
+    const status = agentStatus(id);
+    const dot = `<i class="dot ${escape(status.tone)}"></i>`;
+    const body = mark ? `<svg aria-hidden="true"><use href="#${mark}"/></svg>` : `<span class="monogram" aria-hidden="true">${escape(icons.monogram(info?.label || id))}</span>`;
+    return `<span class="badge${round ? ' round' : ''}${small ? ' sm' : ''}" data-agent-badge="${escape(id)}" title="${escape(title ?? `${harnessLabel(id)} · ${status.text}`)}">${body}${dot}</span>`;
   }
+  function availabilityFor(id) {
+    const entry = state.availability[id];
+    const value = entry?.availability;
+    return value ? { ...value, resetsAtLabel: value.resetsAt ? display(value.resetsAt, localZone, 'time') : '' } : null;
+  }
+  function agentStatus(id) {
+    const source = state.sources[id];
+    return compose.agentStatus({
+      info: harnessInfo(id), hidden: arrangedAgents().find((item) => item.id === id)?.hidden === true,
+      online: source?.online ?? null, connectionError: source?.error || null, availability: availabilityFor(id),
+      compatibility: state.compatibility.find((item) => item.harness === id) || null
+    });
+  }
+
+  // ---------- Formatting ----------
   function errorMessage(error) {
     return String(error?.message || 'Something went wrong. Please try again.').replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '');
   }
-  function display(iso, zone = localZone, seconds = false) {
+  function display(iso, zone = localZone, style = 'default') {
     if (!iso) return 'Time unavailable';
-    try { const f = time.formatInstant(iso, zone); return `${f.date} · ${f.time}${seconds ? ':' + f.seconds : ''} ${f.offset}`; } catch { return 'Time unavailable'; }
+    try {
+      const f = time.formatInstant(iso, zone);
+      const today = time.formatInstant(new Date().toISOString(), zone).date;
+      if (style === 'time') return f.date === today ? f.time : `${f.date} ${f.time}`;
+      if (style === 'short') return `${f.date} ${f.time}`;
+      if (style === 'full') return `${f.date} ${f.time} ${f.offset}`;
+      if (style === 'seconds') return `${f.date} · ${f.time}:${f.seconds} ${f.offset}`;
+      return `${f.date} · ${f.time} ${f.offset}`;
+    } catch { return 'Time unavailable'; }
   }
   function relative(iso) {
     const diff = Date.parse(iso) - Date.now();
@@ -79,232 +103,216 @@
     if (absolute < 60000) return diff > 0 ? 'In less than a minute' : 'Just now';
     const unit = absolute < 3600000 ? 'min' : absolute < 86400000 ? 'hour' : 'day';
     const value = Math.floor(absolute / (unit === 'min' ? 60000 : unit === 'hour' ? 3600000 : 86400000));
-    return diff > 0 ? `In ${value} ${unit}${value !== 1 && unit !== 'min' ? 's' : ''}` : `${value} ${unit}${value !== 1 && unit !== 'min' ? 's' : ''} ago`;
+    const plural = value !== 1 && unit !== 'min' ? 's' : '';
+    return diff > 0 ? `In ${value} ${unit}${plural}` : `${value} ${unit}${plural} ago`;
   }
-  const labels = { pending: 'Scheduled', dispatching: 'Sending', sent: 'Sent', failed: 'Failed', canceled: 'Canceled', unconfirmed: 'Delivery unconfirmed', running: 'Agent working', paused: 'Paused', stopped: 'Stopped', finished: 'Finished' };
-  const stateLabels = { working: 'Working', idle: 'Idle', waiting: 'Waiting', open: 'Open elsewhere', 'in-use': 'In use', retrying: 'Retrying', error: 'Error' };
-  const pill = (status, text) => `<span class="pill ${escape(status)}">${escape(text || labels[status] || stateLabels[status] || status)}</span>`;
+  const labels = { pending: 'Scheduled', dispatching: 'Sending', sent: 'Sent', failed: 'Failed', canceled: 'Canceled', unconfirmed: 'Delivery unconfirmed', running: 'Agent working', paused: 'Paused', stopped: 'Stopped', finished: 'Finished', waiting: 'Waiting' };
+  const pill = (status, text) => `<span class="pill ${escape(status)}">${escape(text || labels[status] || status)}</span>`;
   const jobPill = (job) => pill(job.displayStatus || job.deliveryStatus || job.status, job.deliveryLabel);
-  function nav() {
-    return `<nav aria-label="Main navigation">${[['upcoming','Upcoming'],['history','History'],['threads','Threads'],['settings','Settings']].map(([view,label]) => `<button type="button" data-nav="${view}" class="${state.view === view ? 'active' : ''}" ${state.view === view ? 'aria-current="page"' : ''}>${label}<span class="nav-count" data-count="${view}">${view === 'upcoming' ? state.upcomingTotal : view === 'history' && state.unacknowledged ? state.unacknowledged : ''}</span></button>`).join('')}</nav>`;
-  }
-  function connection() {
-    return `<span class="connection ${state.online === false ? 'offline' : ''}" id="connection-state">${state.online === null ? 'Connecting…' : state.online ? escape(harnessLabel()) + ' connected' : 'Offline · queue saved'}</span>`;
-  }
-  // Short names for the contact points in lib/harnesses/errors.js, shown beside the ID for bug reports.
   const CONTACT_POINT_NAMES = { app_path: 'App files', deep_link: 'Conversation links', content_match: 'Open conversation title', composer_label: 'Message box label', send_label: 'Send button label', stop_label: 'Stop button label', label_catalogue: 'Translated labels', session_store: 'Session store', live_registry: 'Working status', transcript: 'Transcript format', originator: 'Conversation owner', app_server: 'Codex server replies' };
   const contactPointName = (id) => CONTACT_POINT_NAMES[id] ? `${CONTACT_POINT_NAMES[id]} (${id})` : id;
-  // One notice per desktop app whose installed version changed in a way this version does not understand.
-  function compatibilityNotices() {
-    return state.compatibility.filter(item => item.problems?.length).map(item => {
-      const name = `${item.label}${item.appVersion ? ' ' + item.appVersion : ''}`;
-      const atRisk = state.upcoming.filter(job => job.harness === item.harness && job.risk).length;
-      const facts = [item.verifiedVersion ? `Verified with ${item.verifiedVersion}` : '', `Changed: ${item.problems.map(problem => contactPointName(problem.contactPoint)).join(', ')}`, item.checkedAt ? `Last checked ${relative(item.checkedAt).toLocaleLowerCase()}` : ''].filter(Boolean);
-      return `<div class="notice" role="status"><div><strong>${escape(name)} isn’t supported yet</strong><p>${escape(item.problems[0].message)}</p>${atRisk ? `<p>${atRisk === 1 ? 'One scheduled message is' : `${atRisk} scheduled messages are`} at risk. ${atRisk === 1 ? 'It stays' : 'They stay'} scheduled, and if the problem remains when ${atRisk === 1 ? 'it is' : 'one is'} due, nothing is sent.</p>` : ''}<details><summary>Technical details</summary><p>${facts.map(escape).join(' · ')}</p></details></div><button type="button" data-action="copy-diagnostics">Copy diagnostics</button><button type="button" class="ghost" data-action="recheck-compatibility" data-harness="${escape(item.harness)}">Check again</button></div>`;
-    }).join('');
-  }
-  function notice() {
-    const storage = state.storageError ? `<div class="notice" role="alert"><div><strong>Local schedule storage needs attention</strong><p>${escape(state.storageError.message)}</p></div></div>` : '';
-    return storage + keepAwakeNotice() + (state.online === false ? `<div class="notice"><div><strong>${escape(harnessLabel())} is unavailable</strong><p>${escape(state.connectionError?.message || `Check that ${harnessLabel()} is available and review your connection settings. Your local queue and history remain available.`)}</p>${technical(state.connectionError)}</div>${state.connectionError?.code === 'permission_required' ? '<button type="button" data-action="open-permission-settings">Open System Settings</button>' : ''}<button type="button" data-action="check">Check connection</button><button type="button" class="ghost" data-nav="settings">Settings</button></div>` : '') + compatibilityNotices();
-  }
-  function keepAwakeNotice() {
-    const k = state.keepAwake;
-    if (!k?.enabled || !['armed','active','releasing','paused','ended'].includes(k.state)) return '';
-    const holding = Boolean(k.holding);
-    const title = holding ? (k.state === 'releasing' ? 'Letting your Mac sleep soon' : `Keeping your Mac awake${k.holding === 'display' ? ' with the display on' : ''}`) : k.state === 'paused' ? 'Keep-awake paused' : 'Your Mac can sleep';
-    const limit = holding && k.deadline && k.state !== 'releasing' ? ` Stops by ${escape(display(k.deadline))} at the latest.` : '';
-    const capped = k.capped || [];
-    const listed = k.tasks.concat(capped);
-    const item = (task, over) => `<li><span>${escape(task.label)}</span> · ${escape(task.detail || task.state)}${task.until ? ` · ${task.state === 'waiting' ? 'starts' : 'until'} ${escape(display(task.until))}` : ''}${over ? ' · reached the time limit' : ''}</li>`;
-    const tasks = k.tasks.map(task => item(task, false)).concat(capped.map(task => item(task, true))).join('');
-    const count = (n) => `${n} ${n === 1 ? 'task' : 'tasks'}`;
-    const summary = [k.tasks.length ? `${count(k.tasks.length)} ${holding ? (k.tasks.length === 1 ? 'needs it' : 'need it') : 'still tracked'}` : '', capped.length ? `${count(capped.length)} reached the time limit` : ''].filter(Boolean).join(' · ');
-    const slept = k.lastSleep?.whileHolding && k.since && k.lastSleep.from >= k.since ? `<p>macOS slept anyway from ${escape(display(k.lastSleep.from))} to ${escape(display(k.lastSleep.to))}. Missed schedules catch up after waking.</p>` : '';
-    const overLimit = holding && capped.length ? `<p>${capped.length} ${capped.length === 1 ? 'task' : 'tasks'} reached the time limit and no longer ${capped.length === 1 ? 'keeps' : 'keep'} the Mac awake.</p>` : '';
-    const unlocked = holding && k.requiresUnlockedScreen ? '<p>A scheduled task drives an app’s interface, so the display stays on. Keep the screen unlocked until it finishes.</p>' : '';
-    const button = holding ? '<button type="button" data-action="keep-awake-stop">Let Mac sleep</button>' : k.state === 'ended' && k.ended?.reason !== 'battery-floor' && listed.length ? '<button type="button" data-action="keep-awake-resume">Keep awake again</button>' : '';
-    return `<div class="notice awake${holding ? ' holding' : ''}" role="status"><div><strong>${title}</strong><p>${escape(k.reason)}${limit}</p>${unlocked}${overLimit}${slept}${tasks ? `<details><summary>${summary}</summary><ul class="awake-tasks">${tasks}</ul></details>` : ''}</div>${button}</div>`;
-  }
-  function keepAwakeSettings() {
-    const k = state.keepAwake;
-    if (!k) return '<section class="card"><span class="overline">Keep awake</span><p>Loading keep-awake settings…</p></section>';
-    if (!state.keepAwakeDraft) state.keepAwakeDraft = { ...k.settings };
-    const d = state.keepAwakeDraft;
-    const box = (id, key, label) => `<div class="setting-row"><label for="${id}">${label}</label><input id="${id}" type="checkbox" ${d[key] ? 'checked' : ''}></div>`;
-    return `<section class="card"><span class="overline">Keep awake</span><h2>Stay awake for tracked work</h2><form id="keep-awake-form">${box('ka-enabled','enabled','Keep this Mac awake while scheduled work waits or runs')}${box('ka-display','keepDisplayOn','Keep the display on too')}${box('ka-agents','includeRunningAgents','Also stay awake while any T3 Code agent turn runs')}<label class="field">On battery<select id="ka-power">${[['any','Keep awake on battery too'],['ac-only','Only when connected to power']].map(([value,label]) => `<option value="${value}" ${d.powerSource === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label><div class="two"><label class="field">Stop at battery · %<input id="ka-floor" type="number" min="0" max="95" required value="${escape(d.batteryFloorPercent)}" ${d.powerSource === 'ac-only' ? 'disabled' : ''}><small>0 keeps going until macOS sleeps for low battery.</small></label><label class="field">Time limit · hours<input id="ka-hours" type="number" min="1" max="72" required value="${escape(d.maxHours)}"><small>Each session ends after this, even if work remains.</small></label></div><p class="help" id="ka-status">${escape(keepAwakeStatus())}</p><details class="help"><summary>Lid, lock screen and sleep</summary><p>Locking the screen or letting the display sleep does not stop scheduled work, except for agents that drive a desktop app (Claude Desktop, ChatGPT Codex threads), which need the Mac unlocked to send. Closing a laptop lid sleeps the Mac unless it is in closed-display mode, with power, an external display and a keyboard or mouse connected. Choosing Sleep or a critically low battery also sleeps the Mac; missed schedules catch up after waking.</p></details><p class="error" id="keep-awake-error" role="alert"></p><div class="actions"><button type="submit" class="primary">Save keep-awake settings</button></div></form></section>`;
-  }
-  function keepAwakeStatus() {
-    const k = state.keepAwake;
-    if (!k) return '';
-    return `Status: ${k.enabled ? k.reason : 'Off. Your Mac sleeps on its usual schedule.'}`;
-  }
   function technical(info) {
     if (!info?.details && !info?.code) return '';
     const details = info.details || {};
-    const app = details.appVersion ? `${details.app || 'App'} ${details.appVersion}${details.verifiedVersion && details.verifiedVersion !== details.appVersion ? ` (verified with ${details.verifiedVersion})` : ''}` : '';
-    return `<details><summary>Technical details</summary><p>${[info.code, details.status ? 'HTTP ' + details.status : '', details.endpoint, details.contentType, app, details.contactPoint && contactPointName(details.contactPoint), details.hint].filter(Boolean).map(escape).join(' · ')}</p></details>`;
+    const appText = details.appVersion ? `${details.app || 'App'} ${details.appVersion}${details.verifiedVersion && details.verifiedVersion !== details.appVersion ? ` (verified with ${details.verifiedVersion})` : ''}` : '';
+    return `<details><summary>Technical details</summary><p>${[info.code, details.status ? 'HTTP ' + details.status : '', details.endpoint, details.contentType, appText, details.contactPoint && contactPointName(details.contactPoint), details.hint].filter(Boolean).map(escape).join(' · ')}</p></details>`;
   }
-  function render(focusSelector) {
-    const active = document.activeElement;
-    const activeId = active?.id;
-    const activeData = active?.dataset ? Object.entries(active.dataset).find(([key])=>['nav','action','job','thread','filter','month','day','quick','harnessKey','trigger'].includes(key)) : null;
-    const selection = active && typeof active.selectionStart === 'number' ? [active.selectionStart, active.selectionEnd] : null;
-    document.body.className = `${state.theme === 'dark' || state.theme === 'system' && mediaTheme.matches ? 'dark' : ''} ${state.reduceMotion ? 'motion-off' : ''}`;
-    const titles = { upcoming: 'Upcoming', history: 'History', threads: state.picking ? `Choose a ${noun()}` : 'Threads', settings: 'Settings', composer: draft()?.editId ? 'Edit schedule' : 'New schedule', detail: 'Message details' };
-    app.innerHTML = `<header class="topbar">${nav()}<div class="top-actions">${connection()}<button type="button" class="ghost" data-action="theme" aria-label="Switch to ${document.body.classList.contains('dark') ? 'light' : 'dark'} theme">${document.body.classList.contains('dark') ? '☀' : '☾'}</button></div></header><main class="content" id="main-content">${['composer','detail'].includes(state.view) || state.picking ? `<button type="button" class="ghost back" data-action="back">← ${state.picking ? 'Back to draft' : 'Back to ' + state.returnView}</button>` : ''}<div class="heading"><h1 tabindex="-1">${titles[state.view]}</h1>${['upcoming','history','threads'].includes(state.view) && !state.picking ? '<button type="button" class="primary" data-action="new">＋ New schedule</button>' : ''}</div><div id="notices">${notice()}</div>${state.actionError ? `<p class="error" role="alert">${escape(state.actionError)}</p>` : ''}${state.view === 'composer' ? composer() : state.view === 'detail' ? detail() : state.view === 'settings' ? settings() : state.view === 'threads' ? threadList() : jobList()}</main>`;
-    bind();
-    if (state.busy) app.querySelectorAll('button, input, textarea, select').forEach(control => { control.disabled = true; });
-    if (focusSelector) $(focusSelector)?.focus();
-    else if (activeId && document.getElementById(activeId)) {
-      const replacement = document.getElementById(activeId); replacement.focus();
-      if (selection && replacement.setSelectionRange && !['number','checkbox'].includes(replacement.type)) replacement.setSelectionRange(...selection);
-    } else if(activeData) app.querySelector('[data-'+activeData[0]+'="'+CSS.escape(activeData[1])+'"]')?.focus();
-    syncStar();
+
+  // ---------- Draft ----------
+  function newDraft(harness = visibleAgents()[0]?.id || state.harnesses[0]?.id || 't3', threadId = '', message = 'Continue', zone = localZone) {
+    const when = time.quickTime(5, zone);
+    return { harness, threadId, threadTitle: '', projectName: '', message, when: '5', whenTouched: false, date: when.date, time: when.time, timeZone: zone, occurrence: '',
+      waitIfLimited: false, far: 'once', turnLimit: '1', stopPhrase: '', editId: null, bufferSeconds: state.settings?.bufferSeconds ?? 5 };
   }
-  function jobList() {
-    const history = state.view === 'history';
-    const all = history ? state.history : state.upcoming;
-    const total = history ? state.historyTotal : state.upcomingTotal;
-    if(state.storageError) return '<p class="help">Your saved records have not been replaced. Scheduling is paused until local storage is repaired.</p>';
-    const query = state.search.trim().toLocaleLowerCase();
-    const rows = all.filter(job => !query || `${job.threadTitle || job.threadId} ${job.projectName || ''} ${job.harnessLabel || ''} ${job.message}`.toLocaleLowerCase().includes(query));
-    return `${state.jobsError ? `<div class="notice"><div><strong>Could not read schedules</strong><p>${escape(state.jobsError)}</p></div><button data-action="refresh">Try again</button></div>` : ''}${history && state.unacknowledged ? `<div class="notice"><div><strong>${state.unacknowledged} ${state.unacknowledged === 1 ? 'delivery needs' : 'deliveries need'} a look</strong><p>Acknowledge an outcome to clear its attention badge. The record stays here.</p></div></div>` : ''}${history ? '' : continuingNotice()}<div class="filters"><label class="sr-only" for="search">Search ${all.length < total ? 'loaded ' : ''}messages</label><input id="search" class="search" type="search" placeholder="Search ${all.length < total ? 'loaded ' : ''}messages…" value="${escape(state.search)}"></div>${history ? `<div class="chips" aria-label="History filters">${[['','All'],['sent','Sent'],['failed','Failed'],['unconfirmed','Unconfirmed'],['canceled','Canceled']].map(([value,label]) => `<button type="button" data-filter="${value}" class="${state.historyFilter === value ? 'active' : ''}" aria-pressed="${state.historyFilter === value}">${label}</button>`).join('')}</div>` : ''}<section class="card" aria-label="${history ? 'Delivery history' : 'Scheduled messages'}"><div class="list-head"><span>${history ? 'DELIVERY LOG' : 'YOUR QUEUE'} · ${total}</span><span>${history ? 'Newest first' : 'Soonest first'} ↓</span></div>${state.loading && !all.length ? '<div class="empty"><p>Loading schedules…</p></div>' : rows.length ? rows.map(jobRow).join('') : `<div class="empty"><div class="empty-icon" aria-hidden="true">◷</div><h2>${query ? 'No matching messages' : history ? 'No history yet' : 'A clear runway.'}</h2><p>${query ? 'Try another search' + (all.length < total ? ' or load more records.' : '.') : history ? 'Your delivery outcomes will appear here.' : 'Schedule a message for when you’re ready to pick things up.'}</p>${!history && !query ? '<button type="button" data-action="new" class="primary">New schedule</button>' : ''}</div>`}</section>${all.length < total ? `<div class="load-more"><button data-action="more">Load more (${all.length} of ${total})</button></div>` : ''}<p class="help">${history ? '“Sent” confirms delivery, not completion of agent work.' : 'Each schedule shows its saved timezone. A saved send time stays fixed when you travel.'}</p>`;
+  const draft = () => { if (!state.draft) state.draft = newDraft(); return state.draft; };
+  // Automation fields of a job or scheduleAgain payload, in draft form.
+  function automationDraft(source) {
+    const trigger = source.trigger || source.automation?.trigger || 'time';
+    const limit = source.automation ? source.automation.limit : source.turnLimit;
+    const continuous = source.automation ? source.automation.unlimited : source.continuous === true;
+    return { waitIfLimited: trigger === 'time-then-available', far: continuous ? 'until' : Number(limit) > 1 ? 'upto' : 'once', turnLimit: String(continuous ? 1 : limit || 1), stopPhrase: source.automation?.stopPhrase || source.stopPhrase || '' };
   }
-  // One visible, one-click way to stop every automatic continuation.
-  function continuingNotice() {
-    const active = state.upcoming.filter(job => job.automation?.state === 'active');
-    if (!active.length) return '';
-    return `<div class="notice continuing"><div><strong>${active.length} automatic ${active.length === 1 ? 'continuation is' : 'continuations are'} running</strong><p>${active.some(job => job.automation.unlimited) ? 'Continuous mode keeps sending until you stop it.' : 'Each stops at its turn limit.'} Stopping never interrupts a turn already in progress.</p></div><button type="button" class="danger" data-action="stop-all">Stop all</button></div>`;
+  // Keeps a draft within what its harness supports.
+  function fitDraft(d) {
+    const can = support(d.harness);
+    if (!can.whenAvailable.supported) { if (d.when === 'available') d.when = '5'; d.waitIfLimited = false; }
+    if (!can.multipleTurns.supported) { d.far = 'once'; d.turnLimit = '1'; }
+    if (!can.stopPhrase?.supported) d.stopPhrase = '';
   }
-  function jobRow(job) {
-    const history = state.view === 'history';
+  function chooseConversation(harness, threadId, title = '', projectName = '') {
+    const d = draft();
+    Object.assign(d, { harness, threadId, threadTitle: title, projectName });
+    fitDraft(d);
+    void refreshAvailability(harness, true);
+  }
+  function conversationOf(d) {
+    return state.sources[d.harness]?.threads?.find((item) => item.id === d.threadId) || null;
+  }
+
+  // ---------- Header ----------
+  function header() {
+    const titles = { picker: `Choose a ${noun(draft().harness)}`, settings: 'Settings', detail: 'Details', history: 'History' };
+    if (state.view !== 'home') {
+      return `<header class="head sub"><button type="button" class="ghost back" data-action="back">← Back</button><span class="title">${escape(titles[state.view])}</span><span class="spacer"></span></header>`;
+    }
+    const agents = visibleAgents().map((item) => badge(item.id)).join('');
+    return `<header class="head"><span class="brand">Auto-Continue</span><div class="tools"><div class="agents" aria-label="Agents">${agents}</div><span class="sep"></span>${awakeToggle()}${state.layout === 'rail'
+      ? '<button type="button" class="icon-btn" data-action="layout" data-layout="window" title="Open as a window" aria-label="Open as a window"><svg aria-hidden="true"><use href="#i-expand"/></svg></button>'
+      : '<button type="button" class="icon-btn" data-action="layout" data-layout="rail" title="Back to the menu bar" aria-label="Back to the menu bar"><svg aria-hidden="true"><use href="#i-collapse"/></svg></button>'}<button type="button" class="icon-btn" data-action="settings" title="Settings" aria-label="Settings"><svg aria-hidden="true"><use href="#i-gear"/></svg></button></div></header>`;
+  }
+  function awakeToggle() {
+    const k = state.keepAwake;
+    const on = Boolean(k?.settings?.enabled);
+    const holding = Boolean(k?.holding);
+    const title = !k ? 'Keep-awake is starting' : !on ? 'Keep-awake is off' : holding ? (k.state === 'releasing' ? 'Letting your Mac sleep soon' : `Keeping your Mac awake${k.holding === 'display' ? ' with the display on' : ''}`) : k.state === 'paused' ? 'Keep-awake paused on battery' : k.state === 'ended' ? 'Your Mac can sleep' : 'Keep-awake is on';
+    const body = !k ? '' : !on ? 'Turn on to keep the Mac awake while queued work waits or runs.' : k.reason;
+    const hint = !k ? '' : on ? 'Click to turn keep-awake off.' : 'Click to turn it on.';
+    return `<span class="tipwrap"><button type="button" id="awake-toggle" class="icon-btn awake${on ? ' on' : ''}${holding ? ' holding' : ''}" data-action="awake" aria-pressed="${on}" aria-label="${escape(title)}" aria-describedby="awake-tip" ${k ? '' : 'disabled'}><svg aria-hidden="true"><use href="#i-awake"/></svg></button><span class="tip${state.tipOpen ? ' open' : ''}" id="awake-tip" role="tooltip"><b>${escape(title)}</b>${escape(body)}${hint ? ` ${escape(hint)}` : ''}</span></span>`;
+  }
+
+  // ---------- Notices ----------
+  function notices() {
+    const storage = state.storageError ? `<div class="notice" role="alert"><div><strong>Local schedule storage needs attention</strong><p>${escape(state.storageError.message)}</p></div></div>` : '';
+    const d = state.draft;
+    const source = d ? state.sources[d.harness] : null;
+    const offline = d && source?.online === false && isVisible(d.harness) ? `<div class="notice" role="status"><div><strong>${escape(harnessLabel(d.harness))} is unavailable</strong><p>${escape(source.error?.message || `Check that ${harnessLabel(d.harness)} is running. Your queue and history remain available.`)}</p>${technical(source.error)}</div>${source.error?.code === 'permission_required' ? '<button type="button" data-action="open-permission-settings">Open System Settings</button>' : ''}<button type="button" data-action="check" data-harness="${escape(d.harness)}">Check</button></div>` : '';
+    return storage + offline + keepAwakeNotice() + compatibilityNotices();
+  }
+  // One notice per desktop app whose installed version changed in a way this version does not understand.
+  function compatibilityNotices() {
+    return state.compatibility.filter((item) => item.problems?.length).map((item) => {
+      const name = `${item.label}${item.appVersion ? ' ' + item.appVersion : ''}`;
+      const atRisk = state.upcoming.filter((job) => job.harness === item.harness && job.risk).length;
+      const facts = [item.verifiedVersion ? `Verified with ${item.verifiedVersion}` : '', `Changed: ${item.problems.map((problem) => contactPointName(problem.contactPoint)).join(', ')}`, item.checkedAt ? `Last checked ${relative(item.checkedAt).toLocaleLowerCase()}` : ''].filter(Boolean);
+      return `<div class="notice" role="status"><div><strong>${escape(name)} isn’t supported yet</strong><p>${escape(item.problems[0].message)}</p>${atRisk ? `<p>${atRisk === 1 ? 'One scheduled message is' : `${atRisk} scheduled messages are`} at risk. ${atRisk === 1 ? 'It stays' : 'They stay'} scheduled, and if the problem remains when ${atRisk === 1 ? 'it is' : 'one is'} due, nothing is sent.</p>` : ''}<details><summary>Technical details</summary><p>${facts.map(escape).join(' · ')}</p></details></div><button type="button" data-action="copy-diagnostics">Copy diagnostics</button><button type="button" class="ghost" data-action="recheck-compatibility" data-harness="${escape(item.harness)}">Check again</button></div>`;
+    }).join('');
+  }
+  // Keep-awake only interrupts when something is not routine: it paused, ended, hit its limit or macOS slept anyway.
+  function keepAwakeNotice() {
+    const k = state.keepAwake;
+    if (!k?.enabled) return '';
+    const holding = Boolean(k.holding);
+    const capped = k.capped || [];
+    const slept = k.lastSleep?.whileHolding && k.since && k.lastSleep.from >= k.since;
+    if (holding && !capped.length && !slept) return '';
+    if (!holding && !['paused', 'ended'].includes(k.state) && !capped.length && !slept) return '';
+    const title = holding ? 'Keeping your Mac awake' : k.state === 'paused' ? 'Keep-awake paused' : 'Your Mac can sleep';
+    const item = (task, over) => `<li><span>${escape(task.label)}</span> · ${escape(task.detail || task.state)}${task.until ? ` · ${task.state === 'waiting' ? 'starts' : 'until'} ${escape(display(task.until))}` : ''}${over ? ' · reached the time limit' : ''}</li>`;
+    const tasks = k.tasks.map((task) => item(task, false)).concat(capped.map((task) => item(task, true))).join('');
+    const count = (n) => `${n} ${n === 1 ? 'task' : 'tasks'}`;
+    const summary = [k.tasks.length ? `${count(k.tasks.length)} ${holding ? (k.tasks.length === 1 ? 'needs it' : 'need it') : 'still tracked'}` : '', capped.length ? `${count(capped.length)} reached the time limit` : ''].filter(Boolean).join(' · ');
+    const sleptText = slept ? `<p>macOS slept anyway from ${escape(display(k.lastSleep.from))} to ${escape(display(k.lastSleep.to))}. Missed schedules catch up after waking.</p>` : '';
+    const overLimit = holding && capped.length ? `<p>${capped.length} ${capped.length === 1 ? 'task' : 'tasks'} reached the time limit and no longer ${capped.length === 1 ? 'keeps' : 'keep'} the Mac awake.</p>` : '';
+    const button = holding ? '<button type="button" data-action="keep-awake-stop">Let Mac sleep</button>' : k.state === 'ended' && k.ended?.reason !== 'battery-floor' && (k.tasks.length || capped.length) ? '<button type="button" data-action="keep-awake-resume">Keep awake again</button>' : '';
+    return `<div class="notice awake${holding ? ' holding' : ''}" role="status"><div><strong>${title}</strong><p>${escape(k.reason)}</p>${overLimit}${sleptText}${tasks ? `<details><summary>${summary}</summary><ul class="awake-tasks">${tasks}</ul></details>` : ''}</div>${button}</div>`;
+  }
+
+  // ---------- Home: compose ----------
+  function composeBlock() {
+    const d = draft();
+    const can = support(d.harness);
+    const label = harnessLabel(d.harness);
+    const conversation = conversationOf(d);
+    const title = conversation?.title || d.threadTitle || (d.threadId ? `${noun(d.harness).replace(/^./, (c) => c.toUpperCase())} ${d.threadId}` : `Choose a ${noun(d.harness)}`);
+    const project = conversation?.projectName || d.projectName || '';
+    const sub = d.threadId ? [label, project, conversation?.updatedAt ? relative(conversation.updatedAt).toLocaleLowerCase() : ''].filter(Boolean).join(' · ') : 'Most recent first, from every agent';
+    const picker = `<button type="button" class="pick" id="pick" data-action="pick" ${d.editId ? 'disabled' : ''} aria-label="${escape(d.threadId ? `Conversation: ${title}` : `Choose a ${noun(d.harness)}`)}">${d.threadId ? badge(d.harness, { title: label }) : '<span class="badge empty" aria-hidden="true">?</span>'}<span class="t"><b>${escape(title)}</b><small>${escape(sub)}</small></span><span class="chev" aria-hidden="true">${d.editId ? '' : '▾'}</span></button>`;
+    const whenChips = compose.WHEN.map(([value, text]) => {
+      const off = value === 'available' && !can.whenAvailable.supported;
+      return `<button type="button" data-when="${value}" class="${d.when === value ? 'active' : ''}" aria-pressed="${d.when === value}" ${off ? `disabled title="${escape(can.whenAvailable.reason)}"` : ''}>${text}</button>`;
+    }).join('');
+    const availability = availabilityFor(d.harness);
+    const limited = availability?.state === 'limited';
+    const hint = can.whenAvailable.supported && limited ? `<div class="hint">${escape(label)} is limited${availability.resetsAt ? ` until ${escape(availability.resetsAtLabel)}` : ', reset time unknown'} <button type="button" class="link" data-action="check-availability">check again</button></div>` : '';
+    const wait = can.whenAvailable.supported && d.when !== 'available' ? `<label class="check"><input id="wait-if-limited" type="checkbox" ${d.waitIfLimited ? 'checked' : ''}> If ${escape(label)} is at a usage limit then, wait for it</label>` : '';
+    const custom = d.when === 'custom' ? `<div class="custom" id="custom-time"><div class="two"><label class="sr-only" for="date">Date, yyyy-mm-dd</label><input id="date" inputmode="numeric" value="${escape(d.date)}" placeholder="yyyy-mm-dd" aria-describedby="plan-error"><label class="sr-only" for="time">Time, 24-hour</label><input id="time" inputmode="numeric" value="${escape(d.time)}" placeholder="HH:mm" aria-describedby="plan-error"></div>${occurrence(d)}<label class="zone">Timezone <input id="timezone" list="timezones" value="${escape(d.timeZone)}" autocomplete="off" spellcheck="false"><datalist id="timezones">${zones().map((zone) => `<option value="${escape(zone)}"></option>`).join('')}</datalist></label></div>` : '';
+    const far = can.multipleTurns.supported ? `<div class="lbl" id="far-label">How far</div><div class="seg" role="group" aria-labelledby="far-label">${[['once', 'Once'], ['upto', 'Up to'], ['until', 'Until done']].map(([value, text]) => `<button type="button" data-far="${value}" class="${d.far === value ? 'active' : ''}" aria-pressed="${d.far === value}">${text}</button>${value === 'upto' ? `<input id="turn-limit" class="num" type="text" inputmode="numeric" value="${escape(d.turnLimit)}" aria-label="Turn limit" ${d.far === 'upto' ? '' : 'disabled'}>` : ''}`).join('')}</div>${can.stopPhrase?.supported && d.far !== 'once' ? `<label class="zone phrase">Or stop at <input id="stop-phrase" type="text" maxlength="200" spellcheck="false" placeholder="a phrase in the agent's last message, e.g. TASK COMPLETE" value="${escape(d.stopPhrase)}" title="${escape(can.stopPhrase.reason)}"></label>` : ''}` : '';
+    const message = state.messageOpen
+      ? `<textarea id="message" maxlength="4000" rows="3" aria-label="Message">${escape(d.message)}</textarea>`
+      : `<div class="msg" id="message-line"><span>${escape(d.message)}</span><button type="button" class="ghost" data-action="edit-message">Edit</button></div>`;
+    const plan = compose.planSentence({ draft: d, label, availability, time, display, supportsTurns: can.multipleTurns.supported });
+    const editing = d.editId ? `<div class="editing"><span>Editing a queued message</span><button type="button" class="ghost" data-action="cancel-edit">Cancel</button></div>` : '';
+    return `<section class="compose" aria-label="Continue a conversation"><form id="continue-form">${editing}${picker}<div class="lbl" id="when-label">When</div><div class="seg" role="group" aria-labelledby="when-label">${whenChips}</div>${hint}${wait}${custom}${far}<div class="lbl">Message</div>${message}<p class="error" id="plan-error" role="alert"></p><div class="go"><button type="submit" class="primary" id="continue">${d.editId ? 'Save changes' : 'Continue'}</button><small id="plan">${escape(plan)}</small></div></form></section>`;
+  }
+  function occurrence(d) {
+    let candidates;
+    try { candidates = time.wallTimeCandidates(d.date, d.time, d.timeZone); } catch { return ''; }
+    if (candidates.length < 2) return '';
+    return `<label class="zone">This time occurs twice <select id="occurrence"><option value="">Choose which</option>${candidates.map((candidate, index) => `<option value="${candidate.iso}" ${d.occurrence === candidate.iso ? 'selected' : ''}>${index === 0 ? 'First' : 'Second'} · ${time.offsetLabel(candidate.offsetMinutes)}</option>`).join('')}</select></label>`;
+  }
+  function zones() { try { return [localZone, 'UTC', ...Intl.supportedValuesOf('timeZone')].filter((value, index, list) => list.indexOf(value) === index); } catch { return [localZone, 'UTC', 'Europe/London', 'America/New_York', 'Asia/Tokyo']; } }
+
+  // ---------- Home: queue and recent ----------
+  const rowContext = () => ({ display, relative, localZone });
+  function jobRow(job, { history = false } = {}) {
     const status = job.displayStatus || job.deliveryStatus || job.status;
-    const running = !history && status === 'running';
-    const when = history ? job.updatedAt || job.scheduleAt : running ? job.dispatchedAt || job.updatedAt : job.effectiveAt || job.scheduleAt;
-    const zone = job.timeZone || localZone;
-    const prefix = running ? 'Sent ' : !history && status === 'waiting' ? 'Next check ' : '';
-    const progress = job.automation ? `<span class="progress">${escape(job.automation.progressLabel)}</span>` : '';
-    return `<button type="button" class="row" data-job="${escape(job.id)}"><div class="row-top"><span class="overline">${escape(jobSource(job))}</span><span class="pills">${job.risk ? '<span class="pill risk">At risk</span>' : ''}${jobPill(job)}</span></div><div class="row-title">${escape(job.threadTitle || job.threadId)}</div><div class="row-preview">${escape(job.message)}</div><div class="meta"><span>${escape(prefix + display(when, zone))}${progress}</span><span data-relative="${escape(when)}">${relative(when)}</span></div></button>`;
+    const running = status === 'running';
+    const auto = job.automation;
+    const editable = status === 'pending' && (!auto || (auto.state === 'active' && auto.currentTurn === 1));
+    const act = (name, text, cls = 'ghost', extra = '') => `<button type="button" class="${cls}" data-action="${name}" data-job="${escape(job.id)}" ${extra}>${text}</button>`;
+    const actions = history
+      ? (job.canResume ? act('resume', 'Resume') : status === 'unconfirmed' ? act('reconcile', 'Check') : '')
+      : `${editable ? act('edit', 'Edit') : ''}${job.canStop ? (auto ? act('stop', 'Stop') : act('cancel', '×', 'x', 'title="Cancel" aria-label="Cancel"')) : ''}`;
+    const pills = history ? jobPill(job) : job.risk ? '<span class="pill risk">At risk</span>' : '';
+    return `<div class="q${running ? ' running' : ''}" data-job="${escape(job.id)}"><button type="button" class="open" data-open="${escape(job.id)}" aria-label="${escape(job.threadTitle || job.threadId)}">${badge(job.harness || 't3', { small: true, title: harnessLabel(job.harness || 't3') })}<span class="t"><b>${escape(job.threadTitle || job.threadId)}</b><small data-meta="${history ? 'history' : 'queue'}">${escape(compose.queueMeta(job, { ...rowContext(), labelled: !history }))}</small></span></button>${pills}<span class="acts" data-acts="${escape(job.id)}">${actions}</span></div>`;
   }
-  function jobSource(job) { return [job.harnessLabel || harnessLabel(job.harness || 't3'), job.projectName || job.projectId].filter(Boolean).join(' · '); }
+  function queue() {
+    if (state.storageError) return '<section class="queue"><div class="empty"><b>Scheduling is paused</b><small>Your saved records have not been replaced. Repair local storage to continue.</small></div></section>';
+    const active = state.upcoming.filter((job) => job.automation?.state === 'active');
+    const stopAll = active.length ? `<button type="button" class="ghost" data-action="stop-all" title="Stop every running continuation">Stop all</button>` : '';
+    const rows = state.upcoming.length ? state.upcoming.map((job) => jobRow(job)).join('') : state.loading ? '<div class="empty"><small>Loading…</small></div>' : '<div class="empty"><b>Nothing queued</b><small>Pick a conversation above and press Continue.</small></div>';
+    const recent = state.history.slice(0, RECENT_ROWS);
+    const attention = state.unacknowledged ? `<small>${state.unacknowledged} ${state.unacknowledged === 1 ? 'needs' : 'need'} a look</small>` : '';
+    return `<section class="queue" aria-label="Queued">${state.jobsError ? `<div class="notice"><div><strong>Could not read the queue</strong><p>${escape(state.jobsError)}</p></div><button type="button" data-action="refresh">Try again</button></div>` : ''}<div class="qhead"><span class="overline">Queued${state.upcomingTotal ? ` · ${state.upcomingTotal}` : ''}</span>${stopAll}</div>${rows}${recent.length ? `<details class="recent" open><summary><span class="overline">Recent</span>${attention}</summary>${recent.map((job) => jobRow(job, { history: true })).join('')}<button type="button" class="link more" data-action="history">All history</button></details>` : ''}</section>`;
+  }
+
+  // ---------- Picker ----------
+  function picker() {
+    const d = draft();
+    const sources = visibleAgents().map((info) => ({ harness: info.id, label: info.label, threads: state.sources[info.id]?.threads || [] }));
+    const rows = compose.mergeConversations(sources, { showSettled: state.showSettled, query: state.pickerQuery });
+    const offline = visibleAgents().filter((info) => state.sources[info.id]?.online === false).map((info) => `<div class="note"><span>${escape(info.label)}: ${escape(state.sources[info.id].error?.message || 'not reachable')}</span><button type="button" class="link" data-action="check" data-harness="${escape(info.id)}">Check</button></div>`).join('');
+    const loading = visibleAgents().some((info) => !state.sources[info.id]);
+    const list = rows.length ? rows.map((row) => `<button type="button" class="q pickrow${row.harness === d.harness && row.id === d.threadId ? ' chosen' : ''}" data-thread="${escape(row.id)}" data-harness="${escape(row.harness)}">${badge(row.harness, { small: true, title: row.harnessLabel })}<span class="t"><b>${escape(row.title)}</b><small>${escape([row.harnessLabel, row.projectName || row.projectId, row.updatedAt ? relative(row.updatedAt).toLocaleLowerCase() : ''].filter(Boolean).join(' · '))}</small></span>${row.settled === true ? pill('quiet', 'Settled') : row.state && row.state !== 'unknown' ? pill(row.state, row.state) : ''}</button>`).join('')
+      : `<div class="empty"><b>${loading ? 'Loading conversations…' : state.pickerQuery ? 'No matching conversations' : 'No conversations yet'}</b><small>${loading ? '' : state.pickerQuery ? 'Try another search.' : visibleAgents().length ? 'Start a conversation in one of your agents, or show settled ones.' : 'Show at least one agent in Settings.'}</small></div>`;
+    return `<section class="picker"><div class="search"><input id="picker-search" type="search" placeholder="Find a conversation…" aria-label="Find a conversation" value="${escape(state.pickerQuery)}"></div>${offline}<div class="list">${list}</div><button type="button" class="link more" data-action="toggle-settled">${state.showSettled ? 'Hide settled' : 'Show settled too'}</button></section>`;
+  }
+
+  // ---------- Detail ----------
+  function findJob(id = state.selected) { return [...state.upcoming, ...state.history].find((job) => job.id === id) || (state.selectedJob?.id === id ? state.selectedJob : null); }
+  function detail() {
+    const job = findJob();
+    if (!job) return '<div class="empty"><b>Message unavailable</b><small>Go back and refresh.</small></div>';
+    const zone = job.timeZone || localZone;
+    const status = job.deliveryStatus || job.status;
+    const auto = job.automation;
+    const label = job.harnessLabel || harnessLabel(job.harness || 't3');
+    const timed = !auto || auto.trigger !== 'available' || auto.currentTurn > 1;
+    const mark = status === 'unconfirmed' && job.canMarkNotDelivered ? (state.confirmMark ? `<div class="confirm" role="group" aria-label="Confirm not delivered"><p>Only after checking the ${escape(noun(job.harness))} yourself. The app checks once more and confirms the delivery instead if it finds the message. After marking, a continuation sends the same message again on Resume, so if it did arrive the agent would receive it twice.</p><button type="button" class="danger" data-action="confirm-mark">Mark as not delivered</button> <button type="button" class="ghost" data-action="keep-mark">Keep</button></div>` : '<button type="button" class="ghost danger" data-action="mark-not-delivered">Mark as not delivered…</button>') : '';
+    const problem = ['failed', 'unconfirmed'].includes(status) ? `<div class="error-detail"><h3>${status === 'unconfirmed' ? 'Check delivery before trying again' : 'This message could not be delivered'}</h3><p>${escape(job.error?.message || job.note)}</p>${technical(job.error)}${job.lastReconciledAt ? `<p>Last checked ${escape(display(job.lastReconciledAt, zone))}. ${status === 'unconfirmed' ? 'Delivery is still unconfirmed. No resend was attempted.' : ''}</p>` : ''}<div class="actions"><button type="button" data-action="ack" ${job.acknowledgedAt ? 'disabled' : ''}>${job.acknowledgedAt ? 'Acknowledged ✓' : 'Acknowledge'}</button>${mark}</div></div>` : '';
+    const info = problem || (auto ? (['waiting', 'pending'].includes(job.displayStatus) && job.note ? `<p class="help">${escape(job.note)}</p>` : '') : status === 'sent' ? `<p class="help">${escape(label)} accepted the message.${job.turn ? '' : ' This does not confirm that the agent completed its work.'}</p>` : job.note ? `<p class="help">${escape(job.note)}</p>` : '');
+    const risky = Boolean(job.risk) && (status === 'pending' || auto?.state === 'active');
+    const risk = risky ? `<div class="risk-detail"><h3>${auto ? 'The next turn may not be sent' : 'This message may not be sent'}</h3><p>${escape(job.risk.message)}</p><p>${auto ? 'The continuation keeps going. If the problem remains when its next turn is due, nothing is sent and it pauses.' : 'It stays scheduled. If the problem remains when it is due, it fails without sending anything.'}</p></div>` : '';
+    const actions = auto ? automationActions(job, status) : status === 'pending' ? '<button type="button" class="primary" data-action="edit">Edit</button><button type="button" class="ghost danger" data-action="cancel">Cancel message</button>' : status === 'unconfirmed' ? '<button type="button" class="primary" data-action="reconcile">Check delivery</button>' : status !== 'dispatching' ? '<button type="button" class="primary" data-action="again">Continue again</button>' : '<p class="help">Sending has started. This message can no longer be changed or canceled.</p>';
+    const confirm = state.confirmCancel ? '<div class="confirm" role="group" aria-label="Confirm cancellation"><p>Cancel this queued message? The record stays in History.</p><button type="button" class="danger" data-action="confirm-cancel">Cancel message</button> <button type="button" class="ghost" data-action="keep">Keep it</button></div>' : '';
+    return `<section class="detail"><div class="detail-header">${badge(job.harness || 't3', { title: label })}<span class="overline">${escape([label, job.projectName || job.projectId].filter(Boolean).join(' · '))}</span><span class="pills">${risky ? '<span class="pill risk">At risk</span>' : ''}${jobPill(job)}</span></div><h2>${escape(job.threadTitle || job.threadId)}</h2><p class="message">${escape(job.message)}</p>${auto ? `<div class="actions">${actions}</div>${risk}${info}${automationDetail(job, zone)}` : ''}<dl class="key-values"><dt>Agent</dt><dd>${escape(label)}</dd>${auto ? '' : turnSummary(job)}${timed ? `<dt>Requested time</dt><dd>${escape(display(job.scheduleAt, zone))}</dd>` : `<dt>Start</dt><dd>When ${escape(label)} is available</dd>`}${auto && !['pending', 'dispatching'].includes(status) ? '' : `<dt>${job.displayStatus === 'waiting' ? 'Next check' : 'Effective send time'}</dt><dd>${escape(display(job.effectiveAt, zone, 'seconds'))}</dd>`}<dt>Timezone</dt><dd>${escape(zone)}${job.timeZone ? '' : ' (legacy record)'}</dd><dt>Safety buffer</dt><dd>${job.bufferSeconds} seconds</dd><dt>Last updated</dt><dd>${escape(display(job.updatedAt || job.createdAt || job.scheduleAt, zone))}</dd>${job.lateBySeconds > 0 ? `<dt>Catch-up delay</dt><dd>${job.lateBySeconds} seconds</dd>` : ''}</dl>${auto ? '' : `${risk}${info}<div class="actions">${actions}</div>`}${confirm}</section>`;
+  }
   const turnLabels = { running: 'Running', completed: 'Finished', failed: 'Stopped with an error', interrupted: 'Interrupted', unknown: 'Unknown' };
   function turnSummary(job) {
     if (!job.turn) return '';
     const reset = job.turn.usageLimit?.resetsAt ? ` · limit resets ${display(job.turn.usageLimit.resetsAt, job.timeZone || localZone)}` : '';
     return `<dt>Agent turn</dt><dd>${escape((turnLabels[job.turn.state] || job.turn.state) + reset)}</dd>`;
   }
-  function threadList() {
-    const query = state.search.trim().toLocaleLowerCase();
-    const rows = state.threads.filter(thread => (state.showSettled || thread.settled !== true) && (!query || `${thread.title} ${thread.projectName || thread.projectId}`.toLocaleLowerCase().includes(query)));
-    return `<div class="filters"><label class="sr-only" for="threads-harness">Agent harness</label><select id="threads-harness" class="harness-select">${harnessOptions(state.harness)}</select><input class="search" id="search" type="search" aria-label="Search ${escape(noun())}s" placeholder="Find a ${escape(noun())}…" value="${escape(state.search)}"><label><input id="show-settled" type="checkbox" ${state.showSettled ? 'checked' : ''}> Show settled</label><button type="button" class="ghost" data-action="refresh">Refresh</button></div><section class="card" aria-label="Threads"><div class="list-head"><span>${state.showSettled ? `NON-ARCHIVED ${escape(noun().toUpperCase())}S` : 'SETTLED HIDDEN'}</span><span>Recent activity ↓</span></div>${rows.length ? rows.map(thread => `<button type="button" class="row" data-thread="${escape(thread.id)}"><div class="row-top"><span class="overline">${escape([thread.projectName || thread.projectId || harnessLabel(), thread.source].filter(Boolean).join(' · '))}</span>${pill(thread.state)}</div><div class="row-title">${escape(thread.title)}</div><div class="meta"><span>${thread.updatedAt ? `<span class="thread-time-short" aria-hidden="true">${escape(display(thread.updatedAt))}</span><time class="thread-time-exact" datetime="${escape(thread.updatedAt)}">${escape(thread.updatedAt)}</time>` : 'Last update unavailable'}</span><span data-relative="${escape(thread.updatedAt || '')}">${thread.updatedAt ? relative(thread.updatedAt) : ''}</span></div></button>`).join('') : `<div class="empty"><h2>${state.online === false ? `${escape(noun()).replace(/^./, c => c.toUpperCase())}s are unavailable` : `No matching ${escape(noun())}s`}</h2><p>${state.online === false ? `Reconnect to ${escape(harnessLabel())} to choose a ${escape(noun())}.` : `Clear your search or include settled ${escape(noun())}s.`}</p>${state.online !== false ? `<button type="button" data-action="clear-thread-filter">Show all non-archived ${escape(noun())}s</button>` : ''}</div>`}</section><p class="help">Unknown states stay visible. Settled filtering never hides existing scheduled messages.</p>`;
-  }
-  function composer() {
-    const d = draft();
-    if (!d) return '<p>Preparing your draft…</p>';
-    const thread = d.harness === state.harness ? state.threads.find(item => item.id === d.threadId) : null;
-    const kind = noun(d.harness);
-    const title = thread?.title || d.threadTitle || (d.threadId ? `${kind.replace(/^./, c => c.toUpperCase())} ${d.threadId}` : `Choose a ${kind}`);
-    const timed = d.trigger !== 'available';
-    const timeFields = `<div class="chips" aria-label="Quick times"><button type="button" data-quick="5">+5 min</button><button type="button" data-quick="30">+30 min</button><button type="button" data-quick="60">+1 hour</button><button type="button" data-quick="tomorrow">Tomorrow, 09:00</button></div><div class="two"><label class="field">Date · yyyy-mm-dd<input id="date" inputmode="numeric" value="${escape(d.date)}" placeholder="yyyy-mm-dd" pattern="[0-9]{4}-[0-9]{2}-[0-9]{2}" required aria-describedby="schedule-error"></label><label class="field">Time · 24-hour<input id="time" inputmode="numeric" value="${escape(d.time)}" placeholder="HH:mm" pattern="[0-2][0-9]:[0-5][0-9]" required aria-describedby="schedule-error"></label></div><button type="button" class="ghost" data-action="calendar" aria-expanded="${state.calendarOpen}" aria-controls="calendar">▦ ${state.calendarOpen ? 'Hide' : 'Open'} calendar</button>${state.calendarOpen ? calendar() : ''}<label class="field">Timezone<input id="timezone" list="timezones" value="${escape(d.timeZone)}" required autocomplete="off"><datalist id="timezones">${zones().map(zone => `<option value="${escape(zone)}"></option>`).join('')}</datalist></label>`;
-    return `<section class="card panel" aria-label="Schedule composer"><form id="schedule-form"><label class="field" for="harness">Agent harness</label><select id="harness" class="harness-select" ${d.editId ? 'disabled' : ''}>${harnessOptions(d.harness)}</select><label class="field">Send to ${escape(kind)}</label><button type="button" class="thread-picker" data-action="pick" ${d.editId ? 'disabled' : ''}>${escape(title)}${d.editId ? '' : ' ⌄'}<small>${escape(thread?.projectName || d.projectName || (d.threadId ? harnessLabel(d.harness) : 'Most recently active first'))}</small></button><label class="field" for="message">Message</label><textarea id="message" name="message" maxlength="4000" required>${escape(d.message)}</textarea>${startControls(d)}${timed ? timeFields : ''}${turnControls(d)}<div id="schedule-preview">${schedulePreview()}</div><p class="error" id="schedule-error" role="alert"></p><button type="submit" class="primary full">${d.editId ? 'Save changes' : timed ? 'Schedule message' : 'Start when available'} ↗</button></form></section>`;
-  }
-  // Trigger choice. Modes the harness cannot support stay visible, disabled, with the reason.
-  function startControls(d) {
-    const can = support(d.harness).whenAvailable;
-    const label = harnessLabel(d.harness);
-    const option = (value, text) => `<button type="button" data-trigger="${value}" class="${d.trigger === value ? 'active' : ''}" aria-pressed="${d.trigger === value}" ${value === 'available' && !can.supported ? 'disabled aria-describedby="trigger-help"' : ''}>${text}</button>`;
-    const wait = d.trigger === 'time' ? `<label class="check"><input id="wait-if-limited" type="checkbox" ${d.waitIfLimited && can.supported ? 'checked' : ''} ${can.supported ? '' : 'disabled'} aria-describedby="trigger-help"> If ${escape(label)} is at a usage limit then, wait until it is available</label>` : '';
-    return `<label class="field" id="start-label">Start</label><div class="chips" role="group" aria-labelledby="start-label">${option('time', 'At a time')}${option('available', 'When available')}</div>${wait}<p class="help" id="trigger-help">${escape(can.reason)}</p>`;
-  }
-  function turnControls(d) {
-    const can = support(d.harness).multipleTurns;
-    const off = !can.supported;
-    return `<div class="turns"><label class="field">Turn limit<input id="turn-limit" type="number" min="1" step="1" inputmode="numeric" required value="${escape(d.continuous ? '' : d.turnLimit)}" placeholder="${d.continuous ? 'No limit' : '1'}" ${d.continuous || off ? 'disabled' : ''} aria-describedby="turn-help"><small>Messages to send in total. Each one waits for the previous turn to finish.</small></label><label class="check"><input id="continuous" type="checkbox" ${d.continuous && !off ? 'checked' : ''} ${off ? 'disabled' : ''} aria-describedby="turn-help"> Keep continuing until I stop it</label></div><p class="help" id="turn-help">${escape(can.reason)}${can.supported ? ' A finished turn does not mean the task is done, so set a limit or stop it yourself.' : ''}</p>`;
-  }
-  function zones() { try { return [localZone, 'UTC', ...Intl.supportedValuesOf('timeZone')].filter((value, index, list) => list.indexOf(value) === index); } catch { return [localZone, 'UTC', 'Europe/London', 'America/New_York', 'Asia/Tokyo']; } }
-  function availabilityText(harness) {
-    const entry = state.availability[harness || 't3'];
-    if (!entry || (!entry.availability && !entry.error)) return 'Checking availability…';
-    if (entry.error) return `Availability could not be read: ${entry.error}`;
-    const value = entry.availability;
-    const source = value.source === 'reported' ? 'reported by the agent' : value.source === 'inferred' ? 'inferred from local records' : 'no source';
-    const now = { available: 'Available now', limited: value.resetsAt ? `At a usage limit until ${display(value.resetsAt)}` : 'At a usage limit, reset time unknown', unavailable: value.reason === 'screen_locked' ? 'Waiting for the Mac to be unlocked' : 'Unavailable', unknown: 'Availability unknown' }[value.state] || 'Availability unknown';
-    return `${now} · ${source} · checked ${relative(value.checkedAt).toLocaleLowerCase()}`;
-  }
-  function turnPlan(d) {
-    if (d.continuous) return 'Keeps sending after each finished turn until you stop it.';
-    const limit = Number(d.turnLimit);
-    if (!Number.isInteger(limit) || limit < 1) return 'Enter a turn limit of 1 or more.';
-    return limit === 1 ? 'Sends one message.' : `Sends up to ${limit} messages, each after the previous turn finishes.`;
-  }
-  const rules = '<details><summary>Scheduling rules</summary><p>New user activity after schedule creation cancels a single message and pauses an automatic continuation. Continuations also pause when a turn fails, is interrupted, ends unclear, or the agent asks you something, and never resend when delivery is uncertain. Saved send times stay fixed when your system timezone changes. Missed schedules catch up when the app resumes.</p></details>';
-  function schedulePreview() {
-    const d = draft();
-    const plan = `<span>${escape(turnPlan(d))}</span>`;
-    if (d.trigger === 'available') {
-      return `<div class="summary"><span class="overline">Send preview</span><strong>As soon as ${escape(harnessLabel(d.harness))} is available</strong><span>${escape(availabilityText(d.harness))}</span><br>${plan}<br>${d.bufferSeconds ? `Waits the ${d.bufferSeconds}-second safety buffer after a limit resets.` : 'No safety buffer.'}${rules}</div>`;
-    }
-    let candidates;
-    try { candidates = time.wallTimeCandidates(d.date, d.time, d.timeZone); } catch (error) { return `<p class="help">${escape(errorMessage(error))}</p>`; }
-    if (!candidates.length) return '<p class="error">That time does not exist when the clocks move forward. Choose another time.</p>';
-    const selected = candidates.length === 1 ? candidates[0] : candidates.find(candidate => candidate.iso === d.occurrence);
-    const waiting = d.waitIfLimited && support(d.harness).whenAvailable.supported ? `<br><span>If ${escape(harnessLabel(d.harness))} is at a usage limit then, it waits until the limit resets.</span>` : '';
-    return `${candidates.length > 1 ? `<label class="field">This time occurs twice. Choose an offset<select id="occurrence" required><option value="">Choose an occurrence</option>${candidates.map((candidate,index) => `<option value="${candidate.iso}" ${d.occurrence === candidate.iso ? 'selected' : ''}>${index === 0 ? 'First' : 'Second'} · ${time.offsetLabel(candidate.offsetMinutes)}</option>`).join('')}</select></label>` : ''}<div class="summary"><span class="overline">Send preview</span><strong>${selected ? escape(display(new Date(Date.parse(selected.iso) + d.bufferSeconds * 1000).toISOString(), d.timeZone, true)) : 'Choose which occurrence to use'}</strong>${d.bufferSeconds ? `Includes the ${d.bufferSeconds}-second safety buffer.` : 'No safety buffer.'}<br>${plan}${waiting}${rules}</div>`;
-  }
-  // Reads the harness's current availability for the composer preview.
-  async function refreshAvailability(harness = draft()?.harness || 't3') {
-    if (!support(harness).whenAvailable.supported || !api.checkAvailability) return;
-    // One read at a time per harness; the previous reading stays visible until the new one arrives.
-    const previous = state.availability[harness];
-    if (previous?.loading) return;
-    state.availability[harness] = { ...(previous || {}), loading: true };
-    try { const result = await api.checkAvailability(harness); state.availability[harness] = result.ok ? { availability: result.availability, at: Date.now() } : { error: result.error?.message || 'Unknown error', at: Date.now() }; }
-    catch (error) { state.availability[harness] = { error: errorMessage(error), at: Date.now() }; }
-    if (state.view === 'composer') updatePreview();
-  }
-  function updatePreview() {
-    const target = $('#schedule-preview');
-    if (target) { target.innerHTML = schedulePreview(); bindOccurrence(); }
-  }
-  function calendar() {
-    const d = draft();
-    const month = /^\d{4}-\d{2}$/.test(state.calendarMonth) ? state.calendarMonth : d.date.slice(0,7);
-    const [year, numericMonth] = month.split('-').map(Number);
-    const safeYear = year >= 1000 && year <= 9999 ? year : new Date().getFullYear();
-    const safeMonth = numericMonth >= 1 && numericMonth <= 12 ? numericMonth : new Date().getMonth() + 1;
-    state.calendarMonth = `${safeYear}-${String(safeMonth).padStart(2,'0')}`;
-    const count = new Date(Date.UTC(safeYear, safeMonth, 0)).getUTCDate();
-    const offset = (new Date(Date.UTC(safeYear, safeMonth - 1, 1)).getUTCDay() + 6) % 7;
-    return `<section id="calendar" class="calendar" aria-label="Choose a calendar date"><div class="calendar-top"><button type="button" data-month="-1" aria-label="Previous month">←</button><strong aria-live="polite">${state.calendarMonth}</strong><button type="button" data-month="1" aria-label="Next month">→</button></div><div class="calendar-grid">${['Mo','Tu','We','Th','Fr','Sa','Su'].map(day => `<small aria-hidden="true">${day}</small>`).join('')}${'<span aria-hidden="true"></span>'.repeat(offset)}${Array.from({length:count},(_,index) => { const date = state.calendarMonth + '-' + String(index+1).padStart(2,'0'); return `<button type="button" data-day="${date}" aria-label="${date}" aria-pressed="${d.date === date}" class="${d.date === date ? 'chosen' : ''}">${index+1}</button>`; }).join('')}</div></section>`;
-  }
-  function findJob(id = state.selected) { return [...state.upcoming, ...state.history].find(job => job.id === id) || (state.selectedJob?.id === id ? state.selectedJob : null); }
-  function detail() {
-    const job = findJob();
-    if (!job) return '<div class="empty"><h2>Schedule unavailable</h2><p>Return to the list and refresh.</p></div>';
-    const zone = job.timeZone || localZone;
-    const status = job.deliveryStatus || job.status;
-    const auto = job.automation;
-    const label = job.harnessLabel || harnessLabel(job.harness || 't3');
-    const timed = !auto || auto.trigger !== 'available' || auto.currentTurn > 1;
-    const problem = ['failed','unconfirmed'].includes(status) ? `<div class="error-detail"><h3>${status === 'unconfirmed' ? 'Check delivery before trying again' : 'This message could not be delivered'}</h3><p>${escape(job.error?.message || job.note)}</p>${technical(job.error)}${job.lastReconciledAt ? `<p>Last checked: ${escape(display(job.lastReconciledAt, zone))}. ${status === 'unconfirmed' ? 'Delivery is still unconfirmed. No resend was attempted.' : ''}</p>` : ''}<div class="actions"><button type="button" data-action="ack" ${job.acknowledgedAt ? 'disabled' : ''}>${job.acknowledgedAt ? 'Acknowledged ✓' : 'Acknowledge'}</button><button type="button" class="ghost" data-nav="settings">Connection settings</button></div></div>` : '';
-    const info = problem || (auto ? (['waiting','pending'].includes(job.displayStatus) && job.note ? `<p class="help">${escape(job.note)}</p>` : '') : status === 'sent' ? `<p class="help">${escape(label)} accepted the message.${job.turn ? '' : ' This does not confirm that the agent completed its work.'}</p>` : job.note ? `<p class="help">${escape(job.note)}</p>` : '');
-    // A running continuation's next turn is at risk too, even while its current turn shows as sent.
-    const risky = Boolean(job.risk) && (status === 'pending' || auto?.state === 'active');
-    const risk = risky ? `<div class="risk-detail"><h3>${auto ? 'The next turn may not be sent' : 'This message may not be sent'}</h3><p>${escape(job.risk.message)}</p><p>${auto ? 'The continuation keeps going. If the problem remains when its next turn is due, nothing is sent and it pauses.' : 'It stays scheduled. If the problem remains when it is due, it fails without sending anything.'}</p></div>` : '';
-    const actions = auto ? automationActions(job, status) : status === 'pending' ? '<button type="button" class="primary" data-action="edit">Edit schedule</button><button type="button" class="ghost danger" data-action="cancel">Cancel schedule</button>' : status === 'unconfirmed' ? '<button type="button" class="primary" data-action="reconcile">Check delivery</button>' : status !== 'dispatching' ? '<button type="button" class="primary" data-action="again">Schedule again</button>' : '<p class="help">Sending has started. This message can no longer be changed or canceled.</p>';
-    return `<section class="card panel"><div class="detail-header"><span class="overline">${escape(jobSource(job))}</span><span class="pills">${risky ? '<span class="pill risk">At risk</span>' : ''}${jobPill(job)}</span></div><h2>${escape(job.threadTitle || job.threadId)}</h2><p class="message">${escape(job.message)}</p>${auto ? `<div class="actions">${actions}</div>${risk}${info}${automationDetail(job, zone)}` : ''}<dl class="key-values"><dt>Agent harness</dt><dd>${escape(label)}</dd>${auto ? '' : turnSummary(job)}${timed ? `<dt>Requested time</dt><dd>${escape(display(job.scheduleAt, zone))}</dd>` : `<dt>Start</dt><dd>When ${escape(label)} is available</dd>`}${auto && !['pending','dispatching'].includes(status) ? '' : `<dt>${job.displayStatus === 'waiting' ? 'Next check' : 'Effective send time'}</dt><dd>${escape(display(job.effectiveAt, zone, true))}</dd>`}<dt>Timezone</dt><dd>${escape(zone)}${job.timeZone ? '' : ' (legacy record)'}</dd><dt>Safety buffer</dt><dd>${job.bufferSeconds} seconds</dd><dt>Last updated</dt><dd>${escape(display(job.updatedAt || job.createdAt || job.scheduleAt, zone))}</dd>${job.lateBySeconds > 0 ? `<dt>Catch-up delay</dt><dd>${job.lateBySeconds} seconds</dd>` : ''}</dl>${auto ? '' : `${risk}${info}<div class="actions">${actions}</div>`}${state.confirmCancel ? '<div class="confirm" role="group" aria-label="Confirm cancellation"><p>Cancel this scheduled message? The record will remain in History.</p><button type="button" class="danger" data-action="confirm-cancel">Cancel message</button> <button type="button" class="ghost" data-action="keep">Keep schedule</button></div>' : ''}</section>`;
-  }
   const turnStates = { completed: 'Finished', failed: 'Failed', interrupted: 'Interrupted', unknown: 'Ended unclear', running: 'Agent working', delivered: 'Delivered' };
   const chainStates = { active: 'Running', paused: 'Paused', stopped: 'Stopped', finished: 'Finished' };
   const triggers = { time: 'At a time', available: 'When available', 'time-then-available': 'At a time, then when available' };
-  // Chain settings, state and full turn history for a continuation.
   function automationDetail(job, zone) {
     const auto = job.automation;
     const availability = job.waiting?.availability || (job.displayStatus === 'waiting' ? job.availability : null);
-    const turns = auto.turns.length ? `<ol class="turn-list">${auto.turns.map(turn => `<li><strong>Turn ${turn.number}</strong><span>${escape(turn.usageLimit ? 'Stopped at a usage limit' : turnStates[turn.state] || turn.state)}${turn.error?.message ? ` · ${escape(turn.error.message)}` : ''}</span><small>${turn.sentAt ? `Sent ${escape(display(turn.sentAt, zone))}` : 'Send time unknown'}${turn.completedAt ? ` · ended ${escape(display(turn.completedAt, zone))}` : ''}</small></li>`).join('')}</ol>` : '<p class="help">No turns sent yet.</p>';
+    const turns = auto.turns.length ? `<ol class="turn-list">${auto.turns.map((turn) => `<li><strong>Turn ${turn.number}</strong><span>${escape(turn.usageLimit ? 'Stopped at a usage limit' : turnStates[turn.state] || turn.state)}${turn.error?.message ? ` · ${escape(turn.error.message)}` : ''}</span><small>${turn.sentAt ? `Sent ${escape(display(turn.sentAt, zone))}` : 'Send time unknown'}${turn.completedAt ? ` · ended ${escape(display(turn.completedAt, zone))}` : ''}</small></li>`).join('')}</ol>` : '<p class="help">No turns sent yet.</p>';
     const omitted = auto.earlierTurnsOmitted ? `<p class="help">${auto.earlierTurnsOmitted} earlier ${auto.earlierTurnsOmitted === 1 ? 'turn is' : 'turns are'} not shown.</p>` : '';
-    const reason = auto.reason ? `<div class="chain-reason ${escape(auto.state)}"><p>${escape(auto.reason)}</p>${auto.state === 'paused' && !job.acknowledgedAt && !['failed','unconfirmed'].includes(job.deliveryStatus) ? '<button type="button" class="ghost" data-action="ack">Acknowledge</button>' : ''}</div>` : '';
-    return `<section class="chain" aria-label="Automatic continuation"><div class="chain-head"><span class="overline">Automatic continuation</span><strong>${escape(auto.progressLabel)}</strong></div><dl class="key-values"><dt>Start</dt><dd>${escape(triggers[auto.trigger] || auto.trigger)}</dd><dt>Turn limit</dt><dd>${auto.unlimited ? 'None · continuous until you stop it' : auto.limit}</dd><dt>Turns sent</dt><dd>${auto.sentTurns}${auto.unlimited ? '' : ` of ${auto.limit}`}</dd><dt>State</dt><dd>${escape(chainStates[auto.state] || auto.state)}</dd>${availability ? `<dt>Availability</dt><dd>${escape(availabilityLine(availability))}</dd>` : ''}</dl>${reason}<h3>Turns</h3>${turns}${omitted}</section>`;
+    const reason = auto.reason ? `<div class="chain-reason ${escape(auto.state)}"><p>${escape(auto.reason)}</p>${auto.state === 'paused' && !job.acknowledgedAt && !['failed', 'unconfirmed'].includes(job.deliveryStatus) ? '<button type="button" class="ghost" data-action="ack">Acknowledge</button>' : ''}</div>` : '';
+    return `<section class="chain" aria-label="Automatic continuation"><div class="chain-head"><span class="overline">Continuation</span><strong>${escape(auto.progressLabel)}</strong></div><dl class="key-values"><dt>Start</dt><dd>${escape(triggers[auto.trigger] || auto.trigger)}</dd><dt>How far</dt><dd>${auto.unlimited ? 'Until done · continuous until you stop it' : auto.limit === 1 ? 'Once' : `Up to ${auto.limit} turns`}</dd><dt>Turns sent</dt><dd>${auto.sentTurns}${auto.unlimited ? '' : ` of ${auto.limit}`}</dd>${auto.stopPhrase ? `<dt>Stop phrase</dt><dd>${escape(auto.stopPhrase)}</dd>` : ''}<dt>State</dt><dd>${escape(chainStates[auto.state] || auto.state)}</dd>${availability ? `<dt>Availability</dt><dd>${escape(availabilityLine(availability))}</dd>` : ''}</dl>${reason}<h3>Turns</h3>${turns}${omitted}</section>`;
   }
   function availabilityLine(value) {
     const what = { available: 'Available', limited: value.resetsAt ? `Limited until ${display(value.resetsAt)}` : 'Limited, reset time unknown', unavailable: value.reason === 'screen_locked' ? 'Mac locked' : value.reason === 'conversation_busy' ? 'Agent still working in this conversation' : 'Unavailable', unknown: 'Unknown' }[value.state] || 'Unknown';
@@ -313,37 +321,115 @@
   function automationActions(job, status) {
     const auto = job.automation;
     const actions = [];
-    if (job.canResume) actions.push('<button type="button" class="primary" data-action="resume">Resume continuation</button>');
+    if (job.canResume) actions.push('<button type="button" class="primary" data-action="resume">Resume</button>');
     if (status === 'unconfirmed') actions.push('<button type="button" class="primary" data-action="reconcile">Check delivery</button>');
-    if (status === 'pending' && auto.state === 'active' && auto.currentTurn === 1) actions.push('<button type="button" data-action="edit">Edit schedule</button>');
+    if (status === 'pending' && auto.state === 'active' && auto.currentTurn === 1) actions.push('<button type="button" data-action="edit">Edit</button>');
     if (job.canStop) actions.push('<button type="button" class="danger" data-action="stop">Stop continuing</button>');
-    if (!job.canStop && !['pending','dispatching','unconfirmed'].includes(status)) actions.push('<button type="button" class="primary" data-action="again">Schedule again</button>');
-    if (job.canStop) actions.push(`<p class="help stop-help">Stopping takes effect at once and never sends. ${status === 'sent' && auto.state === 'active' ? 'The turn in progress keeps running in the agent.' : ''}</p>`);
+    if (!job.canStop && !['pending', 'dispatching', 'unconfirmed'].includes(status)) actions.push('<button type="button" class="primary" data-action="again">Continue again</button>');
+    if (job.canStop) actions.push(`<p class="help stop-help">Stopping takes effect at once and never sends.${status === 'sent' && auto.state === 'active' ? ' The turn in progress keeps running in the agent.' : ''}</p>`);
     return actions.join('');
   }
+
+  // ---------- History ----------
+  function history() {
+    const query = state.search.trim().toLocaleLowerCase();
+    const rows = state.history.filter((job) => !query || `${job.threadTitle || job.threadId} ${job.projectName || ''} ${job.harnessLabel || ''} ${job.message}`.toLocaleLowerCase().includes(query));
+    const filters = [['', 'All'], ['sent', 'Sent'], ['failed', 'Failed'], ['unconfirmed', 'Unconfirmed'], ['canceled', 'Canceled']].map(([value, label]) => `<button type="button" data-filter="${value}" class="${state.historyFilter === value ? 'active' : ''}" aria-pressed="${state.historyFilter === value}">${label}</button>`).join('');
+    return `<section class="history"><div class="search"><input id="search" type="search" placeholder="Search history…" aria-label="Search history" value="${escape(state.search)}"></div><div class="seg filters" aria-label="History filters">${filters}</div>${state.unacknowledged ? `<div class="note"><span>${state.unacknowledged} ${state.unacknowledged === 1 ? 'delivery needs' : 'deliveries need'} a look. Open one to acknowledge it.</span></div>` : ''}<div class="list">${rows.length ? rows.map((job) => jobRow(job, { history: true })).join('') : `<div class="empty"><b>${query ? 'No matching messages' : 'No history yet'}</b><small>${query ? 'Try another search.' : 'Outcomes appear here after a message is sent.'}</small></div>`}</div>${state.history.length < state.historyTotal ? `<button type="button" class="link more" data-action="more">Load more (${state.history.length} of ${state.historyTotal})</button>` : ''}<p class="help">Sent confirms delivery, not that the agent finished its work.</p></section>`;
+  }
+
+  // ---------- Settings ----------
+  function settings() {
+    if (!state.settings) return '<p class="help">Loading settings…</p>';
+    const sections = [['agents', 'Agents', `${visibleAgents().length} shown`], ['awake', 'Keep the Mac awake', keepAwakeSummary()], ['remote', 'Remote control', remoteSummary()], ['appearance', 'Appearance', { system: 'Follow system', light: 'Light', dark: 'Bone Outline' }[state.theme]], ['advanced', 'Advanced', `${state.settings.bufferSeconds} s safety buffer`], ['support', 'Support the app', 'ko-fi.com/velvetacorn']];
+    const open = (id) => state.sections.has(id);
+    return `<div class="settings">${sections.map(([id, label, summary]) => `<button type="button" class="srow${open(id) ? ' open' : ''}" data-section="${id}" aria-expanded="${open(id)}" aria-controls="section-${id}"><span class="t">${label}<small>${escape(summary)}</small></span><span class="chev" aria-hidden="true">${open(id) ? '▴' : '▾'}</span></button>${open(id) ? `<div class="section" id="section-${id}">${sectionBody(id)}</div>` : ''}`).join('')}</div>`;
+  }
+  function sectionBody(id) {
+    if (id === 'agents') return agentsSection();
+    if (id === 'awake') return keepAwakeSection();
+    if (id === 'remote') return '<div id="remote-slot"></div>';
+    if (id === 'appearance') return `<div class="setting-row"><label for="theme">Appearance</label><select id="theme">${[['system', 'Follow system'], ['light', 'Light'], ['dark', 'Bone Outline']].map(([value, label]) => `<option value="${value}" ${state.theme === value ? 'selected' : ''}>${label}</option>`).join('')}</select></div><div class="setting-row"><label for="motion">Reduce motion</label><input id="motion" type="checkbox" ${state.reduceMotion ? 'checked' : ''}></div><p class="help">Your system’s reduced-motion preference is always respected.</p>`;
+    if (id === 'advanced') return `<form id="advanced-form"><label class="field" for="buffer">Safety buffer · seconds</label><input id="buffer" type="number" min="0" max="300" required value="${escape(state.settingsDraft?.bufferSeconds ?? state.settings.bufferSeconds)}"><p class="help">Added after the chosen time, or after a usage limit resets, before anything is sent. Applies to new messages.</p><p class="error" id="advanced-error" role="alert"></p><div class="actions"><button type="submit" class="primary">Save</button></div></form>`;
+    if (id === 'support') return `<div class="support">${star()}<div><h2>Buy me a coffee</h2><button type="button" data-action="support" aria-describedby="support-note">Support on Ko-fi</button><p id="support-note" class="help">Opens ko-fi.com/velvetacorn in your browser.</p></div></div>`;
+    return '';
+  }
+  const capabilityText = { requiresUnlockedScreen: ['Needs an unlocked screen', 'Works while locked'], canConfirmDelivery: ['Confirms delivery'], canDetectCompletion: ['Reports when the agent finishes'], canDetectUsageLimit: ['Detects usage limits'], requiresAccessibilityPermission: ['Needs Accessibility permission'] };
+  function capabilities(item) {
+    const caps = item.capabilities || {};
+    return Object.entries(capabilityText).map(([key, [yes, no]]) => caps[key] ? yes : no).filter(Boolean).join(' · ');
+  }
+  function compatibilityLine(item) {
+    if (item.kind !== 'desktop-app') return '';
+    const checked = state.compatibility.find((entry) => entry.harness === item.id);
+    const text = !checked?.checkedAt ? 'Not checked yet' : `${checked.appVersion ? `Version ${checked.appVersion} · ` : ''}${checked.ok ? 'Supported' : 'Not supported yet'} · checked ${relative(checked.checkedAt).toLocaleLowerCase()}`;
+    return `<small class="caps${checked?.checkedAt && !checked.ok ? ' risk' : ''}">${escape(text)}</small>`;
+  }
+  function agentsSection() {
+    if (!state.harnesses.length) return '<p class="help">Loading agents…</p>';
+    if (!state.harnessDraft) state.harnessDraft = {};
+    if (!state.settingsDraft) state.settingsDraft = { t3Token: '', httpPort: state.settings.httpPort, bufferSeconds: state.settings.bufferSeconds };
+    const stored = state.settings.harnesses || {};
+    const arranged = arrangedAgents();
+    const rows = arranged.map((entry, index) => {
+      const item = harnessInfo(entry.id);
+      const status = agentStatus(entry.id);
+      const fields = item.id === 't3'
+        ? `<label>Token<input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="${state.settings.usingEnvironmentToken ? 'Using T3_TOKEN from the environment' : state.settings.hasStoredToken ? 'Saved. Leave blank to keep it' : 'Paste a bearer token'}" value="${escape(state.settingsDraft.t3Token)}"></label><label>Port<input id="port" type="number" min="1" max="65535" required value="${escape(state.settingsDraft.httpPort)}"></label>`
+        : item.settings.map((setting) => {
+          const id = `harness-${item.id}-${setting.key}`;
+          const saved = stored[item.id]?.[setting.key] || {};
+          const value = state.harnessDraft[item.id]?.[setting.key] ?? (setting.type === 'secret' ? '' : saved.value ?? '');
+          const placeholder = setting.type === 'secret' ? (saved.usingEnvironment ? `Using ${setting.env} from the environment` : saved.hasStoredValue ? 'Saved. Leave blank to keep it' : 'Optional') : setting.type === 'port' ? String(setting.default ?? '') : 'Found automatically';
+          return `<label>${escape(setting.label.replace(/^.*\b(port|password|executable)\b.*$/i, (_, word) => word.replace(/^./, (c) => c.toUpperCase())))}<input id="${escape(id)}" data-harness-key="${escape(item.id + ':' + setting.key)}" ${setting.type === 'port' ? 'type="number" min="1" max="65535"' : setting.type === 'secret' ? 'type="password" autocomplete="off"' : 'type="text"'} spellcheck="false" value="${escape(value)}" placeholder="${escape(placeholder)}" title="${escape(setting.help || '')}"></label>`;
+        }).join('');
+      const permission = status.action === 'permission' ? '<button type="button" class="mini" data-action="open-permission-settings">Allow</button>' : '';
+      const check = entry.hidden ? '' : `<button type="button" class="mini" data-action="check" data-harness="${escape(item.id)}">Check</button>`;
+      return `<div class="agent${entry.hidden ? ' hidden-agent' : ''}" data-agent="${escape(item.id)}"><div class="agent-head">${badge(item.id, { title: item.label })}<span class="t"><b>${escape(item.label)}</b><small><span class="dot ${escape(status.tone)}"></span> ${escape(status.text)}</small>${compatibilityLine(item)}</span><span class="agent-tools">${permission}${check}<button type="button" class="info" data-tip="${escape(`${item.description} ${capabilities(item)}`)}" aria-label="About ${escape(item.label)}" title="${escape(`${item.description}\n${capabilities(item)}`)}">ⓘ</button><button type="button" class="mini" data-agent-move="${escape(item.id)}" data-direction="-1" ${index === 0 ? 'disabled' : ''} aria-label="Move ${escape(item.label)} up">▲</button><button type="button" class="mini" data-agent-move="${escape(item.id)}" data-direction="1" ${index === arranged.length - 1 ? 'disabled' : ''} aria-label="Move ${escape(item.label)} down">▼</button><label class="show"><input type="checkbox" data-agent-show="${escape(item.id)}" ${entry.hidden ? '' : 'checked'}> Show</label></span></div>${fields ? `<div class="fields">${fields}</div>` : ''}</div>`;
+    }).join('');
+    return `<form id="agents-form"><p class="help">Shown agents appear in the header and the conversation picker, in this order. Hidden agents are not checked.</p>${rows}<p class="error" id="agents-error" role="alert"></p><div class="actions"><button type="submit" class="primary">Save</button></div></form>`;
+  }
+  function keepAwakeSummary() {
+    const k = state.keepAwake;
+    if (!k) return 'Loading…';
+    return k.settings.enabled ? (k.holding ? k.reason : 'On') : 'Off';
+  }
+  function remoteSummary() { return remote?.summary ? remote.summary() : 'Phone and MCP access'; }
+  function keepAwakeSection() {
+    const k = state.keepAwake;
+    if (!k) return '<p class="help">Loading keep-awake settings…</p>';
+    if (!state.keepAwakeDraft) state.keepAwakeDraft = { ...k.settings };
+    const d = state.keepAwakeDraft;
+    const box = (id, key, label) => `<div class="setting-row"><label for="${id}">${label}</label><input id="${id}" type="checkbox" ${d[key] ? 'checked' : ''}></div>`;
+    return `<form id="keep-awake-form">${box('ka-enabled', 'enabled', 'Keep this Mac awake while queued work waits or runs')}${box('ka-display', 'keepDisplayOn', 'Keep the display on too')}${box('ka-agents', 'includeRunningAgents', 'Also stay awake while any T3 Code agent turn runs')}<div class="setting-row"><label for="ka-power">On battery</label><select id="ka-power">${[['any', 'Keep awake on battery too'], ['ac-only', 'Only when connected to power']].map(([value, label]) => `<option value="${value}" ${d.powerSource === value ? 'selected' : ''}>${label}</option>`).join('')}</select></div><div class="two"><label class="field">Stop at battery · %<input id="ka-floor" type="number" min="0" max="95" required value="${escape(d.batteryFloorPercent)}" ${d.powerSource === 'ac-only' ? 'disabled' : ''}></label><label class="field">Time limit · hours<input id="ka-hours" type="number" min="1" max="72" required value="${escape(d.maxHours)}"></label></div><p class="help" id="ka-status">${escape(keepAwakeStatus())}</p><details class="help"><summary>Lid, lock screen and sleep</summary><p>Locking the screen or letting the display sleep does not stop queued work, except for agents that drive a desktop app (Claude Desktop, ChatGPT Codex threads), which need the Mac unlocked to send. Closing a laptop lid sleeps the Mac unless it is in closed-display mode. Missed schedules catch up after waking.</p></details><p class="error" id="keep-awake-error" role="alert"></p><div class="actions"><button type="submit" class="primary">Save</button></div></form>`;
+  }
+  function keepAwakeStatus() {
+    const k = state.keepAwake;
+    return k ? `Status: ${k.enabled ? k.reason : 'Off. Your Mac sleeps on its usual schedule.'}` : '';
+  }
+
+  // ---------- Support sticker ----------
   function star() {
     if (!starState.phrase) starState.phrase = sticker.pickPhrase(sticker.STICKER_PHRASES);
-    const points = Array.from({length:32},(_,index) => { const angle=index*Math.PI/16, radius=index%2 ? 39.5 : 50; return `${50+radius*Math.sin(angle)},${50-radius*Math.cos(angle)}`; }).join(' ');
+    const points = Array.from({ length: 32 }, (_, index) => { const angle = index * Math.PI / 16, radius = index % 2 ? 39.5 : 50; return `${50 + radius * Math.sin(angle)},${50 - radius * Math.cos(angle)}`; }).join(' ');
     return `<button type="button" class="star" id="support-star" aria-label="Shuffle sticker phrase" aria-describedby="star-phrase"><svg viewBox="-3 -3 106 106" aria-hidden="true"><polygon points="${points}" fill="#D3A065" stroke="var(--outline)" stroke-width="2.5"/></svg><span class="star-text" aria-hidden="true">${starLines()}</span><span id="star-phrase" hidden>${escape(starState.phrase)}</span></button><span id="star-status" class="sr-only" role="status"></span>`;
   }
   function starLayout(phrase) {
     if (!starState.layouts.has(phrase)) {
       if (!measureContext) { measureContext = document.createElement('canvas').getContext('2d'); measureContext.font = '900 100px Georgia, serif'; }
-      starState.layouts.set(phrase, sticker.layoutPhrase(phrase, text => measureContext.measureText(text).width / 100));
+      starState.layouts.set(phrase, sticker.layoutPhrase(phrase, (text) => measureContext.measureText(text).width / 100));
     }
     return starState.layouts.get(phrase);
   }
-  const starLines = () => starLayout(starState.phrase).lines.map(line => `<span>${escape(line)}</span>`).join('');
+  const starLines = () => starLayout(starState.phrase).lines.map((line) => `<span>${escape(line)}</span>`).join('');
   const starMoves = () => !state.reduceMotion && !mediaMotion.matches;
   function paintStar(now) {
     const shape = document.querySelector('#support-star polygon');
-    // Frame timestamps can trail a performance.now() paint made during a render or click; never paint an earlier time.
     starState.paintedAt = Math.max(now, starState.paintedAt);
     if (shape) shape.style.transform = `rotate(${sticker.sample(starState.spin, starState.paintedAt).angle.toFixed(3)}deg)`;
     return Boolean(shape);
   }
   function starFrame(now) { starState.frame = 0; if (!starMoves()) syncStar(); else if (paintStar(now)) starState.frame = requestAnimationFrame(starFrame); }
-  // Runs after every render and motion change: sizes the text, keeps the angle continuous and owns the frame loop.
   function syncStar() {
     const button = $('#support-star'), now = performance.now();
     if (!button) { cancelAnimationFrame(starState.frame); starState.frame = 0; if (starState.held) { starState.held = false; starState.spin = sticker.release(starState.spin, now, false); } return; }
@@ -363,213 +449,381 @@
     if (text) { text.innerHTML = starLines(); $('#star-phrase').textContent = starState.phrase; $('#star-status').textContent = starState.phrase; }
     syncStar();
   }
-  // A press that ends without a click (dragged away, cancelled, window blurred) eases back to the idle spin.
   function letGoStar() { setTimeout(() => { if (!starState.held) return; starState.held = false; starState.spin = sticker.release(starState.spin, performance.now(), false); }); }
-  function remoteContext() {
-    return { api, escape, display, $, perform, toast, render, errorMessage, isVisible: () => state.view === 'settings' };
+
+  // ---------- Render ----------
+  function render(focusSelector) {
+    const active = document.activeElement;
+    const activeId = active?.id;
+    const activeData = active?.dataset ? Object.entries(active.dataset).find(([key]) => ['action', 'open', 'thread', 'filter', 'when', 'far', 'section', 'agentMove', 'agentShow', 'harnessKey'].includes(key)) : null;
+    const selection = active && typeof active.selectionStart === 'number' ? [active.selectionStart, active.selectionEnd] : null;
+    document.body.className = `${state.theme === 'dark' || (state.theme === 'system' && mediaTheme.matches) ? 'dark' : ''} ${state.reduceMotion ? 'motion-off' : ''} layout-${state.layout} view-${state.view}`;
+    const body = state.view === 'picker' ? picker() : state.view === 'settings' ? settings() : state.view === 'detail' ? detail() : state.view === 'history' ? history() : composeBlock() + queue();
+    app.innerHTML = `${header()}<main id="main" class="main"><div id="notices">${state.view === 'home' || state.view === 'detail' ? notices() : ''}</div>${state.actionError ? `<p class="error" role="alert">${escape(state.actionError)}</p>` : ''}${body}</main>`;
+    bind();
+    if (state.busy) app.querySelectorAll('button, input, textarea, select').forEach((control) => { control.disabled = true; });
+    if (focusSelector) $(focusSelector)?.focus();
+    else if (activeId && document.getElementById(activeId)) {
+      const replacement = document.getElementById(activeId); replacement.focus();
+      if (selection && replacement.setSelectionRange && !['number', 'checkbox'].includes(replacement.type)) replacement.setSelectionRange(...selection);
+    } else if (activeData) app.querySelector('[data-' + activeData[0].replace(/[A-Z]/g, (c) => '-' + c.toLowerCase()) + '="' + CSS.escape(activeData[1]) + '"]')?.focus();
+    syncStar();
+    fitWindow();
   }
-  function settings() {
-    if (!state.settings) return '<p>Loading settings…</p>';
-    if (!state.settingsDraft) state.settingsDraft = { t3Token: '', httpPort: state.settings.httpPort, bufferSeconds: state.settings.bufferSeconds };
-    const d=state.settingsDraft;
-    return `<div class="settings"><section class="card"><span class="overline">Connection</span><h2>Your local T3 Code</h2><form id="settings-form"><label class="field">T3 bearer token<input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="Leave blank to keep the saved token" value="${escape(d.t3Token)}"><small>${state.settings.usingEnvironmentToken ? 'Using T3_TOKEN from the environment for this launch.' : state.settings.hasStoredToken ? 'A token is stored locally. Leave blank to keep it.' : 'No token has been saved yet.'}</small></label><div class="two"><label class="field">Local HTTP port<input id="port" type="number" min="1" max="65535" required value="${d.httpPort}"></label><label class="field">Safety buffer · seconds<input id="buffer" type="number" min="0" max="300" required value="${d.bufferSeconds}"></label></div><p class="help">Connects only to 127.0.0.1. Buffer changes apply to new schedules.</p><p class="error" id="settings-error" role="alert"></p><div class="actions"><button type="submit" class="primary">Save settings</button><button type="button" data-action="check-t3">Check connection</button></div></form></section>${harnessSettings()}${keepAwakeSettings()}<section class="card"><span class="overline">Make it yours</span><div class="setting-row"><label for="theme">Appearance</label><select id="theme">${[['system','Follow system'],['light','Light'],['dark','Bone Outline']].map(([value,label]) => `<option value="${value}" ${state.theme === value ? 'selected' : ''}>${label}</option>`).join('')}</select></div><div class="setting-row"><label for="motion">Reduce motion</label><input id="motion" type="checkbox" ${state.reduceMotion ? 'checked' : ''}></div><p class="help">Your system’s reduced-motion preference is always respected.</p></section><section class="card support">${star()}<div><span class="overline">Support this app</span><h2>Buy me a coffee</h2><button type="button" data-action="support" aria-describedby="support-note">Support on Ko-fi</button><p id="support-note" class="help">Opens ko-fi.com/velvetacorn in your browser.</p></div></section></div>`;
+  // The rail grows and shrinks with its content, within a sensible range, so it never shows empty space.
+  function fitWindow() {
+    if (state.layout !== 'rail' || !api.fitWindow) return;
+    requestAnimationFrame(() => {
+      // The content's own height, not the viewport's, so the rail shrinks back after a long view.
+      const height = Math.min(RAIL_MAX_HEIGHT, Math.max(RAIL_MIN_HEIGHT, Math.ceil(app.getBoundingClientRect().height)));
+      if (height === lastHeight) return;
+      lastHeight = height;
+      void api.fitWindow(height).catch(() => {});
+    });
   }
-  const capabilityText = { requiresUnlockedScreen: ['Needs an unlocked screen', 'Works while locked'], canConfirmDelivery: ['Confirms delivery'], canDetectCompletion: ['Reports when the agent finishes'], canDetectUsageLimit: ['Detects usage limits'], requiresAccessibilityPermission: ['Needs Accessibility permission'] };
-  function capabilities(item) {
-    const caps = item.capabilities || {};
-    return Object.entries(capabilityText).map(([key, [yes, no]]) => caps[key] ? yes : no).filter(Boolean).join(' · ');
-  }
-  // The last compatibility check of a desktop app, from the monitor; Settings never runs one.
-  function compatibilityLine(item) {
-    if (item.kind !== 'desktop-app') return '';
-    const checked = state.compatibility.find(entry => entry.harness === item.id);
-    const text = !checked?.checkedAt ? 'Not checked yet' : `${checked.appVersion ? `Version ${checked.appVersion} · ` : ''}${checked.ok ? 'Supported' : 'Not supported yet'} · checked ${relative(checked.checkedAt).toLocaleLowerCase()}`;
-    return `<small class="harness-caps${checked?.checkedAt && !checked.ok ? ' risk' : ''}">${escape(text)}</small>`;
-  }
-  function harnessSettings() {
-    if (!state.harnesses.length) return '';
-    if (!state.harnessDraft) state.harnessDraft = {};
-    const stored = state.settings?.harnesses || {};
-    const rows = state.harnesses.map(item => `<div class="harness-row"><div class="harness-name"><strong>${escape(item.label)}</strong><small>${escape(item.description)}</small><small class="harness-caps">${escape(capabilities(item))}</small>${compatibilityLine(item)}</div>${item.settings.map(setting => {
-      const id = `harness-${item.id}-${setting.key}`;
-      const saved = stored[item.id]?.[setting.key] || {};
-      const value = state.harnessDraft[item.id]?.[setting.key] ?? (setting.type === 'secret' ? '' : saved.value ?? '');
-      const note = setting.type === 'secret' ? (saved.usingEnvironment ? `Using ${setting.env} from the environment for this launch.` : saved.hasStoredValue ? 'Stored locally. Leave blank to keep it.' : setting.help) : setting.help;
-      return `<label class="field" for="${escape(id)}">${escape(setting.label)}<input id="${escape(id)}" data-harness-key="${escape(item.id + ':' + setting.key)}" ${setting.type === 'port' ? 'type="number" min="1" max="65535"' : setting.type === 'secret' ? 'type="password" autocomplete="off"' : 'type="text"'} spellcheck="false" value="${escape(value)}" placeholder="${escape(setting.type === 'port' ? String(setting.default ?? '') : setting.type === 'secret' ? 'Leave blank to keep the saved value' : 'Found automatically')}"><small>${escape(note || '')}</small></label>`;
-    }).join('')}</div>`).join('');
-    return `<section class="card"><span class="overline">Agents</span><h2>Agent harnesses</h2>${state.harnesses.some(item => item.kind === 'desktop-app') ? '<p class="help">Desktop apps are checked read-only at launch, when something is scheduled for them and while it waits, so an app update shows on the dashboard before a message is due. Checks never send, type or change focus.</p>' : ''}<form id="harness-form">${rows}<p class="error" id="harness-error" role="alert"></p><div class="actions"><button type="submit" class="primary">Save agent settings</button></div></form></section>`;
-  }
-  function navigate(view, restore = false) {
-    saveListContext();
-    if (state.view === 'settings' && view !== 'settings') remote?.leave();
-    const context = restore ? listContexts.get(view) : null;
-    if (view === 'settings' && state.view !== 'settings') starState.phrase = sticker.pickPhrase(sticker.STICKER_PHRASES, starState.phrase);
-    state.picking = false; state.actionError = ''; state.confirmCancel = false; state.search = context?.search || ''; state.view = view;
-    render('h1');
-    window.scrollTo(0,context?.scroll || 0);
-    if (view === 'threads') void refreshThreads();
-    if (['upcoming','history'].includes(view)) void refreshJobs();
-    if (view === 'settings') void remote?.load(remoteContext());
-  }
-  function openComposer(threadId, harness) {
-    saveListContext();
-    state.returnView = ['upcoming','history','threads'].includes(state.view) ? state.view : 'upcoming';
-    state.draftKey = 'new';
-    if (harness && harness !== state.harness) { useHarness(harness); void refreshThreads(); }
-    if (!draft()) state.drafts.set('new', newDraft(threadId));
-    if (threadId) { draft().threadId = threadId; draft().harness = state.harness; draft().threadTitle = ''; draft().projectName = ''; }
-    // A draft without a chosen conversation follows the current harness; one with a conversation keeps its own.
-    if (!draft().threadId) draft().harness = state.harness;
-    else if (draft().harness !== state.harness) { useHarness(draft().harness); void refreshThreads(); }
-    fitDraft(draft());
-    state.view='composer'; state.actionError=''; state.picking=false; state.calendarOpen=false; render('h1');
-    void refreshAvailability();
+  function updateChrome() {
+    const notices_ = $('#notices');
+    if (notices_ && ['home', 'detail'].includes(state.view)) { notices_.innerHTML = notices(); bindActions(notices_); }
+    document.querySelectorAll('[data-agent-badge]').forEach((node) => { const fresh = document.createElement('div'); fresh.innerHTML = badge(node.dataset.agentBadge, { small: node.classList.contains('sm'), title: node.title }); node.replaceWith(fresh.firstChild); });
+    const toggle = $('.tipwrap');
+    if (toggle && !state.busy) { const fresh = document.createElement('div'); fresh.innerHTML = awakeToggle(); toggle.replaceWith(fresh.firstChild); bindActions(app.querySelector('.tipwrap')); bindTip(); }
+    if ($('#ka-status')) $('#ka-status').textContent = keepAwakeStatus();
+    fitWindow();
   }
   function toast(message, jobId) {
     clearTimeout(toastTimer);
-    const target=$('#toast'); target.hidden=false;
-    target.innerHTML=`${escape(message)}${jobId ? '<button type="button" id="toast-view">View</button>' : ''}<button type="button" class="ghost" id="toast-dismiss" aria-label="Dismiss notification">×</button>`;
-    $('#toast-dismiss').onclick=()=>{target.hidden=true;};
-    if(jobId) $('#toast-view').onclick=()=>{target.hidden=true;state.returnView='history';state.selected=jobId;state.view='detail';render('h1');};
-    toastTimer=setTimeout(()=>{target.hidden=true;},jobId?10000:5000);
+    const target = $('#toast'); target.hidden = false;
+    target.innerHTML = `${escape(message)}${jobId ? '<button type="button" id="toast-view">View</button>' : ''}<button type="button" class="ghost" id="toast-dismiss" aria-label="Dismiss notification">×</button>`;
+    $('#toast-dismiss').onclick = () => { target.hidden = true; };
+    if (jobId) $('#toast-view').onclick = () => { target.hidden = true; openDetail(jobId, 'home'); };
+    toastTimer = setTimeout(() => { target.hidden = true; }, jobId ? 10000 : 5000);
   }
   async function perform(operation, { errorTarget, success } = {}) {
-    if(state.busy)return;
-    state.busy=true;state.actionError='';
-    const disabledBefore = new Map([...app.querySelectorAll('button')].map(button=>[button,button.disabled]));
-    disabledBefore.forEach((_disabled,button)=>{button.disabled=true;});
-    try { const value=await operation(); if(success)await success(value); }
-    catch(error){if(errorTarget && $(errorTarget))$(errorTarget).textContent=errorMessage(error);else state.actionError=errorMessage(error);}
-    finally {state.busy=false; if(errorTarget && $(errorTarget)?.textContent){disabledBefore.forEach((disabled,button)=>{if(button.isConnected)button.disabled=disabled;}); if(draft()?.editId && state.view==='composer')$('.thread-picker').disabled=true;}else render();}
+    if (state.busy) return;
+    state.busy = true; state.actionError = '';
+    const disabledBefore = new Map([...app.querySelectorAll('button, input, select, textarea')].map((control) => [control, control.disabled]));
+    disabledBefore.forEach((_disabled, control) => { control.disabled = true; });
+    try { const value = await operation(); if (success) await success(value); }
+    catch (error) { if (errorTarget && $(errorTarget)) $(errorTarget).textContent = errorMessage(error); else state.actionError = errorMessage(error); }
+    finally {
+      state.busy = false;
+      if (errorTarget && $(errorTarget)?.textContent) disabledBefore.forEach((disabled, control) => { if (control.isConnected) control.disabled = disabled; });
+      else render();
+    }
   }
-  function bindOccurrence() { if($('#occurrence')) $('#occurrence').onchange=event=>{draft().occurrence=event.target.value;updatePreview();}; }
+
+  // ---------- Navigation ----------
+  function navigate(view, { focus = 'h1, .title' } = {}) {
+    if (state.view === 'settings' && view !== 'settings') remote?.leave();
+    if (view === 'settings' && state.view !== 'settings') starState.phrase = sticker.pickPhrase(sticker.STICKER_PHRASES, starState.phrase);
+    state.actionError = ''; state.confirmCancel = false; state.confirmMark = false; state.tipOpen = false;
+    state.view = view;
+    render(focus);
+    window.scrollTo(0, 0);
+    if (view === 'settings' && state.sections.has('remote')) void remote?.load(remoteContext());
+    if (view === 'history' || view === 'home') void refreshJobs();
+    if (view === 'picker') void refreshSources();
+  }
+  function openDetail(jobId, returnView = state.view === 'detail' ? state.returnView : state.view) {
+    state.returnView = ['home', 'history'].includes(returnView) ? returnView : 'home';
+    state.selected = jobId; state.selectedJob = findJob(jobId);
+    navigate('detail');
+    void refreshJobs(true);
+  }
+  function remoteContext() {
+    return { api, escape, display, $, perform, toast, render, errorMessage, isVisible: () => state.view === 'settings' && state.sections.has('remote') };
+  }
+
+  // ---------- Binding ----------
+  function bindActions(root) {
+    root.querySelectorAll('[data-action]').forEach((button) => { button.onclick = () => action(button.dataset.action, button.dataset); });
+  }
+  function bindTip() {
+    const wrap = $('.tipwrap');
+    if (!wrap) return;
+    const show = () => { wrap.querySelector('.tip')?.classList.add('open'); };
+    const hide = () => { if (!state.tipOpen) wrap.querySelector('.tip')?.classList.remove('open'); };
+    wrap.onmouseenter = show; wrap.onmouseleave = hide;
+    wrap.onfocusin = show; wrap.onfocusout = hide;
+  }
   function bind() {
-    document.querySelectorAll('[data-nav]').forEach(button=>{button.onclick=()=>navigate(button.dataset.nav);});
-    document.querySelectorAll('[data-action]').forEach(button=>{button.onclick=()=>action(button.dataset.action,button.dataset);});
-    remote?.bind(remoteContext());
-    document.querySelectorAll('[data-job]').forEach(button=>{button.onclick=()=>{saveListContext();state.returnView=state.view;state.selected=button.dataset.job;state.selectedJob=findJob(state.selected);state.view='detail';state.actionError='';state.confirmCancel=false;render('h1');};});
-    document.querySelectorAll('[data-thread]').forEach(button=>{button.onclick=()=>{const thread=state.threads.find(item=>item.id===button.dataset.thread);if(state.picking){draft().threadId=thread.id;fitDraft(draft());state.view='composer';state.picking=false;state.search='';render('h1');}else openComposer(thread.id);};});
-    document.querySelectorAll('[data-filter]').forEach(button=>{button.onclick=()=>{state.historyFilter=button.dataset.filter;state.historyLimit=50;state.history=[];state.search='';render();void refreshJobs();};});
-    if($('#search')) $('#search').oninput=event=>{state.search=event.target.value;render();};
-    if($('#show-settled')) $('#show-settled').onchange=event=>{state.showSettled=event.target.checked;render();};
-    if($('#threads-harness')) $('#threads-harness').onchange=event=>{useHarness(event.target.value);if(state.picking&&draft()){Object.assign(draft(),{harness:state.harness,threadId:'',threadTitle:'',projectName:''});}render('#threads-harness');void refreshThreads();};
-    if($('#harness')) $('#harness').onchange=event=>{useHarness(event.target.value);Object.assign(draft(),{harness:state.harness,threadId:'',threadTitle:'',projectName:''});fitDraft(draft());render('#harness');void refreshThreads();void refreshAvailability();};
-    document.querySelectorAll('[data-trigger]').forEach(button=>{button.onclick=()=>{draft().trigger=button.dataset.trigger;if(button.dataset.trigger==='available')draft().waitIfLimited=false;render('[data-trigger="'+button.dataset.trigger+'"]');void refreshAvailability();};});
-    if($('#wait-if-limited'))$('#wait-if-limited').onchange=event=>{draft().waitIfLimited=event.target.checked;updatePreview();if(event.target.checked)void refreshAvailability();};
-    if($('#turn-limit'))$('#turn-limit').oninput=event=>{draft().turnLimit=event.target.value;updatePreview();if($('#schedule-error'))$('#schedule-error').textContent='';};
-    if($('#continuous'))$('#continuous').onchange=event=>{draft().continuous=event.target.checked;render('#continuous');};
-    document.querySelectorAll('[data-harness-key]').forEach(input=>{input.oninput=event=>{const [id,key]=input.dataset.harnessKey.split(':');state.harnessDraft[id]={...state.harnessDraft[id],[key]:event.target.value};};});
-    if($('#harness-form'))$('#harness-form').onsubmit=event=>{event.preventDefault();const values={};for(const [id,fields] of Object.entries(state.harnessDraft||{})){const item=harnessInfo(id);if(!item)continue;values[id]={};for(const [key,value] of Object.entries(fields)){const setting=item.settings.find(entry=>entry.key===key);if(setting)values[id][key]=setting.type==='port'?Number(value):value;}}void perform(()=>api.saveSettings({httpPort:state.settings.httpPort,bufferSeconds:state.settings.bufferSeconds,harnesses:values}),{errorTarget:'#harness-error',success:async()=>{state.settings=await api.getSettings();state.harnessDraft=null;toast('Agent settings saved.');void refreshThreads();}});};
-    ['message','date','time','timezone'].forEach(id=>{if($('#'+id))$('#'+id).oninput=event=>{draft()[id==='timezone'?'timeZone':id]=event.target.value;if(id!=='message'){draft().occurrence='';updatePreview();}if($('#schedule-error'))$('#schedule-error').textContent='';};});
-    bindOccurrence();
-    document.querySelectorAll('[data-quick]').forEach(button=>{button.onclick=()=>{try{Object.assign(draft(),time.quickTime(button.dataset.quick,draft().timeZone),{occurrence:''});render('#date');}catch(error){$('#schedule-error').textContent=errorMessage(error);}};});
-    document.querySelectorAll('[data-month]').forEach(button=>{button.onclick=()=>{const [year,month]=state.calendarMonth.split('-').map(Number);const next=new Date(Date.UTC(year,month-1+Number(button.dataset.month),1));state.calendarMonth=next.toISOString().slice(0,7);render('[data-month="'+button.dataset.month+'"]');};});
-    document.querySelectorAll('[data-day]').forEach(button=>{button.onclick=()=>{draft().date=button.dataset.day;draft().occurrence='';state.calendarOpen=false;render('#date');};button.onkeydown=event=>{const shifts={ArrowLeft:-1,ArrowRight:1,ArrowUp:-7,ArrowDown:7};if(shifts[event.key]){event.preventDefault();const date=new Date(button.dataset.day+'T12:00:00Z');date.setUTCDate(date.getUTCDate()+shifts[event.key]);const next=date.toISOString().slice(0,10);state.calendarMonth=next.slice(0,7);render('[data-day="'+next+'"]');}};});
-    if($('#schedule-form')) $('#schedule-form').onsubmit=event=>{
+    bindActions(app);
+    bindTip();
+    document.querySelectorAll('[data-open]').forEach((button) => { button.onclick = () => openDetail(button.dataset.open); });
+    document.querySelectorAll('[data-thread]').forEach((button) => { button.onclick = () => {
+      const row = state.sources[button.dataset.harness]?.threads?.find((item) => item.id === button.dataset.thread);
+      chooseConversation(button.dataset.harness, button.dataset.thread, row?.title || '', row?.projectName || '');
+      state.pickerQuery = '';
+      navigate('home', { focus: '#continue' });
+    }; });
+    document.querySelectorAll('[data-when]').forEach((button) => { button.onclick = () => { const d = draft(); d.when = button.dataset.when; d.whenTouched = true; d.occurrence = ''; if (d.when === 'available') d.waitIfLimited = false; render(`[data-when="${d.when}"]`); void refreshAvailability(d.harness); }; });
+    document.querySelectorAll('[data-far]').forEach((button) => { button.onclick = () => { draft().far = button.dataset.far; render(button.dataset.far === 'upto' ? '#turn-limit' : `[data-far="${button.dataset.far}"]`); }; });
+    document.querySelectorAll('[data-filter]').forEach((button) => { button.onclick = () => { state.historyFilter = button.dataset.filter; state.historyLimit = 50; state.history = []; state.search = ''; render(); void refreshJobs(); }; });
+    document.querySelectorAll('[data-section]').forEach((button) => { button.onclick = () => { const id = button.dataset.section; if (state.sections.has(id)) state.sections.delete(id); else state.sections.add(id); render(`[data-section="${id}"]`); if (id === 'remote' && state.sections.has(id)) void remote?.load(remoteContext()); }; });
+    document.querySelectorAll('[data-agent-move]').forEach((button) => { button.onclick = () => moveAgent(button.dataset.agentMove, Number(button.dataset.direction)); });
+    document.querySelectorAll('[data-agent-show]').forEach((input) => { input.onchange = () => showAgent(input.dataset.agentShow, input.checked); });
+    document.querySelectorAll('[data-harness-key]').forEach((input) => { input.oninput = (event) => { const [id, key] = input.dataset.harnessKey.split(':'); state.harnessDraft[id] = { ...state.harnessDraft[id], [key]: event.target.value }; }; });
+    if ($('#turn-limit')) $('#turn-limit').oninput = (event) => { draft().turnLimit = event.target.value; updatePlan(); };
+    if ($('#stop-phrase')) $('#stop-phrase').oninput = (event) => { draft().stopPhrase = event.target.value; updatePlan(); };
+    if ($('#wait-if-limited')) $('#wait-if-limited').onchange = (event) => { draft().waitIfLimited = event.target.checked; updatePlan(); if (event.target.checked) void refreshAvailability(draft().harness); };
+    if ($('#message')) $('#message').oninput = (event) => { draft().message = event.target.value; clearPlanError(); };
+    ['date', 'time', 'timezone'].forEach((id) => { if ($('#' + id)) $('#' + id).oninput = (event) => { draft()[id === 'timezone' ? 'timeZone' : id] = event.target.value; draft().occurrence = ''; updatePlan(); }; });
+    if ($('#occurrence')) $('#occurrence').onchange = (event) => { draft().occurrence = event.target.value; updatePlan(); };
+    if ($('#picker-search')) $('#picker-search').oninput = (event) => { state.pickerQuery = event.target.value; render('#picker-search'); };
+    if ($('#search')) $('#search').oninput = (event) => { state.search = event.target.value; render('#search'); };
+    if ($('#continue-form')) $('#continue-form').onsubmit = submit;
+    ['token', 'port'].forEach((id) => { if ($('#' + id)) $('#' + id).oninput = (event) => { state.settingsDraft[id === 'token' ? 't3Token' : 'httpPort'] = id === 'token' ? event.target.value : Number(event.target.value); }; });
+    if ($('#buffer')) $('#buffer').oninput = (event) => { if (!state.settingsDraft) state.settingsDraft = { t3Token: '', httpPort: state.settings.httpPort, bufferSeconds: state.settings.bufferSeconds }; state.settingsDraft.bufferSeconds = Number(event.target.value); };
+    if ($('#agents-form')) $('#agents-form').onsubmit = (event) => {
       event.preventDefault();
-      const d=draft(); let selected;
-      const timed=d.trigger!=='available';
-      try{if(!d.threadId)throw new Error(`Choose a ${noun(d.harness)} before scheduling.`);if(!d.message.trim())throw new Error('Enter a message.');if(!d.continuous&&!/^\d+$/.test(String(d.turnLimit).trim()))throw new Error('Turn limit must be a whole number of 1 or more.');if(timed)selected=time.resolveWallTime(d.date,d.time,d.timeZone,d.occurrence);}catch(error){$('#schedule-error').textContent=errorMessage(error);return;}
-      const key=state.draftKey,input={harness:d.harness,threadId:d.threadId,message:d.message,timeZone:d.timeZone,trigger:timed?(d.waitIfLimited?'time-then-available':'time'):'available',continuous:d.continuous,...(d.continuous?{}:{turnLimit:Number(d.turnLimit)}),...(timed?{whenISO:selected.iso}:{})};
-      void perform(()=>d.editId?api.editJob(d.editId,input):api.createSchedule(input),{errorTarget:'#schedule-error',success:async()=>{state.drafts.delete(key);state.view='upcoming';state.search='';state.returnView='upcoming';await refreshJobs(false);toast(d.editId?'Schedule updated.':timed?'Message scheduled.':'Waiting for the agent to be available.');}});
+      const values = {};
+      for (const [id, fields] of Object.entries(state.harnessDraft || {})) {
+        const item = harnessInfo(id); if (!item) continue;
+        values[id] = {};
+        for (const [key, value] of Object.entries(fields)) { const setting = item.settings.find((entry) => entry.key === key); if (setting) values[id][key] = setting.type === 'port' ? Number(value) : value; }
+      }
+      const s = state.settingsDraft || {};
+      void perform(() => api.saveSettings({ httpPort: s.httpPort ?? state.settings.httpPort, bufferSeconds: state.settings.bufferSeconds, t3Token: s.t3Token || '', harnesses: values }), { errorTarget: '#agents-error', success: async () => { state.settings = await api.getSettings(); state.harnessDraft = null; state.settingsDraft = null; toast('Agent settings saved.'); void refreshSources(true); } });
     };
-    ['token','port','buffer'].forEach(id=>{if($('#'+id))$('#'+id).oninput=event=>{state.settingsDraft[id==='token'?'t3Token':id==='port'?'httpPort':'bufferSeconds']=id==='token'?event.target.value:Number(event.target.value);};});
-    if($('#settings-form'))$('#settings-form').onsubmit=event=>{event.preventDefault();void perform(()=>api.saveSettings({...state.settingsDraft}),{errorTarget:'#settings-error',success:async()=>{state.settings=await api.getSettings();state.settingsDraft=null;toast('Settings saved.');void refreshThreads();}});};
-    const keepAwakeFields={'ka-enabled':['enabled','checked'],'ka-display':['keepDisplayOn','checked'],'ka-agents':['includeRunningAgents','checked'],'ka-power':['powerSource','value'],'ka-floor':['batteryFloorPercent','value'],'ka-hours':['maxHours','value']};
-    Object.entries(keepAwakeFields).forEach(([id,[key,property]])=>{if($('#'+id))$('#'+id)[property==='checked'||id==='ka-power'?'onchange':'oninput']=event=>{state.keepAwakeDraft[key]=property==='checked'?event.target.checked:id==='ka-power'?event.target.value:Number(event.target.value);if(id==='ka-power')$('#ka-floor').disabled=event.target.value==='ac-only';if($('#keep-awake-error'))$('#keep-awake-error').textContent='';};});
-    if($('#keep-awake-form'))$('#keep-awake-form').onsubmit=event=>{event.preventDefault();void perform(()=>api.configureKeepAwake({...state.keepAwakeDraft}),{errorTarget:'#keep-awake-error',success:snapshot=>{state.keepAwake=snapshot;state.keepAwakeDraft=null;toast(snapshot.enabled?'Keep-awake is on.':'Keep-awake is off.');}});};
-    if($('#theme'))$('#theme').onchange=event=>{state.theme=event.target.value;savePreferences();render('#theme');};
-    if($('#motion'))$('#motion').onchange=event=>{state.reduceMotion=event.target.checked;savePreferences();render('#motion');};
-    const starButton=$('#support-star');
-    if(starButton){starButton.onpointerdown=event=>{if(event.isPrimary&&event.button===0)holdStar();};starButton.onkeydown=event=>{if(event.key==='Enter'&&event.repeat)event.preventDefault();if(event.key===' '&&!event.repeat)holdStar();};starButton.onclick=spinStar;}
+    if ($('#advanced-form')) $('#advanced-form').onsubmit = (event) => {
+      event.preventDefault();
+      const buffer = state.settingsDraft?.bufferSeconds ?? state.settings.bufferSeconds;
+      void perform(() => api.saveSettings({ httpPort: state.settings.httpPort, bufferSeconds: buffer }), { errorTarget: '#advanced-error', success: async () => { state.settings = await api.getSettings(); state.settingsDraft = null; if (state.draft && !state.draft.editId) state.draft.bufferSeconds = state.settings.bufferSeconds; toast('Settings saved.'); } });
+    };
+    const keepAwakeFields = { 'ka-enabled': ['enabled', 'checked'], 'ka-display': ['keepDisplayOn', 'checked'], 'ka-agents': ['includeRunningAgents', 'checked'], 'ka-power': ['powerSource', 'value'], 'ka-floor': ['batteryFloorPercent', 'value'], 'ka-hours': ['maxHours', 'value'] };
+    Object.entries(keepAwakeFields).forEach(([id, [key, property]]) => { if ($('#' + id)) $('#' + id)[property === 'checked' || id === 'ka-power' ? 'onchange' : 'oninput'] = (event) => { state.keepAwakeDraft[key] = property === 'checked' ? event.target.checked : id === 'ka-power' ? event.target.value : Number(event.target.value); if (id === 'ka-power') $('#ka-floor').disabled = event.target.value === 'ac-only'; if ($('#keep-awake-error')) $('#keep-awake-error').textContent = ''; }; });
+    if ($('#keep-awake-form')) $('#keep-awake-form').onsubmit = (event) => { event.preventDefault(); void perform(() => api.configureKeepAwake({ ...state.keepAwakeDraft }), { errorTarget: '#keep-awake-error', success: (snapshot) => { state.keepAwake = snapshot; state.keepAwakeDraft = null; toast(snapshot.enabled ? 'Keep-awake is on.' : 'Keep-awake is off.'); } }); };
+    if ($('#theme')) $('#theme').onchange = (event) => { state.theme = event.target.value; savePreferences(); render('#theme'); };
+    if ($('#motion')) $('#motion').onchange = (event) => { state.reduceMotion = event.target.checked; savePreferences(); render('#motion'); };
+    const starButton = $('#support-star');
+    if (starButton) { starButton.onpointerdown = (event) => { if (event.isPrimary && event.button === 0) holdStar(); }; starButton.onkeydown = (event) => { if (event.key === 'Enter' && event.repeat) event.preventDefault(); if (event.key === ' ' && !event.repeat) holdStar(); }; starButton.onclick = spinStar; }
+    remote?.bind(remoteContext());
   }
-  function savePreferences(){try{localStorage.setItem('scheduler-theme',state.theme);localStorage.setItem('scheduler-motion',state.reduceMotion?'reduce':'system');}catch{/* Cosmetic preferences can remain session-only. */}}
-  function action(name, data = {}) {
-    if(name==='support'){void perform(()=>api.openSupport());return;}
-    if(name==='keep-awake-stop'){void perform(()=>api.stopKeepAwake(),{success:snapshot=>{state.keepAwake=snapshot;toast('Your Mac can sleep now.');}});return;}
-    if(name==='keep-awake-resume'){void perform(()=>api.resumeKeepAwake(),{success:snapshot=>{state.keepAwake=snapshot;toast('Keeping your Mac awake again.');}});return;}
-    if(name==='copy-diagnostics'){void perform(()=>api.copyDiagnostics(),{success:()=>toast('Diagnostics copied. Paste them into your bug report.')});return;}
-    if(name==='recheck-compatibility'){void perform(()=>api.checkCompatibility(data.harness),{success:async list=>{state.compatibility=Array.isArray(list)?list:[];await refreshJobs(false);const item=state.compatibility.find(entry=>entry.harness===data.harness);toast(item?.ok?`${item.label} looks supported again.`:`${item?.label||harnessLabel(data.harness)} still needs an update of Agent Auto-Continue.`);}});return;}
-    if(name==='new')return openComposer();
-    if(name==='theme'){state.theme=document.body.classList.contains('dark')?'light':'dark';savePreferences();render();return;}
-    if(name==='back'){if(state.picking){state.picking=false;state.view='composer';state.search='';render('h1');}else navigate(state.returnView,true);return;}
-    if(name==='pick'){state.picking=true;state.view='threads';state.search='';render('#search');void refreshThreads();return;}
-    if(name==='clear-thread-filter'){state.search='';state.showSettled=true;render('#search');return;}
-    if(name==='calendar'){state.calendarOpen=!state.calendarOpen;state.calendarMonth=draft().date.slice(0,7);render(state.calendarOpen?'[data-day="'+draft().date+'"]':'#date');return;}
-    if(name==='refresh'){void refreshJobs();void refreshThreads();return;}
-    if(name==='stop-all'){void perform(()=>api.stopAllContinuations(),{success:async result=>{await refreshJobs(false);toast(`Stopped ${result.stopped.length} ${result.stopped.length===1?'continuation':'continuations'}. Nothing more will be sent.`);}});return;}
-    if(name==='more'){if(state.view==='history')state.historyLimit+=50;else state.limit+=50;void refreshJobs();return;}
-    if(name==='check-t3'){void perform(()=>api.checkConnection('t3'),{errorTarget:'#settings-error',success:async result=>{if(!result.online)throw new Error(result.errorInfo?.message||(typeof result.error==='object'?result.error?.message:result.error)||'Cannot connect to T3 Code.');toast('Connected to T3 Code.');if(state.harness==='t3')await refreshThreads(false);}});return;}
-    if(name==='open-permission-settings'){void perform(()=>api.openPermissionSettings());return;}
-    if(name==='check'){void perform(()=>api.checkConnection(state.harness),{success:async result=>{if(result.online){state.online=true;state.connectionError=null;toast(`Connected to ${harnessLabel()}.`);}else{state.online=false;state.connectionError=result.errorInfo||(typeof result.error==='object'?result.error:{message:result.error});}await refreshThreads(false);}});return;}
-    const job=findJob();
-    if(!job)return;
-    if(name==='edit'){state.draftKey='edit:'+job.id;if(!draft()){const wall=time.formatInstant(job.scheduleAt,job.timeZone||localZone);state.drafts.set(state.draftKey,{...newDraft(job.threadId,job.message,job.timeZone||localZone,job.harness||'t3'),...wall,occurrence:job.scheduleAt,editId:job.id,bufferSeconds:job.bufferSeconds,threadTitle:job.threadTitle,projectName:job.projectName,...automationDraft(job)});}state.view='composer';state.actionError='';state.calendarOpen=false;render('h1');void refreshAvailability();return;}
-    if(name==='stop'){void perform(()=>api.stopJob(job.id),{success:async updated=>{state.selectedJob=updated;await refreshJobs(false);toast('Stopped. Nothing more will be sent.');}});return;}
-    if(name==='resume'){void perform(()=>api.resumeJob(job.id),{success:async updated=>{state.selectedJob=updated;await refreshJobs(false);toast('Continuation resumed.');}});return;}
-    if(name==='cancel'){state.confirmCancel=true;render('[data-action="confirm-cancel"]');return;}
-    if(name==='keep'){state.confirmCancel=false;render('[data-action="cancel"]');return;}
-    if(name==='confirm-cancel'){void perform(()=>api.cancelJob(job.id),{success:async updated=>{state.selectedJob=updated;state.confirmCancel=false;await refreshJobs(false);toast('Schedule canceled. The record remains in History.');}});return;}
-    if(name==='ack'){void perform(()=>api.acknowledgeJob(job.id),{success:async updated=>{state.selectedJob=updated;await refreshJobs(false);toast('Acknowledged. The record remains in History.');}});return;}
-    if(name==='reconcile'){void perform(()=>api.reconcileJob(job.id),{success:async result=>{if(!result.ok)throw new Error(result.error?.message||'Could not check delivery.');state.selectedJob=result.job;await refreshJobs(false);toast((result.job.deliveryStatus || result.job.status)==='sent'?'Delivery confirmed.':'Delivery remains unconfirmed. No resend was attempted.');}});return;}
-    if(name==='again'){void perform(()=>api.scheduleAgain(job.id),{success:payload=>{state.draftKey='again:'+job.id;state.drafts.set(state.draftKey,{...newDraft(payload.threadId,payload.message,payload.timeZone||localZone,payload.harness||job.harness||'t3'),threadTitle:job.threadTitle,projectName:job.projectName,...automationDraft(payload)});useHarness(payload.harness||job.harness||'t3');fitDraft(draft());void refreshAvailability();void refreshThreads();state.returnView='history';state.view='composer';state.actionError='';}});}
+  function savePreferences() { try { localStorage.setItem('scheduler-theme', state.theme); localStorage.setItem('scheduler-motion', state.reduceMotion ? 'reduce' : 'system'); } catch { /* Cosmetic preferences can remain session-only. */ } }
+  function clearPlanError() { if ($('#plan-error')) $('#plan-error').textContent = ''; }
+  function updatePlan() {
+    clearPlanError();
+    const d = draft();
+    const target = $('#plan');
+    if (target) target.textContent = compose.planSentence({ draft: d, label: harnessLabel(d.harness), availability: availabilityFor(d.harness), time, display, supportsTurns: support(d.harness).multipleTurns.supported });
+    if (d.when === 'custom' && $('#custom-time')) {
+      const existing = $('#occurrence');
+      const markup = occurrence(d);
+      if (Boolean(existing) !== Boolean(markup)) render(document.activeElement?.id ? '#' + document.activeElement.id : undefined);
+    }
   }
-  async function readAllPages(view, limit, status) {
-    const jobs=[];let result;
-    for(let offset=0;offset<limit;offset+=500){result=await api.listJobs({view,limit:Math.min(500,limit-offset),offset,...(status?{status}:{})});jobs.push(...result.jobs);if(jobs.length>=result.total)break;}
-    return {...result,jobs};
-  }
-  async function refreshJobs(shouldRender=true, notifyFailures=false) {
-    const request=++jobRequest;
-    const previous=JSON.stringify([state.upcoming,state.history,state.upcomingTotal,state.historyTotal,state.unacknowledged,state.jobsError,state.loading,state.selectedJob,state.storageError]);
+  function submit(event) {
+    event.preventDefault();
+    const d = draft();
+    let when;
     try {
-      const [upcoming,history,selectedDetail]=await Promise.all([readAllPages('upcoming',state.limit),readAllPages('history',state.historyLimit,state.historyFilter),state.selected&&api.getJob?api.getJob(state.selected).catch(()=>null):null]);
-      if(stopped||request!==jobRequest)return;
-      state.storageError=upcoming.storageError||history.storageError||null;state.upcoming=upcoming.jobs;state.history=history.jobs;state.upcomingTotal=upcoming.total;state.historyTotal=history.total;state.unacknowledged=history.unacknowledgedFailures;state.jobsError='';
-      for(const job of history.jobs.filter(item=>['failed','unconfirmed'].includes(item.deliveryStatus || item.status)||item.automation?.state==='paused')){const key=job.id+':'+(job.automation?.changedAt||'');if(failuresKnown&&notifyFailures&&!knownProblems.has(key)&&!job.acknowledgedAt)toast((job.deliveryStatus || job.status)==='unconfirmed'?'A delivery needs confirmation.':(job.deliveryStatus || job.status)==='failed'?'A scheduled message failed.':'A continuation paused and needs a look.',job.id);knownProblems.add(key);}
-      failuresKnown=true;
-      const selected=selectedDetail||[...upcoming.jobs,...history.jobs].find(job=>job.id===state.selected);if(selected)state.selectedJob=selected;
-    }catch(error){if(request===jobRequest)state.jobsError=errorMessage(error);}
-    finally {if(request===jobRequest){state.loading=false;const changed=previous!==JSON.stringify([state.upcoming,state.history,state.upcomingTotal,state.historyTotal,state.unacknowledged,state.jobsError,state.loading,state.selectedJob,state.storageError]);if(shouldRender&&changed&&!state.busy&&!['composer','settings'].includes(state.view)&&!state.picking)render();else updateChrome();}}
+      if (!d.threadId) throw new Error(`Choose a ${noun(d.harness)} first.`);
+      if (!d.message.trim()) throw new Error('Enter a message.');
+      if (d.far === 'upto' && !/^\d+$/.test(String(d.turnLimit).trim())) throw new Error('Turn limit must be a whole number of 1 or more.');
+      when = compose.resolveWhen(d, time);
+    } catch (error) { $('#plan-error').textContent = errorMessage(error); return; }
+    const input = { harness: d.harness, threadId: d.threadId, message: d.message, timeZone: d.timeZone, trigger: when.trigger, continuous: d.far === 'until', ...(d.far === 'until' ? {} : { turnLimit: d.far === 'upto' ? Number(d.turnLimit) : 1 }), ...(d.far !== 'once' ? { stopPhrase: d.stopPhrase.trim() || null } : {}), ...(when.whenISO ? { whenISO: when.whenISO } : {}) };
+    const editId = d.editId;
+    void perform(() => editId ? api.editJob(editId, input) : api.createSchedule(input), { errorTarget: '#plan-error', success: async () => {
+      state.draft = newDraft(d.harness); state.messageOpen = false;
+      await refreshJobs(false);
+      toast(editId ? 'Message updated.' : when.trigger === 'available' ? `Waiting for ${harnessLabel(d.harness)} to be free.` : 'Queued.');
+    } });
   }
-  function updateChrome(){const notices=$('#notices');if(notices){notices.innerHTML=notice();notices.querySelectorAll('[data-action]').forEach(button=>{button.onclick=()=>action(button.dataset.action,button.dataset);});notices.querySelectorAll('[data-nav]').forEach(button=>{button.onclick=()=>navigate(button.dataset.nav);});}document.querySelectorAll('[data-count="upcoming"]').forEach(node=>{node.textContent=state.upcomingTotal;});document.querySelectorAll('[data-count="history"]').forEach(node=>{node.textContent=state.unacknowledged||'';});if($('#ka-status'))$('#ka-status').textContent=keepAwakeStatus();const status=$('#connection-state');if(status){status.textContent=state.online===null?'Connecting…':state.online?harnessLabel()+' connected':'Offline · queue saved';status.classList.toggle('offline',state.online===false);}}
+  // Arrangement changes save at once; there is nothing else to confirm.
+  function moveAgent(id, direction) {
+    const order = arrangedAgents().map((item) => item.id);
+    const index = order.indexOf(id);
+    const target = index + direction;
+    if (index < 0 || target < 0 || target >= order.length) return;
+    order.splice(index, 1); order.splice(target, 0, id);
+    saveArrangement({ order, hidden: arrangedAgents().filter((item) => item.hidden).map((item) => item.id) }, `[data-agent-move="${id}"][data-direction="${direction}"]`);
+  }
+  function showAgent(id, shown) {
+    const hidden = new Set(arrangedAgents().filter((item) => item.hidden).map((item) => item.id));
+    if (shown) hidden.delete(id); else hidden.add(id);
+    saveArrangement({ order: arrangedAgents().map((item) => item.id), hidden: [...hidden] }, `[data-agent-show="${id}"]`);
+  }
+  function saveArrangement(agents, focus) {
+    void perform(() => api.saveSettings({ httpPort: state.settings.httpPort, bufferSeconds: state.settings.bufferSeconds, agents }), { errorTarget: '#agents-error', success: async () => {
+      state.settings = await api.getSettings(); state.agents = state.settings.agents || [];
+      if (state.draft && !isVisible(state.draft.harness) && !state.draft.threadId) state.draft.harness = visibleAgents()[0]?.id || state.draft.harness;
+      render(focus); void refreshSources(true);
+    } });
+  }
+  function action(name, data = {}) {
+    if (name === 'settings') return navigate('settings', { focus: '[data-section="agents"]' });
+    if (name === 'back') { const target = state.view === 'detail' ? state.returnView : 'home'; state.pickerQuery = ''; return navigate(target, { focus: state.view === 'picker' ? '#pick' : undefined }); }
+    if (name === 'history') { state.returnView = 'home'; return navigate('history', { focus: '#search' }); }
+    if (name === 'pick') { if (draft().editId) return; return navigate('picker', { focus: '#picker-search' }); }
+    if (name === 'toggle-settled') { state.showSettled = !state.showSettled; render('[data-action="toggle-settled"]'); return; }
+    if (name === 'edit-message') { state.messageOpen = true; render('#message'); return; }
+    if (name === 'cancel-edit') { state.draft = newDraft(draft().harness); state.messageOpen = false; render('#pick'); return; }
+    if (name === 'layout') { void perform(() => api.setLayout(data.layout)); return; }
+    if (name === 'awake') {
+      const k = state.keepAwake; if (!k) return;
+      void perform(() => api.configureKeepAwake({ ...k.settings, enabled: !k.settings.enabled }), { success: (snapshot) => { state.keepAwake = snapshot; state.keepAwakeDraft = null; toast(snapshot.enabled ? 'Keep-awake is on.' : 'Keep-awake is off.'); } });
+      return;
+    }
+    if (name === 'support') { void perform(() => api.openSupport()); return; }
+    if (name === 'keep-awake-stop') { void perform(() => api.stopKeepAwake(), { success: (snapshot) => { state.keepAwake = snapshot; toast('Your Mac can sleep now.'); } }); return; }
+    if (name === 'keep-awake-resume') { void perform(() => api.resumeKeepAwake(), { success: (snapshot) => { state.keepAwake = snapshot; toast('Keeping your Mac awake again.'); } }); return; }
+    if (name === 'copy-diagnostics') { void perform(() => api.copyDiagnostics(), { success: () => toast('Diagnostics copied. Paste them into your bug report.') }); return; }
+    if (name === 'recheck-compatibility') { void perform(() => api.checkCompatibility(data.harness), { success: async (list) => { state.compatibility = Array.isArray(list) ? list : []; await refreshJobs(false); const item = state.compatibility.find((entry) => entry.harness === data.harness); toast(item?.ok ? `${item.label} looks supported again.` : `${item?.label || harnessLabel(data.harness)} still needs an update of Agent Auto-Continue.`); } }); return; }
+    if (name === 'open-permission-settings') { void perform(() => api.openPermissionSettings()); return; }
+    if (name === 'check') { const harness = data.harness || draft().harness; void perform(() => api.checkConnection(harness), { success: async (result) => { if (result.online) toast(`Connected to ${harnessLabel(harness)}.`); else { const error = result.errorInfo || (typeof result.error === 'object' ? result.error : { message: result.error }); state.sources[harness] = { ...(state.sources[harness] || { threads: [] }), online: false, error }; toast(`${harnessLabel(harness)}: ${error?.message || 'not reachable'}`); } await refreshSources(false, [harness]); } }); return; }
+    if (name === 'check-availability') { void refreshAvailability(draft().harness, true); return; }
+    if (name === 'refresh') { void refreshJobs(); void refreshSources(); return; }
+    if (name === 'stop-all') { void perform(() => api.stopAllContinuations(), { success: async (result) => { await refreshJobs(false); toast(`Stopped ${result.stopped.length} ${result.stopped.length === 1 ? 'continuation' : 'continuations'}. Nothing more will be sent.`); } }); return; }
+    if (name === 'more') { state.historyLimit += 50; void refreshJobs(); return; }
+    const job = findJob(data.job || state.selected);
+    if (!job) return;
+    if (name === 'edit') { startEdit(job); return; }
+    if (name === 'stop') { void perform(() => api.stopJob(job.id), { success: async (updated) => { state.selectedJob = updated; await refreshJobs(false); toast('Stopped. Nothing more will be sent.'); } }); return; }
+    if (name === 'resume') { void perform(() => api.resumeJob(job.id), { success: async (updated) => { state.selectedJob = updated; await refreshJobs(false); toast('Continuation resumed.'); } }); return; }
+    if (name === 'cancel') { if (state.view === 'detail') { state.confirmCancel = true; render('[data-action="confirm-cancel"]'); } else void perform(() => api.cancelJob(job.id), { success: async () => { await refreshJobs(false); toast('Canceled. The record stays in History.'); } }); return; }
+    if (name === 'keep') { state.confirmCancel = false; render('[data-action="cancel"]'); return; }
+    if (name === 'mark-not-delivered') { state.confirmMark = true; render('[data-action="confirm-mark"]'); return; }
+    if (name === 'keep-mark') { state.confirmMark = false; render('[data-action="mark-not-delivered"]'); return; }
+    // The service refuses the mark when its last check finds the message, having confirmed the delivery instead; that is good news, not an error.
+    if (name === 'confirm-mark') { void perform(() => api.markNotDelivered(job.id, { confirm: true }).catch(async (error) => { const fresh = await api.getJob(job.id).catch(() => null); if (fresh && (fresh.deliveryStatus || fresh.status) === 'sent') return fresh; throw error; }), { success: async (updated) => { state.selectedJob = updated; state.confirmMark = false; await refreshJobs(false); toast((updated.deliveryStatus || updated.status) === 'sent' ? 'The message was found after all. Delivery confirmed.' : 'Marked as not delivered.'); } }); return; }
+    if (name === 'confirm-cancel') { void perform(() => api.cancelJob(job.id), { success: async (updated) => { state.selectedJob = updated; state.confirmCancel = false; await refreshJobs(false); toast('Canceled. The record stays in History.'); } }); return; }
+    if (name === 'ack') { void perform(() => api.acknowledgeJob(job.id), { success: async (updated) => { state.selectedJob = updated; await refreshJobs(false); toast('Acknowledged. The record stays in History.'); } }); return; }
+    if (name === 'reconcile') { void perform(() => api.reconcileJob(job.id), { success: async (result) => { if (!result.ok) throw new Error(result.error?.message || 'Could not check delivery.'); state.selectedJob = result.job; await refreshJobs(false); toast((result.job.deliveryStatus || result.job.status) === 'sent' ? 'Delivery confirmed.' : 'Delivery remains unconfirmed. No resend was attempted.'); } }); return; }
+    if (name === 'again') { void perform(() => api.scheduleAgain(job.id), { success: (payload) => { state.draft = { ...newDraft(payload.harness || job.harness || 't3', payload.threadId, payload.message, payload.timeZone || localZone), threadTitle: job.threadTitle, projectName: job.projectName, ...automationDraft(payload) }; fitDraft(state.draft); state.messageOpen = false; state.view = 'home'; void refreshAvailability(state.draft.harness); } }); }
+  }
+  function startEdit(job) {
+    const wall = time.formatInstant(job.scheduleAt, job.timeZone || localZone);
+    state.draft = { ...newDraft(job.harness || 't3', job.threadId, job.message, job.timeZone || localZone), ...wall, when: job.automation?.trigger === 'available' ? 'available' : 'custom', whenTouched: true, occurrence: job.scheduleAt, editId: job.id, bufferSeconds: job.bufferSeconds, threadTitle: job.threadTitle, projectName: job.projectName, ...automationDraft(job) };
+    fitDraft(state.draft);
+    state.messageOpen = false; state.returnView = 'home';
+    navigate('home', { focus: '#continue' });
+    void refreshAvailability(state.draft.harness);
+  }
+
+  // ---------- Data ----------
+  async function readAllPages(view, limit, status) {
+    const jobs = []; let result;
+    for (let offset = 0; offset < limit; offset += 500) { result = await api.listJobs({ view, limit: Math.min(500, limit - offset), offset, ...(status ? { status } : {}) }); jobs.push(...result.jobs); if (jobs.length >= result.total) break; }
+    return { ...result, jobs };
+  }
+  const jobsSnapshot = () => JSON.stringify([state.upcoming, state.history, state.upcomingTotal, state.historyTotal, state.unacknowledged, state.jobsError, state.loading, state.selectedJob, state.storageError]);
+  async function refreshJobs(shouldRender = true, notifyFailures = false) {
+    const request = ++jobRequest;
+    const previous = jobsSnapshot();
+    try {
+      const [upcoming, history_, selectedDetail] = await Promise.all([readAllPages('upcoming', 500), readAllPages('history', state.view === 'history' ? state.historyLimit : 50, state.view === 'history' ? state.historyFilter : ''), state.selected && api.getJob ? api.getJob(state.selected).catch(() => null) : null]);
+      if (stopped || request !== jobRequest) return;
+      state.storageError = upcoming.storageError || history_.storageError || null; state.upcoming = upcoming.jobs; state.history = history_.jobs; state.upcomingTotal = upcoming.total; state.historyTotal = history_.total; state.unacknowledged = history_.unacknowledgedFailures; state.jobsError = '';
+      for (const job of history_.jobs.filter((item) => ['failed', 'unconfirmed'].includes(item.deliveryStatus || item.status) || item.automation?.state === 'paused')) {
+        const key = job.id + ':' + (job.automation?.changedAt || '');
+        if (failuresKnown && notifyFailures && !knownProblems.has(key) && !job.acknowledgedAt) toast((job.deliveryStatus || job.status) === 'unconfirmed' ? 'A delivery needs confirmation.' : (job.deliveryStatus || job.status) === 'failed' ? 'A message failed.' : 'A continuation paused and needs a look.', job.id);
+        knownProblems.add(key);
+      }
+      failuresKnown = true;
+      const selected = selectedDetail || [...upcoming.jobs, ...history_.jobs].find((job) => job.id === state.selected); if (selected) state.selectedJob = selected;
+    } catch (error) { if (request === jobRequest) state.jobsError = errorMessage(error); }
+    finally {
+      if (request === jobRequest) {
+        state.loading = false;
+        const changed = previous !== jobsSnapshot();
+        if (shouldRender && changed && !state.busy && state.view !== 'settings' && state.view !== 'picker' && !editingText()) render(); else updateChrome();
+      }
+    }
+  }
+  // A render while someone types in the message or the custom time would swallow their keystrokes.
+  const editingText = () => ['message', 'date', 'time', 'timezone', 'turn-limit', 'stop-phrase', 'search', 'picker-search', 'token', 'port', 'buffer'].includes(document.activeElement?.id);
   async function refreshCompatibility() {
-    if(!api.getCompatibility)return;
-    try{const list=await api.getCompatibility();if(stopped)return;const before=JSON.stringify(state.compatibility);state.compatibility=Array.isArray(list)?list:[];if(before!==JSON.stringify(state.compatibility)&&!state.busy)updateChrome();}
-    catch{/* The last known state stays visible. */}
+    if (!api.getCompatibility) return;
+    try { const list = await api.getCompatibility(); if (stopped) return; const before = JSON.stringify(state.compatibility); state.compatibility = Array.isArray(list) ? list : []; if (before !== JSON.stringify(state.compatibility) && !state.busy) updateChrome(); }
+    catch { /* The last known state stays visible. */ }
   }
-  async function refreshThreads(shouldRender=true) {
-    const request=++threadRequest;
-    const previous=JSON.stringify([state.threads,state.online]);
-    const harness=state.harness;
-    try{const result=await api.getThreads({showSettled:true,harness});if(stopped||request!==threadRequest||harness!==state.harness)return;state.online=result.online;state.connectionError=result.errorInfo||(typeof result.error==='object'?result.error:{message:result.error});if(result.online)state.threads=result.threads;}
-    catch(error){if(request===threadRequest){state.online=false;state.connectionError={message:errorMessage(error)};}}
-    finally{if(request===threadRequest){lastRefresh=Date.now();if(shouldRender&&previous!==JSON.stringify([state.threads,state.online])&&!state.busy&&state.view==='threads')render();else updateChrome();}}
+  // Conversations of every visible agent, each read independently so one slow agent never hides the others.
+  async function refreshSources(shouldRender = true, only = null) {
+    const targets = (only ? only.map(harnessInfo).filter(Boolean) : visibleAgents());
+    const previous = JSON.stringify(state.sources);
+    await Promise.all(targets.map(async (info) => {
+      const request = (sourceRequests.get(info.id) || 0) + 1;
+      sourceRequests.set(info.id, request);
+      try {
+        const result = await api.getThreads({ showSettled: true, harness: info.id });
+        if (stopped || sourceRequests.get(info.id) !== request) return;
+        const error = result.online ? null : result.errorInfo || (typeof result.error === 'object' ? result.error : { message: result.error });
+        state.sources[info.id] = { online: result.online, error, threads: result.online ? result.threads : state.sources[info.id]?.threads || [], loadedAt: Date.now() };
+      } catch (error) {
+        if (sourceRequests.get(info.id) === request) state.sources[info.id] = { online: false, error: { message: errorMessage(error) }, threads: state.sources[info.id]?.threads || [], loadedAt: Date.now() };
+      }
+    }));
+    lastRefresh = Date.now();
+    if (stopped) return;
+    // The picker re-renders even while its search box has focus: render() restores the caret.
+    if (shouldRender && previous !== JSON.stringify(state.sources) && !state.busy && (state.view === 'picker' || (state.view === 'home' && !editingText()))) render(); else updateChrome();
+  }
+  // Reads the draft harness's availability; a limited agent moves an untouched draft to "When free".
+  async function refreshAvailability(harness = draft().harness, force = false) {
+    if (!support(harness).whenAvailable.supported || !api.checkAvailability) return;
+    const previous = state.availability[harness];
+    if (previous?.loading) return;
+    if (!force && previous?.at && Date.now() - previous.at < 20000) return;
+    state.availability[harness] = { ...(previous || {}), loading: true };
+    try { const result = await api.checkAvailability(harness); state.availability[harness] = result.ok ? { availability: result.availability, at: Date.now() } : { error: result.error?.message || 'Unknown error', at: Date.now() }; }
+    catch (error) { state.availability[harness] = { error: errorMessage(error), at: Date.now() }; }
+    if (stopped) return;
+    const d = state.draft;
+    if (d && d.harness === harness && !d.whenTouched && !d.editId && availabilityFor(harness)?.state === 'limited') d.when = 'available';
+    if (state.view === 'home' && !state.busy && !editingText()) render(); else updateChrome();
   }
   function route(payload) {
-    if(!payload)return;
-    if(payload.view==='composer'||payload.view==='compose'){openComposer(payload.threadId,payload.harness);if(payload.threadLabel&&draft())draft().threadTitle=payload.threadLabel;render('h1');}
-    else if(payload.jobId){state.selected=payload.jobId;state.returnView=payload.view==='upcoming'?'upcoming':'history';state.view='detail';state.search='';render('h1');void refreshJobs();}
-    else if(['upcoming','history','threads','settings'].includes(payload.view))navigate(payload.view);
+    if (!payload) return;
+    if (payload.view === 'composer' || payload.view === 'compose') {
+      const harness = payload.harness || draft().harness;
+      if (payload.threadId) { state.draft = newDraft(harness); chooseConversation(harness, payload.threadId, payload.threadLabel || '', ''); }
+      state.messageOpen = false;
+      navigate('home', { focus: '#continue' });
+      void refreshSources();
+    } else if (payload.jobId) { openDetail(payload.jobId, payload.view === 'history' ? 'history' : 'home'); }
+    else if (payload.view === 'settings') navigate('settings', { focus: '[data-section="agents"]' });
+    else if (payload.view === 'picker' || payload.view === 'threads') navigate('picker', { focus: '#picker-search' });
+    else if (payload.view === 'history') navigate('history', { focus: '#search' });
+    else navigate('home', { focus: '#pick' });
   }
-  if(!api){app.innerHTML='<main class="content"><h1>Open the desktop app</h1><p>This interface needs the Agent Auto-Continue desktop connection.</p></main>';return;}
-  if(api.onNavigate)cleanup.push(api.onNavigate(route));
-  if(api.onScheduleInit)cleanup.push(api.onScheduleInit(payload=>route({...payload,view:'composer'})));
-  if(api.onJobsChanged)cleanup.push(api.onJobsChanged(()=>void refreshJobs(true,true)));
-  if(api.onRemoteChanged)cleanup.push(api.onRemoteChanged(()=>{if(state.view==='settings'&&!state.busy)void remote?.load(remoteContext());}));
-  if(api.onCompatibilityChanged)cleanup.push(api.onCompatibilityChanged(()=>void refreshCompatibility()));
-  if(api.onSettingsChanged)cleanup.push(api.onSettingsChanged(settings=>{state.settings=settings;state.storageError=settings.storageError||state.storageError;for(const item of state.drafts.values())if(!item.editId)item.bufferSeconds=settings.bufferSeconds;}));
-  if(api.onKeepAwakeChanged)cleanup.push(api.onKeepAwakeChanged(snapshot=>{state.keepAwake=snapshot;updateChrome();}));
-  if(api.getKeepAwake)void api.getKeepAwake().then(snapshot=>{if(stopped)return;state.keepAwake=snapshot;if(state.view==='settings'&&!state.busy)render();else updateChrome();}).catch(()=>{/* Keep-awake status is advisory; Settings shows loading until it arrives. */});
-  const onFocus=()=>{if(Date.now()-lastRefresh>10000){void refreshThreads();void refreshJobs();}};
-  window.addEventListener('focus',onFocus);
-  const onTheme=()=>{if(state.theme==='system')render();};mediaTheme.addEventListener('change',onTheme);
-  mediaMotion.addEventListener('change',syncStar);
-  const starReleases=['pointerup','pointercancel','keyup','blur'];starReleases.forEach(type=>window.addEventListener(type,letGoStar));
-  window.addEventListener('beforeunload',()=>{stopped=true;clearTimeout(timer);clearTimeout(toastTimer);cancelAnimationFrame(starState.frame);cleanup.forEach(unsubscribe=>unsubscribe?.());window.removeEventListener('focus',onFocus);mediaTheme.removeEventListener('change',onTheme);mediaMotion.removeEventListener('change',syncStar);starReleases.forEach(type=>window.removeEventListener(type,letGoStar));});
-  async function poll(){if(stopped)return;await Promise.allSettled([refreshThreads(),refreshJobs(),refreshCompatibility()]);document.querySelectorAll('[data-relative]').forEach(node=>{node.textContent=node.dataset.relative?relative(node.dataset.relative):'';});timer=setTimeout(poll,state.online===false?60000:30000);}
+
+  // ---------- Start ----------
+  if (!api) { app.innerHTML = '<main class="main"><h1>Open the desktop app</h1><p class="help">This interface needs the Agent Auto-Continue desktop connection.</p></main>'; return; }
+  if (api.onNavigate) cleanup.push(api.onNavigate(route));
+  if (api.onScheduleInit) cleanup.push(api.onScheduleInit((payload) => route({ ...payload, view: 'composer' })));
+  if (api.onJobsChanged) cleanup.push(api.onJobsChanged(() => void refreshJobs(true, true)));
+  if (api.onRemoteChanged) cleanup.push(api.onRemoteChanged(() => { if (state.view === 'settings' && !state.busy) void remote?.load(remoteContext()); }));
+  if (api.onCompatibilityChanged) cleanup.push(api.onCompatibilityChanged(() => void refreshCompatibility()));
+  if (api.onSettingsChanged) cleanup.push(api.onSettingsChanged((settings) => { state.settings = settings; state.agents = settings.agents || []; state.storageError = settings.storageError || state.storageError; if (state.draft && !state.draft.editId) state.draft.bufferSeconds = settings.bufferSeconds; if (!state.busy && state.view !== 'settings') updateChrome(); }));
+  if (api.onKeepAwakeChanged) cleanup.push(api.onKeepAwakeChanged((snapshot) => { state.keepAwake = snapshot; if (!state.busy) updateChrome(); }));
+  if (api.getKeepAwake) void api.getKeepAwake().then((snapshot) => { if (stopped) return; state.keepAwake = snapshot; if (state.view === 'settings' && !state.busy) render(); else updateChrome(); }).catch(() => { /* Keep-awake status is advisory. */ });
+  const onFocus = () => { if (Date.now() - lastRefresh > 10000) { void refreshSources(); void refreshJobs(); } };
+  window.addEventListener('focus', onFocus);
+  const onTheme = () => { if (state.theme === 'system') render(); }; mediaTheme.addEventListener('change', onTheme);
+  mediaMotion.addEventListener('change', syncStar);
+  const starReleases = ['pointerup', 'pointercancel', 'keyup', 'blur']; starReleases.forEach((type) => window.addEventListener(type, letGoStar));
+  const onKey = (event) => { if (event.key === 'Escape' && state.view !== 'home') action('back'); }; window.addEventListener('keydown', onKey);
+  window.addEventListener('beforeunload', () => { stopped = true; clearTimeout(timer); clearTimeout(toastTimer); cancelAnimationFrame(starState.frame); cleanup.forEach((unsubscribe) => unsubscribe?.()); window.removeEventListener('focus', onFocus); window.removeEventListener('keydown', onKey); mediaTheme.removeEventListener('change', onTheme); mediaMotion.removeEventListener('change', syncStar); starReleases.forEach((type) => window.removeEventListener(type, letGoStar)); });
+  async function poll() {
+    if (stopped) return;
+    await Promise.allSettled([refreshSources(), refreshJobs(), refreshCompatibility(), state.draft ? refreshAvailability(state.draft.harness) : null]);
+    document.querySelectorAll('[data-meta]').forEach((node) => { const job = findJob(node.closest('[data-job]')?.dataset.job); if (job) node.textContent = compose.queueMeta(job, { ...rowContext(), labelled: node.dataset.meta === 'queue' }); });
+    const offline = visibleAgents().some((info) => state.sources[info.id]?.online === false);
+    timer = setTimeout(poll, offline ? 60000 : 30000);
+  }
   render();
-  void api.getSettings().then(settings=>{state.settings=settings;state.storageError=settings.storageError||state.storageError;for(const item of state.drafts.values())if(!item.editId)item.bufferSeconds=settings.bufferSeconds;if(!state.drafts.has('new'))state.drafts.set('new',newDraft());if(state.view==='settings'||state.view==='composer')render();}).catch(error=>{state.actionError=errorMessage(error);render();});
-  if(api.listHarnesses)void api.listHarnesses().then(result=>{state.harnesses=Array.isArray(result?.harnesses)?result.harnesses:[];if(!harnessInfo(state.harness)){useHarness(result?.defaultHarness||'t3');void refreshThreads();}for(const item of state.drafts.values()){if(!harnessInfo(item.harness))item.harness=state.harness;if(!item.editId)fitDraft(item);}render();if(state.view==='composer')void refreshAvailability();}).catch(()=>{});
-  void poll();
+  const ready = Promise.all([
+    api.getLayout ? api.getLayout().then((result) => { state.layout = result?.layout === 'window' ? 'window' : 'rail'; }).catch(() => {}) : null,
+    api.getSettings().then((settings) => { state.settings = settings; state.agents = settings.agents || []; state.storageError = settings.storageError || state.storageError; }).catch((error) => { state.actionError = errorMessage(error); }),
+    api.listHarnesses ? api.listHarnesses().then((result) => { state.harnesses = Array.isArray(result?.harnesses) ? result.harnesses : []; }).catch(() => {}) : null
+  ]);
+  void ready.then(() => {
+    if (stopped) return;
+    if (!state.draft) state.draft = newDraft();
+    else { if (!harnessInfo(state.draft.harness)) state.draft.harness = visibleAgents()[0]?.id || state.draft.harness; fitDraft(state.draft); }
+    render();
+    void refreshAvailability(state.draft.harness);
+    void poll();
+  });
 })();
