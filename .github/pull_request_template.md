@@ -19,5 +19,5 @@
 
 - [ ] Tests cover any behaviour change
 - [ ] No message can be sent by a test
-- [ ] The app still talks only to the loopback interface
-- [ ] No telemetry or remote calls were added
+- [ ] The app still talks only to the loopback interface, plus GitHub Releases for update checks
+- [ ] No telemetry or new remote calls were added
