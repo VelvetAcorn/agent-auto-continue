@@ -13,7 +13,8 @@
     "test": "node --test",
     "check:syntax": "node tools/check-syntax.cjs",
     "test:electron": "env -u ELECTRON_RUN_AS_NODE electron tools/electron-smoke.cjs && node tools/keep-awake-e2e.cjs",
-    "icons": "env -u ELECTRON_RUN_AS_NODE electron tools/build-icons.cjs"
+    "icons": "env -u ELECTRON_RUN_AS_NODE electron tools/build-icons.cjs",
+    "lint": "eslint ."
   },
   "dependencies": {
     "@modelcontextprotocol/server": "^2.2.0",
@@ -22,10 +23,13 @@
     "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@modelcontextprotocol/client": "^2.2.0",
     "@modelcontextprotocol/sdk": "^1.31.0",
     "electron": "^33.2.0",
-    "electron-builder": "^24.13.3"
+    "electron-builder": "^24.13.3",
+    "eslint": "^10.11.0",
+    "globals": "^17.13.0"
   },
   "build": {
     "appId": "io.t3code.auto-continue",
@@ -40,8 +44,6 @@
     "files": [
       "main.js",
       "preload.js",
-      "ui.html",
-      "settings.html",
       "dashboard.html",
       "styles.css",
       "assets/tray*Template*.png",

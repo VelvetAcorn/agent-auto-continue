@@ -12,6 +12,10 @@ Ideas not yet built are tracked in the [future feature backlog](docs/roadmap.md)
 [Agent harness adapters](docs/harnesses.md) documents the adapter contract, every integration and its limits.
 The existing package name and macOS app identity are retained to preserve compatibility with installed copies and their saved data.
 
+Agent Auto-Continue is an independent project.
+It is not affiliated with, endorsed by, or supported by T3 Tools, Anthropic, OpenAI, or any other agent vendor.
+Product names are trademarks of their respective owners and are used only to describe compatibility.
+
 ## Repository layout
 
 | Location | Purpose |
@@ -23,8 +27,6 @@ The existing package name and macOS app identity are retained to preserve compat
 | `test/`, `tools/` | Automated checks and Electron smoke fixture |
 | `docs/` | Development plan, implementation reference, harness adapters and future backlog |
 | `design/mockups/` | Standalone design prototypes |
-| `legacy/` | Original accessibility-based shell and Swift helpers |
-| `ui.html`, `settings.html` | Retained older screens, still listed in the build configuration |
 
 ## What it does
 
@@ -172,14 +174,32 @@ See [the roadmap](docs/roadmap.md) for feature status and [the UI review](docs/u
 ## Verify the source
 
 ```sh
+npm run lint
 npm test
 npm run test:electron  # production-window smoke fixture and keep-awake assertion checks; no real sends
 npm run check:syntax  # every script, including nested lib directories
 ```
 
-## Legacy script
+## Privacy
 
-[`legacy/continue-at.sh`](legacy/continue-at.sh) and [`legacy/press-continue.swift`](legacy/press-continue.swift) remain as the original, accessibility-based one-shot helper. They are not used by the v2 app and require an unlocked Mac, a focused prepared draft, and Accessibility permission. Prefer the menu-bar app for ordinary use.
+The app has no telemetry, analytics, crash reporting, or update checks.
+The only connections it opens are to the agent's local HTTP API on the loopback interface, plus the Ko-fi page if you choose to open it in your browser.
+Remote control is off by default; when you turn it on, the app listens only on the loopback interface and on any private address you explicitly choose, never on a public or all-interface address.
+The bearer token and schedules are stored in the app's macOS application-data directory with owner-only permissions and never leave the machine.
+
+## Contributing
+
+Contributions are welcome.
+Read [CONTRIBUTING.md](CONTRIBUTING.md) for the development setup, the checks that run in CI, and what a good change looks like.
+Everyone participating is expected to follow the [code of conduct](CODE_OF_CONDUCT.md).
+
+## Security
+
+Please report vulnerabilities privately as described in [SECURITY.md](SECURITY.md), not in a public issue.
+
+## License
+
+Agent Auto-Continue is released under the [MIT License](LICENSE).
 
 ## Limits
 
