@@ -9,6 +9,9 @@ const { setInterval, setTimeout } = require('node:timers');
 const schedule = require('node-schedule');
 const { normaliseConfig, validateSettingsInput } = require('./lib/model');
 const { createApiClient, toErrorInfo } = require('./lib/api-client');
+const { RemoteControl } = require('./lib/remote');
+const { registerRemoteIpc } = require('./lib/remote/ipc');
+const { createT3HarnessSource } = require('./lib/remote/harnesses');
 const { JobService } = require('./lib/job-service');
 const { automationSupport } = require('./lib/continuation');
 const { DEFAULT_HARNESS, applyHarnessSettingsInput, createHarnesses, normaliseHarnessSettings, publicHarnessSettings, resolveHarnessSettings } = require('./lib/harnesses');
@@ -31,6 +34,7 @@ let workSources;
 let t3WorkSource;
 let keepAwake;
 let trayKeepAwakeKey = '';
+let remote;
 
 const ownsInstance = app.requestSingleInstanceLock();
 if (!ownsInstance) app.quit();
@@ -94,6 +98,16 @@ const harnesses = createHarnesses({ api, clientVersion: app.getVersion?.(), getS
 
 function harnessFor(id) {
   return harnesses.get(id === undefined || id === null || id === '' ? DEFAULT_HARNESS : id);
+}
+
+function createRemoteControl() {
+  return new RemoteControl({
+    load: () => readJson(dataPath('remote-control.json'), undefined),
+    save: (state) => writeJson(dataPath('remote-control.json'), state),
+    getService: () => service, ensureStorage, getStorageError: () => storageError,
+    harnesses: createT3HarnessSource(api), appInfo: { name: APP_NAME, version: app.getVersion?.() || '' },
+    onChange: () => { for (const window of BrowserWindow.getAllWindows()) window.webContents.send('remote:changed'); }
+  });
 }
 
 function dateLabel(iso) {
@@ -350,6 +364,7 @@ ipcMain.handle('dashboard:schedule-thread', async (_event, threadId, harness) =>
   openScheduleWindow(thread.id, thread.title, adapter.id);
   return { ok: true };
 });
+registerRemoteIpc(ipcMain, () => remote);
 ipcMain.handle('dashboard:open-settings', () => {
   openSettings();
   return { ok: true };
@@ -382,6 +397,8 @@ app.whenReady().then(() => {
   tray.setToolTip(APP_NAME);
   tray.on('click', () => tray.popUpContextMenu());
   if (!storageError) service.schedulePending();
+  remote = createRemoteControl();
+  void remote.start();
   // The first keep-awake publish also builds the tray menu.
   startKeepAwake();
   openDashboard();
@@ -407,6 +424,7 @@ app.whenReady().then(() => {
   app.on('activate', () => { openDashboard(); void rebuildMenu(); });
 });
 
+app.on('before-quit', () => { void remote?.stop(); });
 app.on('window-all-closed', () => { /* Keep the scheduler running in the tray. */ });
 // macOS also releases the assertion if the process crashes or is killed.
 app.on('will-quit', () => keepAwake?.dispose());

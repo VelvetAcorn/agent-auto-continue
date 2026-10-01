@@ -17,6 +17,7 @@ The existing package name and macOS app identity are retained to preserve compat
 | --- | --- |
 | `main.js`, `preload.js`, `dashboard.html`, `styles.css` | Electron entry points and shared styles |
 | `lib/`, `renderer/` | Backend services and production UI |
+| `lib/remote/` | Optional remote control REST API and MCP server |
 | `assets/` | Application artwork |
 | `test/`, `tools/` | Automated checks and Electron smoke fixture |
 | `docs/` | Development plan, implementation reference, harness adapters and future backlog |
@@ -40,6 +41,7 @@ The existing package name and macOS app identity are retained to preserve compat
 - Checks the conversation before dispatching. It cancels a job if the conversation is missing, archived, or has newer user activity.
 - Uses stable command/message IDs and marks interrupted or ambiguous dispatches as unconfirmed for reconciliation without automatic resending.
 - Keeps the token in the app's macOS application-data directory (permissions `0600`) or accepts `T3_TOKEN` only for the current launch.
+- Optionally lets a phone or AI agent control the schedule through a token-protected REST API and MCP server, on this Mac or over Tailscale.
 
 ## Requirements
 
@@ -88,6 +90,13 @@ T3_TOKEN='…' npm start
 ```
 
 The environment token takes precedence for that launch.
+
+## Remote control
+
+Settings includes an optional **Remote control** section, off by default.
+When enabled, the app serves a REST API and an MCP server on `127.0.0.1`, and optionally on a Tailscale or other private address you choose; it never listens on public or all-interface addresses.
+Each phone or agent gets its own revocable bearer token, shown once with a QR code, and every remote change appears under Remote activity.
+See [remote control](docs/remote-control.md) for the security model, Tailscale setup, MCP client configuration and the API reference.
 
 ## Build a macOS app
 

@@ -16,9 +16,14 @@
     "icons": "env -u ELECTRON_RUN_AS_NODE electron tools/build-icons.cjs"
   },
   "dependencies": {
-    "node-schedule": "^2.1.1"
+    "@modelcontextprotocol/server": "^2.2.0",
+    "node-schedule": "^2.1.1",
+    "qrcode-generator": "^2.0.4",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@modelcontextprotocol/client": "^2.2.0",
+    "@modelcontextprotocol/sdk": "^1.31.0",
     "electron": "^33.2.0",
     "electron-builder": "^24.13.3"
   },

@@ -3,6 +3,7 @@
   const api = window.autoContinue;
   const time = window.SchedulerTime;
   const sticker = window.SupportStar;
+  const remote = window.RemoteSettings;
   const app = document.getElementById('app');
   const $ = (selector) => document.querySelector(selector);
   const escape = (value) => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]));
@@ -348,6 +349,9 @@
   }
   // A press that ends without a click (dragged away, cancelled, window blurred) eases back to the idle spin.
   function letGoStar() { setTimeout(() => { if (!starState.held) return; starState.held = false; starState.spin = sticker.release(starState.spin, performance.now(), false); }); }
+  function remoteContext() {
+    return { api, escape, display, $, perform, toast, render, errorMessage, isVisible: () => state.view === 'settings' };
+  }
   function settings() {
     if (!state.settings) return '<p>Loading settings…</p>';
     if (!state.settingsDraft) state.settingsDraft = { t3Token: '', httpPort: state.settings.httpPort, bufferSeconds: state.settings.bufferSeconds };
@@ -374,6 +378,7 @@
   }
   function navigate(view, restore = false) {
     saveListContext();
+    if (state.view === 'settings' && view !== 'settings') remote?.leave();
     const context = restore ? listContexts.get(view) : null;
     if (view === 'settings' && state.view !== 'settings') starState.phrase = sticker.pickPhrase(sticker.STICKER_PHRASES, starState.phrase);
     state.picking = false; state.actionError = ''; state.confirmCancel = false; state.search = context?.search || ''; state.view = view;
@@ -381,6 +386,7 @@
     window.scrollTo(0,context?.scroll || 0);
     if (view === 'threads') void refreshThreads();
     if (['upcoming','history'].includes(view)) void refreshJobs();
+    if (view === 'settings') void remote?.load(remoteContext());
   }
   function openComposer(threadId, harness) {
     saveListContext();
@@ -417,6 +423,7 @@
   function bind() {
     document.querySelectorAll('[data-nav]').forEach(button=>{button.onclick=()=>navigate(button.dataset.nav);});
     document.querySelectorAll('[data-action]').forEach(button=>{button.onclick=()=>action(button.dataset.action);});
+    remote?.bind(remoteContext());
     document.querySelectorAll('[data-job]').forEach(button=>{button.onclick=()=>{saveListContext();state.returnView=state.view;state.selected=button.dataset.job;state.selectedJob=findJob(state.selected);state.view='detail';state.actionError='';state.confirmCancel=false;render('h1');};});
     document.querySelectorAll('[data-thread]').forEach(button=>{button.onclick=()=>{const thread=state.threads.find(item=>item.id===button.dataset.thread);if(state.picking){draft().threadId=thread.id;fitDraft(draft());state.view='composer';state.picking=false;state.search='';render('h1');}else openComposer(thread.id);};});
     document.querySelectorAll('[data-filter]').forEach(button=>{button.onclick=()=>{state.historyFilter=button.dataset.filter;state.historyLimit=50;state.history=[];state.search='';render();void refreshJobs();};});
@@ -519,6 +526,7 @@
   if(api.onNavigate)cleanup.push(api.onNavigate(route));
   if(api.onScheduleInit)cleanup.push(api.onScheduleInit(payload=>route({...payload,view:'composer'})));
   if(api.onJobsChanged)cleanup.push(api.onJobsChanged(()=>void refreshJobs(true,true)));
+  if(api.onRemoteChanged)cleanup.push(api.onRemoteChanged(()=>{if(state.view==='settings'&&!state.busy)void remote?.load(remoteContext());}));
   if(api.onSettingsChanged)cleanup.push(api.onSettingsChanged(settings=>{state.settings=settings;state.storageError=settings.storageError||state.storageError;for(const item of state.drafts.values())if(!item.editId)item.bufferSeconds=settings.bufferSeconds;}));
   if(api.onKeepAwakeChanged)cleanup.push(api.onKeepAwakeChanged(snapshot=>{state.keepAwake=snapshot;updateChrome();}));
   if(api.getKeepAwake)void api.getKeepAwake().then(snapshot=>{if(stopped)return;state.keepAwake=snapshot;if(state.view==='settings'&&!state.busy)render();else updateChrome();}).catch(()=>{/* Keep-awake status is advisory; Settings shows loading until it arrives. */});

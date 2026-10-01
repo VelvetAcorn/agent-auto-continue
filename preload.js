@@ -16,6 +16,16 @@ contextBridge.exposeInMainWorld('autoContinue', {
   openSupport: () => ipcRenderer.invoke('support:open'),
   getSettings: () => ipcRenderer.invoke('settings:get'),
   saveSettings: (settings) => ipcRenderer.invoke('settings:save', settings),
+  getRemote: () => ipcRenderer.invoke('remote:get'),
+  configureRemote: (settings) => ipcRenderer.invoke('remote:configure', settings),
+  createRemoteToken: (input) => ipcRenderer.invoke('remote:create-token', input),
+  revokeRemoteToken: (id) => ipcRenderer.invoke('remote:revoke-token', id),
+  clearRemoteAudit: () => ipcRenderer.invoke('remote:clear-audit'),
+  onRemoteChanged: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on('remote:changed', listener);
+    return () => ipcRenderer.removeListener('remote:changed', listener);
+  },
   createSchedule: (job) => ipcRenderer.invoke('schedule:create', job),
   onScheduleInit: (callback) => {
     const listener = (_event, payload) => callback(payload);

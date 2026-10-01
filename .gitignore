@@ -13,6 +13,7 @@ main.npm.js
 *.log
 config.json
 jobs.json
+remote-control.json
 
 # Compiled legacy Swift helpers
 .build/
