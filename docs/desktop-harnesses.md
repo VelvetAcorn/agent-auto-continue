@@ -89,6 +89,7 @@ A change found while sending fails the job with `app_version_unsupported`, a cer
 The job's note names the app, its installed version and what changed, for example "Claude Desktop 2.17.0 changed how its message box is labelled, so Agent Auto-Continue could not send. Nothing was sent."
 The error details add the verified version, the contact point and a short technical hint.
 When the deep link was opened but the conversation never appeared, the evidence is ambiguous, so the failure stays a `timeout`, but its message and details name the app version, the `deep_link` contact point and the possibility of an update.
+An adapter can name a better-supported contact point instead: the link may carry a read-only `snapshot()` taken just before it is opened and an `explain(snapshot)` that inspects what is shown at the timeout, which the ChatGPT harness uses for `content_match`.
 A link scheme that no app handles is an app change; one that another app handles fails with `harness_not_configured`, and the link is not opened.
 
 ### Checking before schedules fire
@@ -206,6 +207,13 @@ The app runs a private `codex app-server` child and holds each open thread's wri
 The shared app-server daemon does not load the app's threads, so sending through the daemon or a private server would create a second writer.
 
 The content area's URL is `app://-/index.html` for every thread, so the harness verifies the open thread by the content area's title, which is the thread name.
+That equality is never loosened, so an update that changes how threads are titled, for example to "Name - ChatGPT", stops every send before anything is typed.
+The full compatibility check reports such a change as `content_match` when the shown view has a message box and its title is a thread name with extra text before or after it.
+A start page, or any other title that contains no thread name, proves nothing and leaves the contact point unchecked.
+When a thread opened by its deep link never matches, the harness looks at what the app shows before reporting the timeout.
+A view with a message box whose title embeds the thread name, or a new view the link brought up under a title that is no thread's name, makes the timeout name `content_match` instead of `deep_link`.
+A view the link did not change, or another thread, still points at the link.
+Hints give only the length and position of the extra text, never a title.
 Threads without a name, and threads whose name any other listed thread shares, archived or not and whatever created it, are refused rather than guessed.
 The check pages through every thread, and refuses when the listing cannot be finished.
 The message box is an `AXTextArea` described as `Do anything`, whose value includes the placeholder text while empty.

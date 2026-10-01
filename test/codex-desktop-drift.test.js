@@ -197,3 +197,62 @@ test('with recognised threads too, they stay listed and the check carries the wa
   assert.deepEqual((await adapter.listConversations({})).map((item) => item.id), [THREAD]);
   assert.deepEqual((await adapter.checkCompatibility()).problems.map((item) => item.contactPoint), ['originator']);
 });
+
+// A fake app whose deep link shows `shows` (a view change) after opening the thread's link.
+function titled({ before = 'Rename repo', shows, threads } = {}) {
+  const list = threads || [
+    { id: THREAD, name: NAME, originator: 'Codex Desktop', source: 'vscode', cwd: '/work/app', updatedAt: 1790806722 },
+    { id: '01a0f450-98b4-77c0-a6df-d45777e05f40', name: 'Rename repo', originator: 'Codex Desktop', source: 'vscode', cwd: '/work/app', updatedAt: 1790806000 }
+  ];
+  const reader = { listThreads: async () => list, listAllThreads: async () => ({ threads: list, complete: true }), recentTurns: async () => [], readThread: async (id) => list.find((item) => item.id === id), threadWriter: async () => null };
+  const fake = createFakeDesktopAutomation({ bundleId: BUNDLE_ID, view: { title: before, composerLabel: 'Do anything', sendLabel: 'Send' }, navigate: () => (shows === undefined ? null : { title: shows }) });
+  fake.state.version = '27.2.0';
+  let clock = START;
+  const adapter = createCodexDesktopHarness({ createReader: () => reader, automation: fake.automation, platform: 'darwin', isLocked: async () => false, now: () => clock, sleep: async (ms) => { clock += ms; },
+    timings: { navigateMs: 3000, confirmMs: 3000, pollMs: 250 }, codexPath: () => '/x/codex', exists: () => true });
+  const send = () => adapter.submitTurn({ conversationId: THREAD, message: 'Continue', messageId: 'm', deliveryKey: 'm', dispatchAttemptedAt: new Date(START).toISOString() }, { threadId: THREAD, name: NAME });
+  return { adapter, fake, send };
+}
+
+test('a thread shown under a reformatted title is reported as content_match, not as a link problem', async () => {
+  const { fake, send } = titled({ shows: `${NAME} - ChatGPT` });
+  await assert.rejects(send(), (error) => {
+    assert.deepEqual([error.code, error.deliveryUncertain, error.details.contactPoint, error.details.appVersion], ['timeout', false, 'content_match', '27.2.0']);
+    assert.match(error.message, /ChatGPT \(Codex\) 27\.2\.0 did not show the thread in time\. Nothing was sent\. If ChatGPT \(Codex\) was updated recently, it may have changed how it shows which conversation is open\./);
+    assert.match(error.details.hint, /title is the thread name with 10 more characters after it/);
+    assert.ok(!error.details.hint.includes(NAME), 'Thread names never reach logs');
+    return true;
+  });
+  assert.equal(fake.state.sent.length, 0);
+  assert.deepEqual(fake.state.calls.filter((call) => ['setComposer', 'submit'].includes(call[0])), []);
+});
+
+test('a new view with a message box after the link is content_match; an unchanged view still points at the link', async () => {
+  // The title no longer carries the name at all, but the link did change the view.
+  await assert.rejects(titled({ shows: 'ChatGPT' }).send(), (error) => error.details.contactPoint === 'content_match' && /appeared after the link opened/.test(error.details.hint));
+  // The link changed nothing: the same view as before is still shown.
+  await assert.rejects(titled({ before: 'ChatGPT' }).send(), (error) => error.code === 'timeout' && error.details.contactPoint === 'deep_link' && /links open a thread/.test(error.message));
+  await assert.rejects(titled({ shows: 'Rename repo' }).send(), (error) => error.details.contactPoint === 'deep_link');
+});
+
+test('the compatibility check reports a shown thread whose title embeds its name, and ignores other pages', async () => {
+  let { adapter, fake } = titled({ before: `${NAME} — Codex` });
+  let result = await adapter.checkCompatibility();
+  assert.deepEqual(result.problems.map((item) => item.contactPoint), ['content_match']);
+  assert.match(result.problems[0].message, /^ChatGPT \(Codex\) 27\.2\.0 changed how it shows which conversation is open\. Scheduled messages/);
+  assert.match(result.problems[0].hint, /thread name with 8 more characters after it/);
+  assert.ok(!result.problems[0].hint.includes(NAME));
+  assert.ok(!result.unchecked.some((item) => item.contactPoint === 'content_match'));
+  assert.deepEqual(writes(fake), []);
+  ({ adapter } = titled({ before: `Codex: ${NAME}` }));
+  assert.match((await adapter.checkCompatibility()).problems[0]?.hint || '', /7 more characters before it/);
+  // A page that is not a thread, such as the start page, proves nothing either way.
+  ({ adapter } = titled({ before: 'ChatGPT' }));
+  result = await adapter.checkCompatibility();
+  assert.deepEqual(result.problems, []);
+  assert.equal(result.unchecked.find((item) => item.contactPoint === 'content_match').reason, 'no_conversation_shown');
+  // Without a message box the view may still be loading or not a thread: no problem.
+  ({ adapter, fake } = titled({ before: `${NAME} - ChatGPT` }));
+  fake.state.view.composerLabel = 'Something else';
+  assert.deepEqual((await adapter.checkCompatibility()).problems, []);
+});
