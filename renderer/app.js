@@ -552,7 +552,7 @@
     else if(payload.jobId){state.selected=payload.jobId;state.returnView=payload.view==='upcoming'?'upcoming':'history';state.view='detail';state.search='';render('h1');void refreshJobs();}
     else if(['upcoming','history','threads','settings'].includes(payload.view))navigate(payload.view);
   }
-  if(!api){app.innerHTML='<main class="content"><h1>Open the desktop app</h1><p>This interface needs the T3 Code Auto-Continue desktop connection.</p></main>';return;}
+  if(!api){app.innerHTML='<main class="content"><h1>Open the desktop app</h1><p>This interface needs the Agent Auto-Continue desktop connection.</p></main>';return;}
   if(api.onNavigate)cleanup.push(api.onNavigate(route));
   if(api.onScheduleInit)cleanup.push(api.onScheduleInit(payload=>route({...payload,view:'composer'})));
   if(api.onJobsChanged)cleanup.push(api.onJobsChanged(()=>void refreshJobs(true,true)));

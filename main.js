@@ -22,9 +22,10 @@ const { createActiveWorkSource } = require('./lib/active-work-source');
 const { createT3WorkSource } = require('./lib/t3-work-source');
 const { createDiagnosticsLog } = require('./lib/diagnostics');
 const { createCompatibilityMonitor } = require('./lib/compatibility-monitor');
+const { migrateLegacyStorage } = require('./lib/storage-migration');
 const { connectionLabel, conversationMenuItems, createConversationCache } = require('./lib/tray-conversations');
 
-const APP_NAME = 'T3 Code Auto-Continue';
+const APP_NAME = 'Agent Auto-Continue';
 const DEFAULT_CONFIG = { t3Token: '', httpPort: 3773, bufferSeconds: 5 };
 const TURN_POLL_MS = 30_000;
 // While desktop-app schedules are pending, their apps' versions are checked this often.
@@ -60,7 +61,7 @@ function readJson(file, fallback) {
     return JSON.parse(fs.readFileSync(file, 'utf8'));
   } catch (error) {
     if (error.code === 'ENOENT') return fallback;
-    throw new Error(`The local ${path.basename(file)} file could not be read. Restore or repair it before restarting. Existing data has not been changed.`);
+    throw new Error(`The local ${path.basename(file)} file could not be read. Restore or repair it before restarting. Existing data has not been changed.`, { cause: error });
   }
 }
 
@@ -72,6 +73,8 @@ function writeJson(file, value) {
 }
 
 function loadState() {
+  // The fs module is injected so that the smoke fixture's in-memory storage applies here too.
+  migrateLegacyStorage({ fs, appData: app.getPath('appData'), userData: app.getPath('userData') });
   const raw = readJson(dataPath('config.json'), DEFAULT_CONFIG);
   config = { ...normaliseConfig(raw), harnesses: normaliseHarnessSettings(harnesses.list(), raw?.harnesses) };
   service = new JobService({
@@ -428,8 +431,9 @@ ipcMain.handle('harnesses:check-compatibility', async (_event, harness) => {
   return compatibility.snapshot();
 });
 // Copies a plain-text report for a bug report: versions, contact points and redacted hints, never message text.
-ipcMain.handle('diagnostics:copy', () => {
-  clipboard.writeText(diagnostics.report({ appVersion: app.getVersion?.(), platform: `macOS ${os.release()} ${os.arch()}`, states: compatibility.snapshot() }));
+ipcMain.handle('diagnostics:copy', async () => {
+  // Electron's clipboard methods return promises; the reply must not race the write.
+  await clipboard.writeText(diagnostics.report({ appVersion: app.getVersion?.(), platform: `macOS ${os.release()} ${os.arch()}`, states: compatibility.snapshot() }));
   return { ok: true };
 });
 ipcMain.handle('harnesses:availability', async (_event, harness) => {

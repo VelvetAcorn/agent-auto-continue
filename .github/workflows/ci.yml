@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   test:
-    name: Tests and JavaScript syntax
+    name: Lint, tests and JavaScript syntax
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,6 +19,7 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci
+      - run: npm run lint
       - run: npm test
       - name: Check production JavaScript
         run: npm run check:syntax
