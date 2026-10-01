@@ -214,6 +214,10 @@ The app ships no readable message catalogue, so these labels are English only, a
 
 Everything else uses the supported app-server protocol through `lib/harnesses/codex-reader.js`, with the codex binary bundled inside the app (`Contents/Resources/codex`, wherever the app is installed) so the protocol version matches.
 Reads use a private server that never loads a thread for writing.
+A reply this version cannot read, or a JSON-RPC `Method not found` or `Invalid params` error, means the app's bundled codex changed, so it fails with `app_version_unsupported` and contact point `app_server`, naming the request in the hint.
+A `Method not found` error is never mistaken for a missing thread, which would cancel the job.
+Every turn is checked before busy detection or delivery evidence reads it, and a turn status other than `completed`, `interrupted`, `failed` or `inProgress` fails the same way instead of reading as idle.
+The full compatibility check opens one read-only connection and checks the replies of `thread/list`, `thread/turns/list` for the three newest threads, including turn statuses, start times and user messages with text, and `account/rateLimits/read`.
 
 | Need | Protocol call |
 | --- | --- |
