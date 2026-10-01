@@ -3,10 +3,11 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const net = require('node:net');
+const { spawn } = require('node:child_process');
 const os = require('node:os');
 const path = require('node:path');
 const { createCodexHarness } = require('../lib/harnesses/codex');
-const { answerServerRequest } = require('../lib/harnesses/codex-rpc');
+const { answerServerRequest, startAppServer } = require('../lib/harnesses/codex-rpc');
 const { createReader, daemonAvailable, isDesktopThread, limitFromRateLimits, ownerOfThread } = require('../lib/harnesses/codex-reader');
 const { codexThreadWriter, parseLsof, readCodexThreadWriters } = require('../lib/harnesses/codex-locks');
 const { createHarnessRegistry } = require('../lib/harnesses/registry');
@@ -30,7 +31,7 @@ function setup({ mode = 'complete', account = { account: { type: 'chatgpt' }, re
   fs.chmodSync(path.join(bin, 'codex'), 0o755);
   const statePath = path.join(root, 'state.json');
   const userTurn = (id, startedAt, clientId = null) => ({ id, status: 'completed', startedAt, completedAt: startedAt + 5, error: null, items: [{ type: 'userMessage', id: `${id}-item`, clientId, content: [{ type: 'text', text: 'hi', text_elements: [] }] }] });
-  const thread = (id, extra) => ({ id, name: null, preview: '', cwd: project, updatedAt: 1_790_806_000, status: { type: 'idle' }, ephemeral: false, parentThreadId: null, originator: null, turns: [], ...extra });
+  const thread = (id, extra) => ({ id, name: null, preview: '', cwd: project, updatedAt: 1_790_806_000, status: { type: 'idle' }, ephemeral: false, parentThreadId: null, originator: 'codex_cli_rs', source: 'cli', turns: [], ...extra });
   fs.writeFileSync(statePath, JSON.stringify({
     account,
     rateLimits: rateLimits ?? { rateLimits: { limitId: 'codex', primary: { usedPercent: 40, windowDurationMins: 10080, resetsAt: 1_791_407_591 }, secondary: null, rateLimitReachedType: null }, ordinaryUsageAllowed: true },
@@ -38,8 +39,8 @@ function setup({ mode = 'complete', account = { account: { type: 'chatgpt' }, re
       [THREAD]: thread(THREAD, { preview: 'Please   update the Ko-fi link', updatedAt: 1_790_806_722, status,
         turns: [userTurn('turn-1', 1_790_806_000), { id: 'turn-2', status: 'completed', startedAt: 1_790_806_100, items: [{ type: 'agentMessage', id: 'x' }] }, userTurn('turn-3', 1_790_806_600)] }),
       [NESTED]: thread(NESTED, { name: 'Subagent', parentThreadId: THREAD }),
-      [DESKTOP]: thread(DESKTOP, { name: 'Desktop thread', originator: 'Codex Desktop' }),
-      [T3]: thread(T3, { name: 'T3 thread', originator: 't3code_desktop' })
+      [DESKTOP]: thread(DESKTOP, { name: 'Desktop thread', originator: 'Codex Desktop', source: 'vscode' }),
+      [T3]: thread(T3, { name: 'T3 thread', originator: 't3code_desktop', source: 'vscode' })
     }
   }));
   const logFile = path.join(root, 'log.jsonl');
@@ -78,7 +79,8 @@ test('lists only CLI-owned top-level threads, marking ones another process is wr
   assert.equal(list[0].projectName, 'project');
   assert.equal(list[0].state, 'working');
   assert.equal(list[0].updatedAt, new Date(1_790_806_722_000).toISOString());
-  assert.deepEqual(s.log().find((entry) => entry.method === 'thread/list').params, { limit: 100, sortKey: 'updated_at', archived: false });
+  assert.deepEqual(s.log().find((entry) => entry.method === 'thread/list').params, { limit: 100, sortKey: 'created_at', archived: false, sourceKinds: ['cli', 'vscode', 'exec', 'appServer', 'unknown'] });
+  assert.equal(list[0].source, 'cli', 'The source tells automation-created threads apart');
   const held = await s.make({ threadWriters: async () => new Map([[THREAD, { pid: 42, owner: 'codex-desktop' }]]) }).listConversations();
   assert.equal(held[0].state, 'in-use');
   assert.equal(ownerOfThread({ originator: 'Codex Desktop' }), 'codex-desktop');
@@ -196,7 +198,13 @@ test('the shared daemon is used through the proxy with WebSocket framing when it
   await adapter.shutdown();
   assert.equal(s.log().some((entry) => entry.method === 'turn/interrupt'), false, 'Daemon turns are not interrupted on shutdown');
   const later = s.make({ transport: 'auto', detectDaemon: async () => true });
-  assert.equal((await later.checkTurn(turn())).state, 'running', 'The daemon still owns the turn');
+  s.writers.current = { pid: 20, owner: 'daemon' };
+  assert.equal((await later.checkTurn(turn())).state, 'running', 'The daemon still holds the writer lock, so it owns the turn');
+  s.writers.current = null;
+  assert.equal((await later.checkTurn(turn())).state, 'unknown', 'No live writer means the in-progress turn ended with its server');
+  s.writers.current = () => undefined;
+  assert.equal((await later.checkTurn(turn())).state, 'running', 'Without lock information the running daemon is assumed to own it');
+  s.writers.current = null;
   const refused = setup({ mode: 'bad-handshake' });
   await assert.rejects(refused.make({ transport: 'auto', detectDaemon: async () => true }).checkConnection(), /daemon/);
   assert.equal(refused.log().filter((entry) => entry.start).every((entry) => entry.proxy), true, 'No fallback to a private server');
@@ -377,3 +385,108 @@ test('a terminal usage limit survives client exit during quota enrichment', asyn
     assert.throws(() => process.kill(writer.pid, 0), { code: 'ESRCH' });
   }
 });
+
+test('the shared reader lists every thread across pages and reports a listing it could not finish', async () => {
+  const s = setup();
+  const reader = createReader({ executable: path.join(s.root, 'bin', 'codex'), env: s.env, home: s.home, transport: 'private' });
+  const all = await reader.listAllThreads({ pageSize: 1 });
+  assert.equal(all.complete, true);
+  assert.deepEqual(all.threads.map((thread) => thread.id).sort(), [THREAD, NESTED, DESKTOP, T3].sort(), 'Every page is followed');
+  assert.deepEqual(s.log().filter((entry) => entry.method === 'thread/list').map((entry) => entry.params.cursor ?? null), [null, '1', '2', '3']);
+  assert.deepEqual(await reader.listAllThreads({ archived: true }), { threads: [], complete: true });
+  const capped = await reader.listAllThreads({ pageSize: 1, maxPages: 2 });
+  assert.deepEqual([capped.threads.length, capped.complete], [2, false], 'A page budget that runs out is reported as incomplete');
+  const endless = setup({ mode: 'endless-list' });
+  const looping = createReader({ executable: path.join(endless.root, 'bin', 'codex'), env: endless.env, home: endless.home, transport: 'private' });
+  assert.equal((await looping.listAllThreads({ pageSize: 10, maxPages: 3 })).complete, false, 'A cursor that never ends is incomplete');
+});
+
+const reviewId = (n) => `01a0f463-${String(n).padStart(4, '0')}-7d82-a1fd-2c4b9fc9a5d0`;
+function listingSetup(threads) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-list-'));
+  roots.push(root);
+  const bin = path.join(root, 'bin');
+  fs.mkdirSync(bin);
+  fs.copyFileSync(path.join(__dirname, 'fixtures', 'fake-codex-list'), path.join(bin, 'codex'));
+  fs.chmodSync(path.join(bin, 'codex'), 0o755);
+  fs.writeFileSync(path.join(root, 'threads.json'), JSON.stringify(threads.map((thread) => ({ preview: '', cwd: root, status: { type: 'notLoaded' }, ephemeral: false, parentThreadId: null, archived: false, ...thread }))));
+  const env = { PATH: `${bin}:${path.dirname(process.execPath)}`, HOME: root, FAKE_THREADS: path.join(root, 'threads.json') };
+  return createCodexHarness({ env, home: root, transport: 'private', threadWriters: async () => new Map() });
+}
+
+test('discovery includes codex exec threads, which the server hides unless every source kind is requested', async () => {
+  const adapter = listingSetup([
+    { id: reviewId(1), name: 'exec', updatedAt: 1_790_000_001, originator: 'codex_exec', source: 'exec' },
+    { id: reviewId(2), name: 'old exec', updatedAt: 1_790_000_002, originator: null, source: 'exec' },
+    { id: reviewId(3), name: 'desktop', updatedAt: 1_790_000_003, originator: 'Codex Desktop', source: 'vscode' },
+    { id: reviewId(4), name: 't3', updatedAt: 1_790_000_004, originator: 't3code_desktop', source: 'vscode' },
+    { id: reviewId(5), name: 'old desktop', updatedAt: 1_790_000_005, originator: null, source: 'vscode' }
+  ]);
+  const listed = await adapter.listConversations();
+  assert.deepEqual(listed.map((item) => item.id).sort(), [reviewId(1), reviewId(2)]);
+  assert.deepEqual(listed.map((item) => item.source), ['exec', 'exec']);
+});
+
+test('discovery pages past threads owned by other harnesses', async () => {
+  const threads = Array.from({ length: 120 }, (_, n) => ({ id: reviewId(n + 10), name: `desktop ${n}`, updatedAt: 1_790_100_000 + n, originator: 'Codex Desktop', source: 'vscode' }));
+  threads.push({ id: reviewId(1), name: 'older CLI thread', updatedAt: 1_790_000_000, originator: 'codex_cli_rs', source: 'cli' });
+  assert.deepEqual((await listingSetup(threads).listConversations()).map((item) => item.id), [reviewId(1)]);
+});
+
+test('an undeterminable writer lock refuses at inspection and again after resume', async () => {
+  const s = setup({ mode: 'long' });
+  s.writers.current = () => undefined;
+  const adapter = s.make();
+  const state = await adapter.inspectConversation({ conversationId: THREAD, deliveryKey: turn().deliveryKey });
+  assert.throws(() => adapter.prepareTurn(turn(), state), (error) => error.code === 'conversation_busy' && !error.deliveryUncertain);
+  s.writers.current = (opts) => (opts?.selfPids ? undefined : null);
+  const clear = await adapter.inspectConversation({ conversationId: THREAD, deliveryKey: turn().deliveryKey });
+  const { plan } = adapter.prepareTurn(turn(), clear);
+  await assert.rejects(adapter.submitTurn(turn(), plan), (error) => error.code === 'conversation_busy' && !error.deliveryUncertain);
+  await adapter.shutdown();
+  assert.equal(s.log().some((entry) => entry.method === 'turn/start'), false);
+});
+
+test('the writer check finds a holder through a symlinked Codex home', async (t) => {
+  if (process.platform !== 'darwin') return t.skip('macOS lsof only');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-symlink-')); // /var/folders is a symlink to /private/var/folders
+  roots.push(home);
+  const env = { CODEX_HOME: path.join(home, '.codex') };
+  const locks = path.join(env.CODEX_HOME, 'thread-writer-locks');
+  fs.mkdirSync(locks, { recursive: true });
+  const id = reviewId(7);
+  const file = path.join(locks, `${id}.lock`);
+  fs.writeFileSync(file, '');
+  const holder = spawn('/bin/sh', ['-c', 'exec /bin/sleep 30 3<"$0"', file], { stdio: 'ignore' });
+  t.after(() => holder.kill('SIGKILL'));
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal((await codexThreadWriter(id, { home, env }))?.pid, holder.pid);
+  assert.equal((await readCodexThreadWriters({ home, env }))?.get(id)?.pid, holder.pid);
+});
+
+async function repliesTo(threadId) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-foreign-'));
+  roots.push(root);
+  const logFile = path.join(root, 'replies.jsonl');
+  const client = startAppServer({ file: path.join(__dirname, 'fixtures', 'fake-codex-foreign-request'), transport: 'private', cwd: root, env: { ...process.env, FAKE_LOG: logFile }, threadId });
+  await client.initialize();
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  await client.close();
+  return fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8').trim().split('\n').map((line) => JSON.parse(line)) : [];
+}
+
+test('approval requests are answered only for the connection’s own thread and never on read-only connections', async () => {
+  assert.deepEqual(await repliesTo(null), [], 'Read-only connections leave requests for their owner');
+  assert.deepEqual(await repliesTo('my-thread'), [], 'Another client’s approval is not cancelled');
+  assert.equal((await repliesTo('someone-elses-thread'))[0]?.result?.decision, 'cancel', 'The connection running that thread stops its own turn');
+});
+
+test('only known Codex CLI originators are claimed by the Codex CLI adapter', () => {
+  for (const originator of ['codex_vscode', 'zed', 'something_new']) assert.equal(ownerOfThread({ originator, source: 'appServer' }), 'other', originator);
+  assert.equal(ownerOfThread({ originator: 't3code_server', source: 'appServer' }), 't3');
+  assert.equal(ownerOfThread({ originator: 'codex_cli_rs', source: 'cli' }), 'codex');
+  assert.equal(ownerOfThread({ originator: 'codex_exec', source: 'exec' }), 'codex');
+  assert.equal(ownerOfThread({ originator: null, source: 'cli' }), 'codex');
+  assert.equal(ownerOfThread({ originator: null, source: 'appServer' }), 'other');
+});
+

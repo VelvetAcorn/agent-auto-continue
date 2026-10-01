@@ -1,0 +1,13 @@
+#!/usr/bin/env node
+'use strict';
+// Fake app-server that, after `initialized`, sends an approval request for a
+// thread the client never touched, and logs whatever the client answers.
+const fs = require('node:fs');
+const readline = require('node:readline');
+const send = (value) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...value }) + '\n');
+readline.createInterface({ input: process.stdin }).on('line', (line) => {
+  const message = JSON.parse(line);
+  if (message.method === 'initialize') return send({ id: message.id, result: {} });
+  if (message.method === 'initialized') return send({ id: 9001, method: 'item/commandExecution/requestApproval', params: { threadId: 'someone-elses-thread', turnId: 't', itemId: 'i', startedAtMs: 0, command: 'git push' } });
+  if (message.id === 9001 && message.method === undefined) fs.appendFileSync(process.env.FAKE_LOG, JSON.stringify(message) + '\n');
+});

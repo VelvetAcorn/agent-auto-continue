@@ -99,7 +99,13 @@ function onMessage(message) {
     case 'account/rateLimits/read':
       if (mode === 'limit-exit') return setTimeout(() => reply(state.rateLimits), 200);
       return reply(state.rateLimits);
-    case 'thread/list': return reply({ data: Object.values(state.threads).map(bare), nextCursor: null });
+    case 'thread/list': {
+      // Pages by `limit` with an index cursor, and filters by archive state, like the real server.
+      const matching = Object.values(state.threads).filter((item) => Boolean(item.archived) === Boolean(message.params.archived));
+      const start = Number(message.params.cursor || 0);
+      const end = start + (message.params.limit || 25);
+      return reply({ data: matching.slice(start, end).map(bare), nextCursor: mode === 'endless-list' ? String(end) : end < matching.length ? String(end) : null });
+    }
     case 'thread/read': return thread ? reply({ thread: bare(thread) }) : fail(-32600, `thread/read failed: no rollout found for thread id ${message.params.threadId}`);
     case 'thread/turns/list': return thread ? reply({ data: [...thread.turns].reverse().slice(0, message.params.limit), nextCursor: null }) : fail(-32600, 'no rollout found');
     case 'thread/resume':
