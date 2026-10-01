@@ -17,12 +17,13 @@ function fakeReader() {
       { id: '01a0f400-0000-7000-8000-000000000001', name: 'T3 thread', originator: 't3code_desktop', source: 'vscode', cwd: '/work/app', updatedAt: 1790809000 }
     ],
     turns: new Map([[THREAD, [{ id: 'turn-1', status: 'completed', startedAt: 1790806570, items: [{ type: 'userMessage', content: [{ type: 'text', text: 'Please update' }] }] }]]]),
-    limits: null, executables: [], writer: null
+    limits: null, executables: [], writer: null, listComplete: true
   };
   const createReader = ({ executable }) => {
     state.executables.push(executable);
     return {
-      listThreads: async ({ archived = false } = {}) => state.threads.filter((item) => Boolean(item.archived) === archived),
+      listThreads: async ({ archived = false } = {}) => state.threads.filter((item) => Boolean(item.archived) === archived).slice(0, 100),
+      listAllThreads: async ({ archived = false } = {}) => ({ threads: state.threads.filter((item) => Boolean(item.archived) === archived), complete: state.listComplete }),
       readThread: async (id) => { const found = state.threads.find((item) => item.id === id); if (!found) throw Object.assign(new Error('missing'), { code: 'conversation_not_found' }); return found; },
       recentTurns: async (id) => state.turns.get(id) || [],
       rateLimits: async () => state.limits,
@@ -155,4 +156,17 @@ test('the title must be unique across every thread the app could show, not only 
     reader.state.threads.pop();
   }
   assert.equal((await adapter.prepareTurn(turn(), state)).plan.name, name);
+});
+
+test('a twin older than the most recent 100 threads is still found, and a listing that cannot be finished refuses', async () => {
+  const { adapter, reader } = setup();
+  const state = await adapter.inspectConversation({ conversationId: THREAD });
+  const filler = Array.from({ length: 120 }, (_, index) => ({ id: `01a0f499-0000-7000-8000-${String(index).padStart(12, '0')}`, name: `Other ${index}`, originator: 'Codex Desktop', source: 'vscode', cwd: '/work/app', updatedAt: 1790809000 }));
+  reader.state.threads.unshift(...filler);
+  reader.state.threads.push({ id: '01a0f499-1111-7000-8000-000000000005', name: 'Update live Ko-fi account', originator: 'codex_cli_rs', source: 'cli', cwd: '/work/app', updatedAt: 1 });
+  await assert.rejects(adapter.prepareTurn(turn(), state), /same name/, 'The twin is the 123rd thread');
+  reader.state.threads.pop();
+  assert.equal((await adapter.prepareTurn(turn(), state)).plan.threadId, THREAD);
+  reader.state.listComplete = false;
+  await assert.rejects(adapter.prepareTurn(turn(), state), (error) => error.code === 'conversation_busy' && /could not all be checked/.test(error.message));
 });

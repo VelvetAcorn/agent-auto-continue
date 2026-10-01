@@ -106,7 +106,7 @@ The shared app-server daemon does not load the app's threads, so sending through
 
 The content area's URL is `app://-/index.html` for every thread, so the harness verifies the open thread by the content area's title, which is the thread name.
 Threads without a name, and threads whose name any other listed thread shares, archived or not and whatever created it, are refused rather than guessed.
-Only the most recent 100 threads of each kind are listed, so a much older twin is not seen.
+The check pages through every thread, and refuses when the listing cannot be finished.
 The message box is an `AXTextArea` described as `Do anything`, whose value includes the placeholder text while empty.
 The send button is labelled `Send` or `Send message`, and a `Stop` button near the message box means a turn is running.
 The app ships no readable message catalogue, so these labels are English only, and another interface language fails safely with an unsupported-version error before anything is typed.
