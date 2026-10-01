@@ -9,3 +9,7 @@
 .harness-row:first-child{border-top:0;margin-top:4px;padding-top:0}
 .harness-name small{display:block;margin-top:3px}
 .harness-name .harness-caps{color:var(--accent)}
+.pills{display:inline-flex;align-items:center;gap:6px;flex-shrink:0}.pill.risk{color:var(--amber)}
+.risk-detail{border-left:2px solid var(--amber);padding-left:14px;margin:22px 0;font-size:12px}.risk-detail p{font-size:12px}
+/* Headings take focus after navigation for screen readers only; they are not controls. */
+h1[tabindex="-1"]:focus{outline:none}

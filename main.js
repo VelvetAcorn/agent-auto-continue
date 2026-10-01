@@ -88,7 +88,7 @@ function startCompatibility() {
       const count = activeJobs().filter((job) => job.harness === harness).length;
       if (!count) return;
       const state = compatibility.snapshot().find((item) => item.harness === harness);
-      notify(`${state?.label || harness}${state?.appVersion ? ` ${state.appVersion}` : ''} is not supported yet`,
+      notify(`${state?.label || harness}${state?.appVersion ? ` ${state.appVersion}` : ''} isn’t supported yet`,
         `${problems[0].message} ${count === 1 ? 'One scheduled message is' : `${count} scheduled messages are`} at risk.`, { view: 'upcoming' });
     }
   });
