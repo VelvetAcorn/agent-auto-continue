@@ -295,4 +295,7 @@ async function harnessJourney(js) {
   await waitFor(() => js(`Boolean(document.querySelector('[data-thread="thread-active"]'))`), 'T3 threads again');
   assert.equal(fake.state.submitted.length, 0);
 }
-run().then(() => app.exit(0), error => { console.error(error.stack); app.exit(1); });
+// A hung window must fail the run rather than block CI or a shell indefinitely.
+// Before the app is ready (for example while macOS is locked) app.exit() is ignored, so force the exit.
+const hardTimeout = setTimeout(() => { console.error('Electron smoke timed out after 180 seconds.'); app.exit(1); setTimeout(() => process.exit(1), 2000); }, 180_000);
+run().then(() => { clearTimeout(hardTimeout); app.exit(0); }, error => { clearTimeout(hardTimeout); console.error(error.stack); app.exit(1); });
