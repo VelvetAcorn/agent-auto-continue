@@ -90,8 +90,9 @@ test('labels come from the app catalogue for the UI language, with English as a 
 test('the Accessibility program runs in osascript and reports environment facts', { skip: process.platform !== 'darwin' }, async () => {
   const automation = createMacAutomation();
   const missing = 'io.example.not-installed-app';
-  const env = await automation.environment([missing]);
+  const env = await automation.environment([missing], { schemes: ['io-example-no-such-scheme', 'BAD SCHEME'] });
   assert.equal(env.ok, true);
+  assert.deepEqual(env.handlers, { 'io-example-no-such-scheme': null }, 'Unregistered schemes have no handler, and invalid ones are not looked up');
   assert.equal(typeof env.trusted, 'boolean');
   assert.equal(typeof env.screenLocked, 'boolean');
   assert.deepEqual(env.apps[missing], { installedPath: null, version: null, running: false, pid: null, active: false });

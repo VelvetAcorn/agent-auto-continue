@@ -13,6 +13,8 @@ function createFakeDesktopAutomation({ bundleId, pid = 4242, view = {}, navigate
     view: { urlSegment: null, title: null, language: 'en-US', composerLabel: 'Prompt', sendLabel: 'Send', composer: '', stop: false, sendEnabled: null, ...view },
     // Number of inspections before a navigation takes effect, to model page loads.
     navigationDelay: 0, pendingView: null,
+    // The app each URL scheme opens; by default every requested scheme opens this app.
+    handlers: null,
     calls: [], opened: [], sent: [], faults: {}, acceptText: (text) => text
   };
   const record = (name, ...args) => state.calls.push([name, ...args]);
@@ -55,7 +57,7 @@ function createFakeDesktopAutomation({ bundleId, pid = 4242, view = {}, navigate
   const sendEnabled = () => state.view.sendEnabled ?? state.view.composer.trim() !== '';
   const automation = {
     accessibilitySettingsUrl: ACCESSIBILITY_SETTINGS_URL,
-    async environment(bundleIds) {
+    async environment(bundleIds, { schemes = [] } = {}) {
       record('environment', bundleIds);
       const injected = fault('environment');
       if (injected) return injected;
@@ -63,7 +65,22 @@ function createFakeDesktopAutomation({ bundleId, pid = 4242, view = {}, navigate
       for (const id of bundleIds) apps[id] = id === bundleId && state.installed
         ? { installedPath: state.installedPath || `/Applications/${id}.app`, version: state.version, running: state.running, pid: state.running ? pid : null, active: state.frontmost?.bundleId === id }
         : { installedPath: null, version: null, running: false, pid: null, active: false };
-      return { ok: true, trusted: state.trusted, screenLocked: state.screenLocked, onConsole: state.onConsole, frontmost: state.frontmost, apps };
+      const handlers = {};
+      const own = state.installed ? { path: state.installedPath || `/Applications/${bundleId}.app`, bundleId } : null;
+      for (const scheme of schemes) handlers[scheme] = state.handlers && scheme in state.handlers ? state.handlers[scheme] : own;
+      return { ok: true, trusted: state.trusted, screenLocked: state.screenLocked, onConsole: state.onConsole, frontmost: state.frontmost, apps, handlers };
+    },
+    // Read-only list of the web content areas the app shows: the current view only.
+    async contentAreas(id) {
+      record('contentAreas', id);
+      const injected = fault('contentAreas');
+      if (injected) return injected;
+      const blocked = guard();
+      if (blocked) return blocked;
+      if (!state.running) return { ok: false, error: 'not_running' };
+      if (state.screenLocked) return { ok: true, areas: [] };
+      const view = state.view;
+      return { ok: true, areas: [{ url: view.urlSegment ? `https://example.test/${view.urlSegment}` : 'app://-/index.html', title: view.title || '', language: view.language }] };
     },
     async inspect(target) {
       record('inspect', target);

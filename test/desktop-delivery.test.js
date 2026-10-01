@@ -88,6 +88,21 @@ test('a conversation that never appears is a certain timeout that names the app 
   assert.equal(calls(fake, 'setComposer').length, 0);
 });
 
+test('a deep link is opened only when it would reach the app itself', async () => {
+  const unregistered = setup();
+  unregistered.fake.state.handlers = { agent: null };
+  await assert.rejects(unregistered.run(), (error) => error.code === 'app_version_unsupported' && error.details.contactPoint === 'deep_link' && error.deliveryUncertain === false);
+  assert.deepEqual(unregistered.fake.state.opened, []);
+  const other = setup();
+  other.fake.state.handlers = { agent: { path: '/Applications/Imposter.app', bundleId: 'com.example.imposter' } };
+  await assert.rejects(other.run(), (error) => error.code === 'harness_not_configured' && /agent:\/\/ links open Imposter instead of Agent App/.test(error.message));
+  assert.deepEqual(other.fake.state.opened, [], 'Another app never receives the conversation ID');
+  const own = setup();
+  await own.run();
+  assert.deepEqual(own.fake.state.calls.find((call) => call[0] === 'environment')[1], [BUNDLE]);
+  assert.equal(own.fake.state.opened.length, 1);
+});
+
 test('a user draft is never overwritten', async () => {
   const { fake, run } = setup({ view: { urlSegment: 'conv-1', composer: 'half-written thought' } });
   await rejects(run(), 'conversation_busy', false);
