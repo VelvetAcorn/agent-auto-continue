@@ -197,3 +197,38 @@ test('a T3 Code continuation finishes on the stop phrase through polling', async
   await service.run(job.id);
   assert.equal(commands.length, 2);
 });
+
+test('the stop phrase alone can be set, changed or removed on a running or paused continuation', async () => {
+  const h = serviceFixture();
+  const created = await chain(h, { stopPhrase: undefined, continuous: true });
+  await h.advance(5_000);
+  await h.finish(1, { lastAgentMessage: 'TASK COMPLETE' });
+  await h.advance(5_000);
+  assert.equal(h.fake.state.submitted.length, 2, 'Without a phrase the chain carried on');
+  // Turn 2 is running: other edits are refused, but the phrase alone may change.
+  assert.throws(() => h.service.edit(created.id, { message: 'Keep going' }), { code: 'invalid_state' });
+  const set = h.service.edit(created.id, { stopPhrase: '  task   complete ' });
+  assert.deepEqual([set.automation.stopPhrase, set.automation.state, set.turn.state, set.messageId], ['task complete', 'active', 'running', h.get(created.id).messageId]);
+  assert.equal(h.armedTimers().length, 0, 'Nothing is rescheduled or sent by the edit');
+  await h.finish(2, { lastAgentMessage: 'Done. Task complete.' });
+  const finished = h.view(created.id);
+  assert.deepEqual([finished.automation.state, finished.automation.reasonCode], ['finished', 'stop_phrase']);
+  assert.throws(() => h.service.edit(created.id, { stopPhrase: 'DONE' }), (error) => error.code === 'invalid_state' && /already ended/.test(error.message));
+});
+
+test('a phrase-only edit on a paused continuation can remove the phrase, and is checked like any other', async () => {
+  const h = serviceFixture();
+  const created = await chain(h);
+  await h.advance(5_000);
+  const job = h.get(created.id);
+  h.service.patch(job, h.service.chainPatch(job, 'paused', 'turn_failed', 'The last turn failed.'));
+  assert.equal(h.service.edit(created.id, { stopPhrase: null }).automation.stopPhrase, null);
+  assert.equal(h.service.edit(created.id, { stopPhrase: 'FINISHED' }).automation.stopPhrase, 'FINISHED');
+  assert.throws(() => h.service.edit(created.id, { stopPhrase: 'no' }), /between 3 and 200/);
+  const single = await h.service.create({ harness: 'fake', threadId: 'conv', message: 'Continue', timeZone: 'UTC', trigger: 'available', turnLimit: 1 });
+  assert.throws(() => h.service.edit(single.id, { stopPhrase: 'DONE' }), /only applies when more than one turn/);
+  const blind = serviceFixture({ capabilities: { canReportAgentMessage: false } });
+  const plain = await chain(blind, { stopPhrase: undefined });
+  assert.throws(() => blind.service.edit(plain.id, { stopPhrase: 'DONE' }), /does not report the agent's last message/);
+  assert.equal(blind.service.edit(plain.id, { stopPhrase: null }).automation.stopPhrase, null);
+});

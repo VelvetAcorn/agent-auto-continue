@@ -155,7 +155,7 @@ Responses are JSON with `Cache-Control: no-store`.
 Omitted `PATCH` fields keep their saved values.
 The same rules as the desktop composer apply: future times only, real calendar dates, 1 to 4,000 characters and a valid IANA timezone.
 A job's `deliveryStatus` is `pending`, `dispatching`, `sent`, `failed`, `canceled` or `unconfirmed`; `sent` means the harness accepted the message, not that the agent finished.
-A pending one-off message held back by a busy agent, a locked Mac or an unavailable harness has `displayStatus: 'waiting'`, `waiting.nextCheckAt` and `waitingSince`; it is checked again for up to six hours before it fails (see [waiting one-off messages](harnesses.md#waiting-one-off-messages)).
+A pending one-off message held back by a busy agent, a locked Mac, or a harness that is unavailable or certainly could not be reached has `displayStatus: 'waiting'`, `waiting.nextCheckAt` and `waitingSince`; it is checked again for up to six hours before it fails (see [waiting one-off messages](harnesses.md#waiting-one-off-messages)).
 
 ### Marking a delivery as not delivered
 
@@ -173,7 +173,8 @@ Only unconfirmed deliveries can be marked; anything else answers `409 invalid_st
 `trigger` is `time` (the default), `available` (start as soon as the agent is available; no time is needed) or `time-then-available`.
 `turnLimit` is the total number of turns including the first, at least 1 and 1 by default, and `continuous: true` removes the limit.
 `stopPhrase`, such as `TASK COMPLETE`, finishes the continuation when a completed turn's final agent message contains it; it needs more than one turn, and `null` or an empty string removes it on `PATCH` (see [stop phrase](continuations.md#stop-phrase)).
-A `PATCH` without `stopPhrase` keeps the saved phrase, and like other edits it is refused with `409 invalid_state` once the first turn has been sent.
+A `PATCH` without `stopPhrase` keeps the saved phrase.
+A `PATCH` with only `stopPhrase` changes the phrase of an active or paused continuation at any time, even after its first turn; any other change, alone or alongside it, is refused with `409 invalid_state` once the first turn has been sent.
 Modes a harness cannot support are refused with `400 validation_failed` and the same explanation the composer shows; `GET /v1/harnesses` reports them in each harness's `automation: { whenAvailable, multipleTurns, stopPhrase }`.
 
 A run is a continuation that is running or paused:
@@ -267,7 +268,7 @@ curl -s -X POST "$BASE/jobs/JOB_ID/mark-not-delivered" -H "$AUTH" -H 'Content-Ty
 
 ```json
 {
-  "desktop": { "app": "T3 Code Auto-Continue", "version": "2.0.0", "time": "2026-10-01T08:00:00.000Z", "timeZone": "Europe/London" },
+  "desktop": { "app": "Agent Auto-Continue", "version": "2.1.0", "time": "2026-10-01T08:00:00.000Z", "timeZone": "Europe/London" },
   "storage": { "ok": true },
   "defaultHarness": "t3",
   "harnesses": [

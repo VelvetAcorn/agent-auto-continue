@@ -156,3 +156,17 @@ test('remote control creates and edits a stop phrase with the composer rules', a
   assert.equal((await f.request('PATCH', path, { body: { stopPhrase: 'x'.repeat(500) } })).status, 400);
   assert.equal(f.harness.dispatches, 0);
 });
+
+test('remote control changes only the stop phrase of a continuation that has started', async (t) => {
+  const base = { commandId: 'c', threadId: 'thread-a', message: 'Continue', scheduleAt: '2026-01-01T10:00:00Z', createdAt: '2026-01-01T09:00:00Z', bufferSeconds: 5, timeZone: 'UTC', trigger: 'time',
+    chain: { limit: null, state: 'active', reasonCode: null, reason: '', changedAt: '2026-01-01T10:00:00Z', previousTurns: 2, history: [] } };
+  const f = await startRemote({ jobs: { version: 4, jobs: [{ ...base, id: 'running', messageId: 'm1', status: 'sent', deliveryCertainty: 'delivered', turn: { state: 'running', turnId: null, completedAt: null, error: null, usageLimit: null, updatedAt: '2026-01-01T10:00:00Z' } }] } });
+  t.after(f.close);
+  const changed = await f.request('PATCH', '/v1/jobs/running', { body: { stopPhrase: 'TASK COMPLETE' } });
+  assert.deepEqual([changed.status, changed.body.job.automation.stopPhrase, changed.body.job.automation.sentTurns], [200, 'TASK COMPLETE', 3]);
+  const withMessage = await f.request('PATCH', '/v1/jobs/running', { body: { stopPhrase: 'DONE', message: 'Keep going' } });
+  assert.deepEqual([withMessage.status, withMessage.body.error.code], [409, 'invalid_state']);
+  assert.equal(f.service.get('running').chain.stopPhrase, 'TASK COMPLETE');
+  assert.equal((await f.request('PATCH', '/v1/jobs/running', { body: { stopPhrase: null } })).body.job.automation.stopPhrase, null);
+  assert.equal(f.harness.dispatches, 0);
+});

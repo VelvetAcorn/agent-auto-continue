@@ -76,7 +76,9 @@ When a turn completes and the agent's last message contains the phrase, the chai
 - The message comes from the turn outcome's `lastAgentMessage` (see [the adapter contract](harnesses.md#data-shapes)) and is never stored: the turn keeps only `stopPhraseMatched`, which is `true`, `false`, or `null` when the harness reported no message, and the chain then continues.
 - It needs `canDetectCompletion` and `canReportAgentMessage`; for any other harness the option is refused with the reason in `automation.stopPhrase` from `harnesses:list`, and every built-in harness supports it.
 - An edit that does not mention `stopPhrase` keeps the saved phrase, unless it sets a turn limit of 1, which drops it; `stopPhrase: null` removes it.
-  Like the other settings, it cannot be changed once the first turn has been sent.
+- An edit that changes only `stopPhrase` is allowed at any point while the chain is active or paused, even after its first turn, and changes nothing else.
+  The new phrase applies to every turn that finishes afterwards; a turn that already finished keeps its result, because its message was not stored.
+  The other settings still cannot change once the first turn has been sent, and an ended chain refuses the edit with `invalid_state`.
 
 The agent's own words can still mislead, for example if it quotes the phrase while explaining what it will do, so the turn limit and Stop remain the safeguards.
 

@@ -244,3 +244,48 @@ test('continuations keep waiting for a busy agent without the one-off limit', as
   await h.advance(15 * MIN);
   assert.equal(h.fake.state.submitted.length, 1);
 });
+
+test('a harness that certainly could not be reached holds a one-off message; an uncertain failure stays unconfirmed', async () => {
+  for (const [stage, code] of [['inspect', 'connection_refused'], ['prepare', 'timeout'], ['submit', 'connection_refused'], ['submit', 'timeout']]) {
+    const h = serviceFixture();
+    const created = await oneOff(h);
+    h.fake.state[`${stage}Error`] = new HarnessError(code, `Cannot reach Fake Agent (${code}).`, {}, false);
+    await h.advance(MIN + 5_000);
+    const waiting = h.view(created.id);
+    assert.deepEqual([waiting.status, waiting.displayStatus, waiting.deliveryLabel, waiting.dispatchAttemptedAt, waiting.error], ['pending', 'waiting', 'Waiting to reach the agent', null, null], `${stage} ${code}`);
+    assert.match(waiting.note, new RegExp(`^Cannot reach Fake Agent \\(${code}\\)\\. Checking again in 1 min\\. Gives up at`));
+    await h.advance(MIN);
+    assert.equal(nextCheckIn(h, created.id), 2 * MIN, 'The shared backoff');
+    h.fake.state[`${stage}Error`] = null;
+    await h.advance(2 * MIN);
+    assert.equal(h.get(created.id).status, 'sent', `${stage} ${code}`);
+    assert.equal(h.fake.state.submitted.length, 1);
+  }
+  // A timeout after the message may have arrived is never retried.
+  const h = serviceFixture();
+  const created = await oneOff(h);
+  h.fake.state.submitError = new HarnessError('timeout', 'No answer after sending.', {}, true);
+  await h.advance(MIN + 5_000);
+  assert.deepEqual([h.view(created.id).deliveryStatus, h.get(created.id).waitingSince], ['unconfirmed', null]);
+  assert.equal(h.armedTimers().length, 0);
+});
+
+test('a harness unreachable for six hours fails the one-off message with its own code', async () => {
+  const h = serviceFixture();
+  const created = await oneOff(h);
+  h.fake.state.inspectError = new HarnessError('connection_refused', 'Cannot connect to Fake Agent.', { port: 4096 }, false);
+  await h.advance(MIN + 5_000);
+  for (let guard = 0; guard < 100 && h.get(created.id).status === 'pending'; guard++) await h.advance(Math.max(nextCheckIn(h, created.id), 0));
+  const failed = h.get(created.id);
+  assert.deepEqual([failed.status, failed.deliveryCertainty, failed.error.code, failed.error.details.port], ['failed', 'not-delivered', 'connection_refused', 4096]);
+  assert.equal(failed.error.message, 'Fake Agent could not be reached for 6 hours, so the message was not sent. Schedule it again when the session is free.');
+});
+
+test('continuations still pause on an unreachable harness rather than waiting', async () => {
+  const h = serviceFixture();
+  const created = await h.service.create({ harness: 'fake', threadId: 'conv', message: 'Continue', whenISO: h.iso(MIN), timeZone: 'UTC', turnLimit: 3 });
+  h.fake.state.inspectError = new HarnessError('connection_refused', 'Cannot connect to Fake Agent.', {}, false);
+  await h.advance(MIN + 5_000);
+  const paused = h.view(created.id);
+  assert.deepEqual([paused.deliveryStatus, paused.automation.state, paused.automation.reasonCode], ['failed', 'paused', 'send_failed']);
+});

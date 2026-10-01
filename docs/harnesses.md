@@ -170,7 +170,7 @@ Absence of a key from a partial or windowed read is not proof of non-delivery, s
 | --- | --- |
 | `missing_credentials` | Required credentials are not configured |
 | `authentication_rejected` | The harness rejected the credentials |
-| `connection_refused` | The harness is not running or not reachable |
+| `connection_refused` | The harness is not running or not reachable; a one-off message waits when it is certain nothing arrived |
 | `timeout` | The harness did not answer in time |
 | `http_failure` | A local HTTP API returned a failure status |
 | `unexpected_response_format` | The response was not the expected format |
@@ -239,18 +239,20 @@ A one-off message, meaning a timed schedule of one turn, waits and retries inste
 | `busy: true`, or a certain `conversation_busy` error | After 1, 2, 5, 10, then every 15 minutes, the same backoff continuations use; shown as Waiting for the agent to finish |
 | A certain `screen_locked` error, or `probeAvailability()` reporting `unavailable` with reason `screen_locked` | Every minute, and at once when the Mac is unlocked; shown as Waiting for unlock |
 | `probeAvailability()` reporting `unavailable` for another reason | The same backoff; shown as Waiting for availability |
+| A `connection_refused` or `timeout` error with `deliveryUncertain: false`, from inspecting, preparing or submitting | The same backoff; shown as Waiting to reach the agent |
 
 The job stays `pending` with `displayStatus: 'waiting'`, the same unsent turn and its IDs, and `nextAttemptAt` for the next check.
 `waitingSince` records the first refusal, and the note says when the wait gives up.
 The first refusal raises one notification; later checks are quiet.
 The wait is capped by `MAX_ONE_OFF_WAIT_MS` in `lib/job-service.js`, six hours from the first refusal, across changes of cause and restarts.
-A message still refused at the cap fails as certainly not delivered, keeping the last error code (`conversation_busy`, `screen_locked` or `harness_unavailable`), with a message that says how long it waited, and `error.details` `{ waitedSince, waitLimitMs }`.
+A message still refused at the cap fails as certainly not delivered, keeping the last error code (`conversation_busy`, `screen_locked`, `connection_refused`, `timeout` or `harness_unavailable`), with a message that says how long it waited, and `error.details` `{ waitedSince, waitLimitMs }` added to the error's own details.
+A `connection_refused` or `timeout` failure with `deliveryUncertain: true` is never waited out: the message may have arrived, so it becomes unconfirmed as before.
 After a sleep longer than the cap, the message is sent on wake if the conversation is free, like any missed schedule, and fails at once if it is still blocked.
 `awaiting_input` is never waited out, and new user activity in the conversation still cancels the message.
 Editing a waiting message starts it afresh, and Cancel works as for any pending message.
 Keep-awake tracks the wait as a `waiting` task with the cause and the next check.
 A probe that throws never blocks, as before.
-Automatic continuations keep waiting without a cap, as described in [automatic continuations](continuations.md).
+Automatic continuations keep waiting without a cap for a busy agent, a locked Mac or an unavailable harness, and pause (`send_failed`) on an unreachable harness, as described in [automatic continuations](continuations.md).
 
 ### Marking a delivery as not delivered
 

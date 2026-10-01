@@ -35,7 +35,7 @@ Product names are trademarks of their respective owners and are used only to des
 - Shows which harness each schedule targets and whether the agent's turn finished.
 - Skips a schedule without sending when the harness reports a usage limit that has not reset yet.
 - Shows upcoming schedules and local delivery history, including failed, canceled and unconfirmed outcomes.
-- Waits instead of failing when a one-off message is due while the agent is still working, the Mac is locked or the harness is unavailable, checking again with backoff for up to six hours; see [waiting one-off messages](docs/harnesses.md#waiting-one-off-messages).
+- Waits instead of failing when a one-off message is due while the agent is still working, the Mac is locked, or the harness is unavailable or certainly could not be reached, checking again with backoff for up to six hours; see [waiting one-off messages](docs/harnesses.md#waiting-one-off-messages).
 - Schedules a message for a chosen thread, with `+5 min`, `+30 min`, `+1 hour`, and tomorrow shortcuts.
 - For agents that report usage limits, starts as soon as the agent is available, or at a time and then once any limit has reset.
 - For agents that report when a turn finishes, sends follow-up turns up to a turn limit, or continuously until stopped, and optionally finishes when the agent's last message contains a stop phrase such as `TASK COMPLETE`; see [automatic continuations](docs/continuations.md).
