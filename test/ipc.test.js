@@ -184,7 +184,7 @@ test('a desktop app change is checked on scheduling, logged, shown as a risk and
   assert.equal(JSON.parse(app.files.get('/fixture/compatibility.json')).harnesses.desk.problems[0].contactPoint, 'composer_label');
   const log = JSON.parse(app.files.get('/fixture/diagnostics.json'));
   assert.deepEqual(log.entries.map((entry) => [entry.harness, entry.appVersion, entry.contactPoint]), [['desk', '2.0', 'composer_label']]);
-  assert.equal(app.invoke('diagnostics:copy').ok, true);
+  assert.equal((await app.invoke('diagnostics:copy')).ok, true);
   assert.match(app.clipboard[0], /Agent Auto-Continue diagnostics[\s\S]*- desk: Desk App 2\.0, verified 1\.0[\s\S]*composer_label/);
   assert.doesNotMatch(app.clipboard[0] + app.files.get('/fixture/diagnostics.json'), /secret|Secret/, 'Neither message text nor titles reach diagnostics');
   fake.state.compatibility = healthy;

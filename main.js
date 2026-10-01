@@ -402,8 +402,9 @@ ipcMain.handle('harnesses:check-compatibility', async (_event, harness) => {
   return compatibility.snapshot();
 });
 // Copies a plain-text report for a bug report: versions, contact points and redacted hints, never message text.
-ipcMain.handle('diagnostics:copy', () => {
-  clipboard.writeText(diagnostics.report({ appVersion: app.getVersion?.(), platform: `macOS ${os.release()} ${os.arch()}`, states: compatibility.snapshot() }));
+ipcMain.handle('diagnostics:copy', async () => {
+  // Electron's clipboard methods return promises; the reply must not race the write.
+  await clipboard.writeText(diagnostics.report({ appVersion: app.getVersion?.(), platform: `macOS ${os.release()} ${os.arch()}`, states: compatibility.snapshot() }));
   return { ok: true };
 });
 ipcMain.handle('harnesses:availability', async (_event, harness) => {
