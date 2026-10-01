@@ -56,7 +56,22 @@ const harnessModule = require('../lib/harnesses');
 const { createT3Harness } = require('../lib/harnesses/t3');
 const { createFakeHarness } = require('./fake-harness.cjs');
 // A second, in-memory harness exercises the picker without touching real agents.
-const fake = createFakeHarness({ label: 'Fake Agent', conversations: [{ id: 'conv-fake', title: 'Fake conversation', projectName: 'Fake repo', updatedAt: '2026-09-30T10:00:00Z' }], settings: [{ key: 'port', type: 'port', label: 'Fake agent port', default: 4096, help: 'Fixture setting.' }] });
+const fake = createFakeHarness({ label: 'Fake Agent', conversations: [{ id: 'conv-fake', title: 'Fake conversation', projectName: 'Fake repo', updatedAt: '2026-09-30T10:00:00Z' }, { id: 'conv-chain', title: 'Chain fixture session', projectName: 'fake-repo', updatedAt: '2026-09-30T09:00:00Z' }], settings: [{ key: 'port', type: 'port', label: 'Fake agent port', default: 4096, help: 'Fixture setting.' }] });
+// Automatic continuations run end to end against the fake harness; each turn
+// completes on its own after 300 ms, or when the journey releases it.
+let completionMode = 'auto';
+const pendingCompletions = [];
+fake.state.completion = () => new Promise((resolve) => {
+  const finish = () => resolve({ state: 'completed', completedAt: new Date().toISOString() });
+  if (completionMode === 'auto') setTimeout(finish, 300); else pendingCompletions.push(finish);
+});
+// Real timers for near-term work only; far-future schedules (such as 2099 fixtures) never fire.
+const nearTimers = { scheduleJob(when, callback) {
+  const delay = when.valueOf() - Date.now();
+  if (delay > 60 * 60_000) return { cancel() {} };
+  const handle = setTimeout(callback, Math.max(0, delay));
+  return { cancel() { clearTimeout(handle); } };
+} };
 const appProxy = new Proxy(app, { get(target, property) {
   if (property === 'requestSingleInstanceLock') return () => true;
   if (property === 'getPath') return name => name === 'userData' ? '/fixture' : target.getPath(name);
@@ -88,7 +103,7 @@ function loadProductionMain() {
     require(name) {
       if (name === 'electron') return injectedElectron;
       if (name === 'node:fs') return fakeFs;
-      if (name === 'node-schedule') return { scheduleJob: () => ({ cancel() {} }) };
+      if (name === 'node-schedule') return nearTimers;
       if (name === './lib/api-client') return { ...apiModule, createApiClient: options => apiModule.createApiClient({ ...options, fetchImpl: fixtureFetch }) };
       if (name === './lib/harnesses') return { ...harnessModule, createHarnesses: options => harnessModule.createHarnessRegistry([createT3Harness({ api: options.api }), { ...fake.adapter, async listConversations(options) { if (fakeOffline) throw new Error('Fake Agent unavailable'); return fake.adapter.listConversations(options); } }]) };
       return name.startsWith('./lib/') ? require(path.join(root, name)) : require(name);
@@ -123,6 +138,7 @@ async function run() {
   // DOM journey assertions are maintained below with the production selectors.
   await rendererJourney(js, reducedMotion);
   await harnessJourney(js);
+  await continuationJourney(js);
   offline = true;
   const history = await js('window.autoContinue.listJobs({view:"history"})');
   assert.ok(history.total >= 1, 'History survives offline API');
@@ -138,7 +154,7 @@ async function run() {
   assert.equal(await js(`document.querySelector('#notices').textContent.includes('unexpected')`), false);
   if (evidenceDirectory) fs.writeFileSync(path.join(evidenceDirectory, 'persisted-fixture-jobs.json'), files.get('/fixture/jobs.json'));
   assert.equal(dispatches, 0, 'The fixture must never send a message');
-  assert.equal(fake.state.submitted.length, 0, 'The fake harness must never send a message');
+  assert.equal(fake.state.submitted.filter(item => item.conversationId !== 'conv-chain').length, 0, 'Only the continuation journey sends, and only to its fake session');
   assert.deepEqual(failures, []);
   assert.ok(menu.find(item => item.label === 'Open scheduler'));
   // The real nativeImage decodes the tray glyph, so an unreadable or undecodable asset fails here.
@@ -146,7 +162,7 @@ async function run() {
   assert.deepEqual(trayImage.getSize(), { width: 18, height: 18 });
   assert.equal(trayImage.isTemplateImage(), true, 'The menu-bar icon must adapt to light and dark menu bars');
   assert.ok(trayImage.getScaleFactors().includes(2), 'The menu-bar icon needs a Retina representation');
-  console.log('Electron production workflow smoke passed: one window, real preload/IPC/renderer, local history, sanitized offline error, zero sends.');
+  console.log('Electron production workflow smoke passed: one window, real preload/IPC/renderer, local history, sanitized offline error, zero T3 sends, and fake-harness continuations (auto-start, turn limit, continuous, stop, tray stop all).');
 }
 async function rendererJourney(js, reducedMotion) {
   const click = async selector => {
@@ -405,6 +421,102 @@ async function harnessJourney(js) {
   await choose('#threads-harness', 't3');
   await waitFor(() => js(`Boolean(document.querySelector('[data-thread="thread-active"]'))`), 'T3 threads again');
   assert.equal(fake.state.submitted.length, 0);
+}
+async function continuationJourney(js) {
+  const click = async selector => {
+    await waitFor(() => js(`Boolean(document.querySelector(${JSON.stringify(selector)}))`), `control ${selector}`);
+    await js(`document.querySelector(${JSON.stringify(selector)}).click()`);
+  };
+  const fill = async (selector, value) => js(`(() => { const input=document.querySelector(${JSON.stringify(selector)}); input.value=${JSON.stringify(value)}; input.dispatchEvent(new Event('input',{bubbles:true})); })()`);
+  const heading = expected => waitFor(() => js(`document.querySelector('h1')?.textContent === ${JSON.stringify(expected)}`), `view ${expected}`);
+  const chains = () => js(`window.autoContinue.listJobs({view:'all'}).then(result=>result.jobs.filter(job=>job.harness==='fake'&&job.automation))`);
+  await js(`window.autoContinue.saveSettings({httpPort:3773,bufferSeconds:0})`);
+  await waitFor(() => js(`window.autoContinue.getSettings().then(settings=>settings.bufferSeconds===0)`), 'zero buffer for fast turns');
+
+  // T3 Code reports completion but not usage limits: turn limits are offered, auto-start is disabled with the reason.
+  await click('[data-nav="upcoming"]');
+  await click('[data-action="new"]');
+  await heading('New schedule');
+  await waitFor(() => js(`document.querySelector('#turn-help').textContent.includes('T3 Code reports when each turn finishes')`), 'T3 automation support loaded');
+  assert.equal(await js(`document.querySelector('[data-trigger="available"]').disabled`), true);
+  assert.equal(await js(`document.querySelector('#wait-if-limited').disabled`), true);
+  assert.equal(await js(`document.querySelector('#turn-limit').disabled || document.querySelector('#continuous').disabled`), false);
+  assert.match(await js(`document.querySelector('#trigger-help').textContent`), /T3 Code does not report usage limits/);
+  await capture('composer-t3-automation');
+
+  // Auto-start with a turn limit of 3 while the fake agent is at a usage limit.
+  fake.state.availability = { state: 'limited', resetsAt: new Date(Date.now() + 3000).toISOString(), reason: 'Five-hour limit', source: 'reported' };
+  await js('window.autoContinue.scheduleThread("conv-chain", "fake")');
+  await waitFor(() => js(`document.querySelector('.thread-picker')?.textContent.includes('Chain fixture session')`), 'fake conversation in composer');
+  await click('[data-trigger="available"]');
+  await waitFor(() => js(`document.querySelector('[data-trigger="available"]').getAttribute('aria-pressed')==='true'`), 'when available chosen');
+  assert.equal(await js(`Boolean(document.querySelector('#date'))`), false, 'No time is asked for');
+  await fill('#turn-limit', '3');
+  await waitFor(() => js(`document.querySelector('#schedule-preview').textContent.includes('At a usage limit until')`), 'availability shown with its source');
+  assert.match(await js(`document.querySelector('#schedule-preview').textContent`), /reported by the agent/);
+  assert.match(await js(`document.querySelector('#schedule-preview').textContent`), /Sends up to 3 messages/);
+  await capture('composer-auto-start');
+  await js(`document.querySelector('#schedule-form').requestSubmit()`);
+  await heading('Upcoming');
+  await waitFor(() => js(`document.querySelector('.row .pill.waiting')?.textContent === 'Waiting for availability'`), 'waiting row');
+  assert.match(await js(`document.querySelector('.row .progress').textContent`), /Turn 1 of 3/);
+  assert.equal(fake.state.submitted.length, 0, 'Nothing is sent before the limit resets');
+  await capture('upcoming-waiting-for-availability');
+  await waitFor(async () => (await chains())[0]?.automation.state === 'finished', 'three turns sent and finished');
+  const [finished] = await chains();
+  assert.equal(fake.state.submitted.length, 3);
+  assert.equal(new Set(fake.state.submitted.map(item => item.deliveryKey)).size, 3);
+  assert.equal(finished.automation.sentTurns, 3);
+  await click('[data-nav="history"]');
+  await click(`[data-job="${finished.id}"]`);
+  await waitFor(() => js(`document.querySelectorAll('.turn-list li').length === 3`), 'turn history in detail');
+  assert.match(await js(`document.querySelector('.chain-reason').textContent`), /Sent 3 turns, the turn limit/);
+  await capture('detail-finished-turn-history');
+
+  // Continuous mode keeps going until stopped from the detail view.
+  completionMode = 'manual';
+  fake.state.availability = { state: 'available', source: 'reported' };
+  await js('window.autoContinue.scheduleThread("conv-chain", "fake")');
+  await heading('New schedule');
+  await click('[data-trigger="available"]');
+  await click('#continuous');
+  await waitFor(() => js(`document.querySelector('#turn-limit').disabled && document.querySelector('#schedule-preview').textContent.includes('until you stop it')`), 'continuous mode chosen');
+  await js(`document.querySelector('#schedule-form').requestSubmit()`);
+  await heading('Upcoming');
+  await waitFor(() => fake.state.submitted.length === 4 && pendingCompletions.length === 1, 'first continuous turn sent');
+  pendingCompletions.shift()();
+  await waitFor(() => fake.state.submitted.length === 5, 'second continuous turn sent');
+  await waitFor(() => js(`document.querySelector('.row .progress')?.textContent.includes('Turn 2 · continuous')`), 'continuous progress row');
+  assert.equal(await js(`document.querySelector('.notice.continuing strong').textContent`), '1 automatic continuation is running');
+  await capture('upcoming-continuous-running');
+  const continuous = (await chains()).find(job => job.automation.unlimited);
+  await click(`[data-job="${continuous.id}"]`);
+  await waitFor(() => js(`Boolean(document.querySelector('[data-action="stop"]'))`), 'stop control');
+  await capture('detail-continuous-running');
+  await click('[data-action="stop"]');
+  await waitFor(() => js(`window.autoContinue.getJob(${JSON.stringify(continuous.id)}).then(job=>job.automation.state==='stopped')`), 'stopped from the detail view');
+  pendingCompletions.shift()();
+  await new Promise(resolve => setTimeout(resolve, 1000));
+  assert.equal(fake.state.submitted.length, 5, 'Nothing is sent after Stop');
+  await waitFor(() => js(`document.querySelector('.chain-reason')?.textContent.includes('Stopped by you')`), 'stopped detail');
+  await capture('detail-continuous-stopped');
+
+  // Stop all from the menu-bar tray.
+  await js(`window.autoContinue.createSchedule({harness:'fake',threadId:'conv-chain',message:'Continue',timeZone:'UTC',trigger:'available',continuous:true})`);
+  await waitFor(() => fake.state.submitted.length === 6, 'tray fixture turn sent');
+  await waitFor(() => Boolean(menu?.find(item => String(item.label).startsWith('Stop all continuations (1)'))), 'tray stop-all item');
+  menu.find(item => String(item.label).startsWith('Stop all continuations')).click();
+  await waitFor(async () => (await chains()).every(job => job.automation.state !== 'active'), 'tray stopped every continuation');
+  pendingCompletions.shift()();
+  await new Promise(resolve => setTimeout(resolve, 500));
+  assert.equal(fake.state.submitted.length, 6);
+  assert.equal(menu.some(item => String(item.label).startsWith('Stop all continuations')), false);
+  // Later checks use T3 Code's connection state.
+  const choose = async (selector, value) => js(`(() => { const select=document.querySelector(${JSON.stringify(selector)}); select.value=${JSON.stringify(value)}; select.dispatchEvent(new Event('change',{bubbles:true})); })()`);
+  await click('[data-nav="threads"]');
+  await waitFor(() => js(`Boolean(document.querySelector('#threads-harness'))`), 'threads view');
+  await choose('#threads-harness', 't3');
+  await waitFor(() => js(`Boolean(document.querySelector('[data-thread="thread-active"]'))`), 'T3 threads again');
 }
 // A hung window must fail the run rather than block CI or a shell indefinitely.
 // Before the app is ready (for example while macOS is locked) app.exit() is ignored, so force the exit.

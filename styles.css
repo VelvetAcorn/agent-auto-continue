@@ -9,3 +9,30 @@
 .harness-row:first-child{border-top:0;margin-top:4px;padding-top:0}
 .harness-name small{display:block;margin-top:3px}
 .harness-name .harness-caps{color:var(--accent)}
+
+/* Automatic continuations (issue #3) */
+.pill.waiting,.pill.paused{color:var(--amber)}
+.pill.finished{color:var(--green)}
+.pill.stopped{color:var(--muted)}
+.meta .progress{margin-left:10px;padding-left:10px;border-left:1px solid var(--line)}
+label.check{display:flex;align-items:center;gap:9px;font-size:12px;line-height:1.5;margin:4px 0 0;cursor:pointer}
+label.check:has(input:disabled){color:var(--muted);cursor:default}
+.turns{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.2fr);gap:13px;align-items:end}
+.turns label.check{margin:0 0 30px}
+.turns input:disabled{opacity:.6}
+.chain{border-top:1px solid var(--line);border-bottom:1px solid var(--line);margin-top:22px;padding:18px 0 4px}
+.chain-head{display:flex;justify-content:space-between;align-items:baseline;gap:12px}
+.chain-head strong{font-size:13px}
+.chain .key-values{margin:16px 0}
+.chain-reason{display:flex;align-items:center;gap:12px;border-left:2px solid var(--line);padding-left:14px;margin:16px 0;font-size:12px}
+.chain-reason p{flex:1;margin:0;font-size:12px}
+.chain-reason.paused{border-left-color:var(--amber)}
+.chain-reason.finished{border-left-color:var(--green)}
+.turn-list{list-style:none;margin:0;padding:0;border:1px solid var(--line);border-radius:8px}
+.turn-list li{display:grid;grid-template-columns:70px minmax(0,1fr);gap:2px 12px;padding:10px 12px;border-bottom:1px solid var(--line);font-size:12px;line-height:1.6}
+.turn-list li:last-child{border-bottom:0}
+.turn-list small{grid-column:2;overflow-wrap:anywhere}
+.turn-list span{overflow-wrap:anywhere}
+.stop-help{flex-basis:100%;margin:0}
+.notice.continuing strong{color:var(--ink)}
+@media(max-width:650px){.turns{grid-template-columns:1fr}.turns label.check{margin:0}}

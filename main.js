@@ -9,6 +9,7 @@ const schedule = require('node-schedule');
 const { normaliseConfig, validateSettingsInput } = require('./lib/model');
 const { createApiClient, toErrorInfo } = require('./lib/api-client');
 const { JobService } = require('./lib/job-service');
+const { automationSupport } = require('./lib/continuation');
 const { DEFAULT_HARNESS, applyHarnessSettingsInput, createHarnesses, normaliseHarnessSettings, publicHarnessSettings, resolveHarnessSettings } = require('./lib/harnesses');
 
 const APP_NAME = 'T3 Code Auto-Continue';
@@ -151,8 +152,39 @@ async function activeThreads(options) {
   return harnessFor(options?.harness).listConversations({ showSettled: options?.showSettled === true });
 }
 
+// Plain schedules not yet sent, and every active automatic continuation.
 function activeJobs() {
-  return service?.jobs.filter((job) => job.status === 'pending' || job.status === 'dispatching') || [];
+  return service?.jobs.filter((job) => service.upcoming(job)) || [];
+}
+
+// Schedules listed per item in the tray: everything upcoming, plus paused continuations waiting for the user.
+function trayJobs() {
+  return service?.jobs.filter((job) => service.upcoming(job) || job.chain?.state === 'paused') || [];
+}
+
+function trayJobLabel(job) {
+  const view = service.present(job);
+  const when = job.chain?.state === 'paused' ? (view.deliveryStatus === 'unconfirmed' ? 'paused · check delivery' : 'paused') : view.displayStatus === 'running' ? 'agent working' : view.displayStatus === 'waiting' ? view.deliveryLabel.toLowerCase() : view.displayStatus === 'dispatching' ? 'sending' : dateLabel(view.effectiveAt);
+  return `${job.message.slice(0, 60)} · ${view.automation ? `${view.automation.progressLabel} · ` : ''}${when}`;
+}
+
+function trayAction(action, title) {
+  try { ensureStorage(); action(); }
+  catch (error) { notify(title, String(error?.message || 'Check local disk space and try again in the scheduler.').slice(0, 200)); }
+}
+
+function trayJobItem(job) {
+  const view = service.present(job);
+  const items = [{ id: `view:${job.id}`, label: 'View schedule', click: () => openDashboard({ view: service.upcoming(job) ? 'upcoming' : 'history', jobId: job.id }) }];
+  if (!job.chain) {
+    items.push({ label: 'Cancel', enabled: job.status === 'pending', click: () => trayAction(() => { if (job.status === 'pending') service.cancel(job.id); }, 'Could not cancel') });
+  } else {
+    if (job.chain.state === 'paused') {
+      items.push({ label: 'Resume continuation', enabled: view.canResume, click: () => trayAction(() => { if (service.present(job).canResume) service.resumeChain(job.id); }, 'Could not resume') });
+    }
+    items.push({ label: 'Stop continuing', click: () => trayAction(() => { if (service.present(job).canStop) service.stop(job.id); }, 'Could not stop') });
+  }
+  return { label: trayJobLabel(job), submenu: items };
 }
 
 async function rebuildMenu() {
@@ -173,18 +205,9 @@ async function rebuildMenu() {
     threadItems = [{ label: 'Refresh after checking T3 Code and Settings', enabled: false }];
   }
 
-  const pending = activeJobs();
-  const jobItems = pending.length ? pending.map((job) => ({
-    label: `${job.message} — ${dateLabel(service.present(job).effectiveAt)}${job.status === 'dispatching' ? ' (sending)' : ''}`,
-    submenu: [{ label: 'View schedule', click: () => openDashboard({ view: 'upcoming', jobId: job.id }) }, {
-      label: 'Cancel',
-      enabled: job.status === 'pending',
-      click: () => {
-        try { ensureStorage(); if (job.status === 'pending') service.cancel(job.id); }
-        catch { notify('Schedule could not be canceled', 'Check local disk space and try again in the scheduler.'); }
-      }
-    }]
-  })) : [{ label: 'No scheduled messages', enabled: false }];
+  const listed = trayJobs();
+  const continuing = service?.jobs.filter((job) => job.chain && ['active', 'paused'].includes(job.chain.state)) || [];
+  const jobItems = listed.length ? listed.map(trayJobItem) : [{ label: 'No scheduled messages', enabled: false }];
 
   if (revision !== menuRevision) return;
   tray.setContextMenu(Menu.buildFromTemplate([
@@ -195,7 +218,8 @@ async function rebuildMenu() {
     { label: 'History', click: () => openDashboard({ view: 'history' }) },
     { label: 'Refresh threads', click: () => void rebuildMenu() },
     { label: 'Schedule from a thread', submenu: threadItems },
-    { label: `Scheduled messages (${pending.length})`, submenu: jobItems },
+    { label: `Scheduled messages (${listed.length})`, submenu: jobItems },
+    ...(continuing.length ? [{ label: `Stop all continuations (${continuing.length})`, click: () => trayAction(() => service.stopAll(), 'Could not stop') }] : []),
     { type: 'separator' },
     { label: 'Settings…', click: openSettings },
     {
@@ -226,6 +250,9 @@ ipcMain.handle('jobs:get', (_event, id) => service.present(service.get(id)));
 ipcMain.handle('jobs:list', (_event, options) => ({ ...service.list(options), storageError }));
 ipcMain.handle('jobs:edit', (_event, id, incoming) => { ensureStorage(); return service.edit(id, incoming); });
 ipcMain.handle('jobs:cancel', (_event, id) => { ensureStorage(); return service.cancel(id); });
+ipcMain.handle('jobs:stop', (_event, id) => { ensureStorage(); return service.stop(id); });
+ipcMain.handle('jobs:stop-all', () => { ensureStorage(); return service.stopAll(); });
+ipcMain.handle('jobs:resume', (_event, id) => { ensureStorage(); return service.resumeChain(id); });
 ipcMain.handle('jobs:schedule-again', (_event, id) => service.scheduleAgain(id));
 ipcMain.handle('jobs:acknowledge', (_event, id) => { ensureStorage(); return service.acknowledge(id); });
 ipcMain.handle('jobs:reconcile', async (_event, id) => {
@@ -236,7 +263,7 @@ ipcMain.handle('connection:check', async (_event, harness) => {
   try { await harnessFor(harness).checkConnection(); return { online: true }; }
   catch (error) { return { online: false, error: toErrorInfo(error) }; }
 });
-ipcMain.handle('harnesses:list', () => ({ harnesses: harnesses.describe(), defaultHarness: DEFAULT_HARNESS }));
+ipcMain.handle('harnesses:list', () => ({ harnesses: harnesses.list().map((adapter, index) => ({ ...harnesses.describe()[index], automation: automationSupport(adapter) })), defaultHarness: DEFAULT_HARNESS }));
 ipcMain.handle('harnesses:availability', async (_event, harness) => {
   try {
     const adapter = harnessFor(harness);
@@ -284,6 +311,8 @@ app.whenReady().then(() => {
   void rebuildMenu();
   openDashboard();
   if (!token()) openSettings();
+  // Turns that were running before a restart are checked straight away, then every 30 seconds.
+  if (!storageError) void service.pollTurns().catch(() => {});
   setInterval(() => { if (!storageError) void service.pollTurns().catch(() => {}); }, TURN_POLL_MS).unref?.();
   // Give supervised agent turns a bounded chance to stop cleanly before quitting.
   let harnessesStopped = false;
@@ -294,6 +323,7 @@ app.whenReady().then(() => {
     void Promise.race([harnesses.shutdown(), new Promise((resolve) => setTimeout(resolve, 6000))]).finally(() => app.quit());
   });
   powerMonitor.on('resume', () => !storageError && void service.resume().catch(() => notify('Schedule could not be updated', 'Check local disk space and restart the app.')));
+  powerMonitor.on('unlock-screen', () => !storageError && void service.retryAfterUnlock().catch(() => notify('Schedule could not be updated', 'Check local disk space and restart the app.')));
   app.on('activate', () => { openDashboard(); void rebuildMenu(); });
 });
 

@@ -38,7 +38,7 @@ test('create snapshots baseline and buffer; editing preserves original baseline 
   assert.equal(edited.commandId, job.commandId);
   assert.equal(edited.messageId, job.messageId);
   assert.equal(edited.activitySince, job.activitySince);
-  assert.equal(h.stored.version, 3);
+  assert.equal(h.stored.version, 4);
 });
 
 test('obsolete edited and canceled timer callbacks never dispatch', async () => {
@@ -188,7 +188,7 @@ test('confirmed missing and archived threads cancel without dispatch; settled al
 
 
 test('migration refuses unknown versions and invalid persisted records instead of dropping data', () => {
-  assert.throws(() => migrateJobs({ version: 4, jobs: [legacy()] }), /unsupported format/);
+  assert.throws(() => migrateJobs({ version: 5, jobs: [legacy()] }), /unsupported format/);
   assert.throws(() => migrateJobs([legacy(), { id: 'broken' }]), /invalid records/);
 });
 
