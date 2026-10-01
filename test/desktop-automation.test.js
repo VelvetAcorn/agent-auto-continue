@@ -108,3 +108,9 @@ test('desktop error codes are part of the contract and keep their details', () =
   const info = toErrorInfo(new HarnessError('permission_required', 'Allow access.', { permission: 'accessibility', settingsUrl: ACCESSIBILITY_SETTINGS_URL }));
   assert.deepEqual(info, { code: 'permission_required', message: 'Allow access.', details: { permission: 'accessibility', settingsUrl: ACCESSIBILITY_SETTINGS_URL }, deliveryUncertain: false });
 });
+
+test('a child that exits before reading its input is a failed call, not a crash', async () => {
+  const { run } = require('../lib/desktop/mac-automation');
+  // Writing to a pipe whose reader is gone raises EPIPE on stdin, which must not go unhandled.
+  await assert.rejects(run('/bin/sh', ['-c', 'exit 3'], { timeout: 5000, input: 'x'.repeat(8 * 1024 * 1024) }), (error) => error.code === 3);
+});
