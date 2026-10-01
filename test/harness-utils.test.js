@@ -94,3 +94,29 @@ test('the WebSocket codec performs the handshake and handles fragments, pings an
   assert.equal(loop.push(encoded)[0].text.length, 70_000, 'Masked frames decode too');
   assert.equal(websocket.encodeFrame(1, 'x'.repeat(200))[1], 0x80 | 126);
 });
+
+test('a grandchild holding stdout cannot stall a finished or timed-out process', async () => {
+  const started = Date.now();
+  const result = await runProcess('/bin/sh', ['-c', 'sleep 6 & echo started'], { timeoutMs: 300 });
+  assert.ok(Date.now() - started < 3000, `resolved after ${Date.now() - started} ms`);
+  assert.equal(result.stdout, 'started\n');
+  const streamed = Date.now();
+  const handle = spawnJsonLines('/bin/sh', ['-c', 'sleep 6 & echo "{\\"type\\":\\"result\\"}"'], { onMessage: () => {} });
+  handle.end();
+  await handle.exited;
+  assert.ok(Date.now() - streamed < 3000, `exited resolved after ${Date.now() - streamed} ms`);
+});
+
+test('stopping a process also stops the helpers it started', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'group-'));
+  const pidFile = path.join(dir, 'grandchild.pid');
+  const handle = spawnJsonLines('/bin/sh', ['-c', 'sleep 30 & echo $! > "$0"; wait', pidFile], { onMessage: () => {} });
+  for (let i = 0; i < 100 && !fs.existsSync(pidFile); i++) await new Promise((resolve) => setTimeout(resolve, 20));
+  const grandchild = Number(fs.readFileSync(pidFile, 'utf8'));
+  handle.terminate(500);
+  await handle.exited;
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.throws(() => process.kill(grandchild, 0), { code: 'ESRCH' }, 'The grandchild was stopped with its group');
+  fs.rmSync(dir, { recursive: true });
+});
+
