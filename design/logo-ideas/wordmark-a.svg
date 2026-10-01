@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 220" width="1000" height="220">
+  <g transform="translate(20,-18) scale(1)">
+  <rect x="34" y="34" width="196" height="196" rx="40" fill="#34303A"/>
+  <rect x="22" y="22" width="196" height="196" rx="40" fill="#F8F6F1" stroke="#34303A" stroke-width="8"/>
+  
+  <circle cx="120" cy="120" r="66" fill="#ECE8E1" stroke="#34303A" stroke-width="8"/>
+  <g stroke="#34303A" stroke-width="8" stroke-linecap="round">
+    <line x1="120" y1="62" x2="120" y2="74"/><line x1="120" y1="166" x2="120" y2="178"/>
+    <line x1="62" y1="120" x2="74" y2="120"/><line x1="166" y1="120" x2="178" y2="120"/>
+  </g>
+  <polygon points="98.8,90 158.8,120 98.8,150" fill="#796B98" stroke="#34303A" stroke-width="8" stroke-linejoin="round"/>
+
+</g>
+  <text x="300" y="138" font-family="Fraunces, Georgia, serif" font-weight="900" font-size="80" letter-spacing="-2.5" fill="#34303A">Auto<tspan fill="#796B98">-</tspan>Continue</text>
+</svg>
