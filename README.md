@@ -10,7 +10,8 @@ It does not modify those apps, post keyboard events, or send messages to a remot
 The repository is [agent-auto-continue](https://github.com/VelvetAcorn/agent-auto-continue).
 Ideas not yet built are tracked in the [future feature backlog](docs/roadmap.md).
 [Agent harness adapters](docs/harnesses.md) documents the adapter contract, every integration and its limits.
-The existing package name and macOS app identity are retained to preserve compatibility with installed copies and their saved data.
+Version 2.1 renamed the app bundle from T3 Code Auto-Continue to Agent Auto-Continue.
+On first launch the renamed app copies settings and schedules from the earlier data directory, so nothing is lost; the earlier copy is left untouched.
 
 Agent Auto-Continue is an independent project.
 It is not affiliated with, endorsed by, or supported by T3 Tools, Anthropic, OpenAI, or any other agent vendor.
@@ -46,6 +47,12 @@ Product names are trademarks of their respective owners and are used only to des
 - Uses stable command/message IDs and marks interrupted or ambiguous dispatches as unconfirmed for reconciliation without automatic resending.
 - Keeps the token in the app's macOS application-data directory (permissions `0600`) or accepts `T3_TOKEN` only for the current launch.
 - Optionally lets a phone or AI agent control the schedule through a token-protected REST API and MCP server, on this Mac or over Tailscale.
+
+## Install
+
+Download the latest disk image from the [releases page](https://github.com/VelvetAcorn/agent-auto-continue/releases) and drag Agent Auto-Continue into Applications.
+Each release is a universal binary for Apple Silicon and Intel, signed with a Developer ID and notarized by Apple, so macOS opens it without warnings.
+A `SHA256SUMS.txt` file is attached to every release if you want to verify the download.
 
 ## Requirements
 
@@ -113,7 +120,11 @@ npm run build:dmg   # optional disk image
 ```
 
 All build scripts package locally without publishing releases (`--publish never`).
-The default build produces a ZIP in `dist/`, which is the most portable artifact for local testing. `npm run build:dmg` creates a disk image on a normal macOS host with disk-image tooling available; `npm run build:all` requests both. The menu includes **Launch at login** after the app has been installed.
+The default build produces an unsigned ZIP for the current architecture in `dist/`, which is the most portable artifact for local testing.
+`npm run build:dmg` creates a disk image and `npm run build:all` requests both.
+`npm run build:release` is what the release workflow runs: a universal DMG and ZIP, signed with the hardened runtime and notarized when the Apple credentials are present.
+See [docs/releasing.md](docs/releasing.md) for the release process and the secrets it needs.
+The menu includes **Launch at login** after the app has been installed.
 
 The app icon (`assets/icon.icns`) and menu-bar glyphs (`assets/trayTemplate.png` and, while keep-awake holds the Mac awake, `assets/trayAwakeTemplate.png`, each with an `@2x` file) are generated from the SVG sources in `assets/` and committed.
 After editing `assets/icon.svg`, `assets/trayTemplate.svg` or `assets/trayAwakeTemplate.svg`, run `npm run icons` on macOS and commit the regenerated files.
@@ -148,7 +159,7 @@ See the [keep-awake investigation](docs/keep-awake-investigation.md) for the mec
 
 ## Reliability model
 
-Jobs are stored under macOS's app data directory as `jobs.json`; configuration is stored beside it as `config.json`. Do not place either file in this repository or source control.
+Jobs are stored in `~/Library/Application Support/Agent Auto-Continue/jobs.json`; configuration is stored beside it as `config.json`. Do not place either file in this repository or source control.
 
 At dispatch time the app reads the conversation, then sends the message with a stable per-message key that the harness records.
 For T3 Code this is a `thread.turn.start` command containing persistent `commandId` and `messageId` values.

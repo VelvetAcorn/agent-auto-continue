@@ -288,7 +288,7 @@ test('keep-awake IPC is opt-in, persists settings, shows the tray state and rele
   assert.deepEqual(JSON.parse(app.files.get('/fixture/config.json')).keepAwake, settings);
   assert.ok(app.events.some(([channel, snapshot]) => channel === 'keep-awake:changed' && snapshot.state === 'armed'));
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(app.trayTooltip, 'T3 Code Auto-Continue · Keeping Mac awake');
+  assert.equal(app.trayTooltip, 'Agent Auto-Continue · Keeping Mac awake');
   assert.ok(app.trayMenu.find((item) => item.label === 'Keeping Mac awake · 1 task'));
   app.trayMenu.find((item) => item.label === 'Let Mac sleep now').click();
   assert.equal(app.invoke('keep-awake:get').state, 'ended');

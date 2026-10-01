@@ -22,8 +22,9 @@ const { createActiveWorkSource } = require('./lib/active-work-source');
 const { createT3WorkSource } = require('./lib/t3-work-source');
 const { createDiagnosticsLog } = require('./lib/diagnostics');
 const { createCompatibilityMonitor } = require('./lib/compatibility-monitor');
+const { migrateLegacyStorage } = require('./lib/storage-migration');
 
-const APP_NAME = 'T3 Code Auto-Continue';
+const APP_NAME = 'Agent Auto-Continue';
 const DEFAULT_CONFIG = { t3Token: '', httpPort: 3773, bufferSeconds: 5 };
 const TURN_POLL_MS = 30_000;
 // While desktop-app schedules are pending, their apps' versions are checked this often.
@@ -71,6 +72,8 @@ function writeJson(file, value) {
 }
 
 function loadState() {
+  // The fs module is injected so that the smoke fixture's in-memory storage applies here too.
+  migrateLegacyStorage({ fs, appData: app.getPath('appData'), userData: app.getPath('userData') });
   const raw = readJson(dataPath('config.json'), DEFAULT_CONFIG);
   config = { ...normaliseConfig(raw), harnesses: normaliseHarnessSettings(harnesses.list(), raw?.harnesses) };
   service = new JobService({
