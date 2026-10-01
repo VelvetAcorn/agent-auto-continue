@@ -207,6 +207,7 @@ These interfaces are stable for other features.
 Desktop-app adapters use `kind: 'desktop-app'` and must set `requiresUnlockedScreen` and `requiresAccessibilityPermission` truthfully.
 They should report `delivered` only from evidence read back from the app, and should throw `deliveryUncertain: true` whenever input may have reached the app without confirmation.
 They send through `deliverThroughUi()` in `lib/desktop/ui-delivery.js`, and report `{ state: 'unavailable', reason: 'screen_locked', source: 'reported' }` from `probeAvailability()` while the screen is locked.
+The job service does not act on that state yet, so a schedule that fires while the screen is locked fails as not sent with `screen_locked`.
 Keep-awake cannot help with a locked screen, so desktop-app schedules need the Mac left unlocked.
 See [desktop-harnesses.md](desktop-harnesses.md) for the design and the investigation behind it.
 

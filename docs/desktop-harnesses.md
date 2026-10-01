@@ -58,7 +58,9 @@ The program uses `AXUIElement` functions through the JavaScript for Automation O
 Electron and Chromium apps build their web accessibility tree on request, so the program sets `AXManualAccessibility` on the target app first.
 Locked-screen detection is `lib/harnesses/session-lock.js`, which reads the IORegistry console sessions with `/usr/sbin/ioreg` and needs no permission.
 While the screen is locked, both apps expose their application element as its own descendant and no content at all, so the automation program refuses every operation while locked.
-`probeAvailability()` reports `{ state: 'unavailable', reason: 'screen_locked', source: 'reported' }` while locked, so automatic starts can wait instead of failing a schedule.
+`probeAvailability()` reports `{ state: 'unavailable', reason: 'screen_locked', source: 'reported' }` while locked.
+The job service does not wait for an unlock: a schedule that fires while the screen is locked fails as not sent, with error code `screen_locked`, and nothing is typed.
+Whether one-off schedules should instead be deferred until the next unlock is an open decision for the owner.
 
 ## Claude Desktop (`claude-desktop`)
 
@@ -160,3 +162,8 @@ Live evidence gathered on 2026-10-01, all read-only apart from inserting and cle
 
 Pressing send in a real app has not been exercised, because no message was sent to a real conversation.
 The owner should confirm one send per app in a throwaway conversation before relying on these harnesses.
+
+Known risk to check live: a draft that holds only attachments.
+The message box counts as empty when its text is empty, and the Accessibility dumps gathered so far do not show how either app exposes attachment chips.
+If a user has attached a file or image without typing, the harness could send its message with that attachment.
+The owner should attach a file in a throwaway conversation without typing, run the dry run, and check whether the attachment is visible near the message box, so that such drafts can be refused.
