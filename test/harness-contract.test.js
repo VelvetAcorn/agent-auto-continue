@@ -253,6 +253,8 @@ test('prepare failures, missing conversations and unknown harnesses never count 
   await orphan.service.run('orphan');
   assert.equal(orphan.service.get('orphan').status, 'failed');
   assert.equal(orphan.service.get('orphan').error.code, 'unknown_harness');
+  // Back before the requested time, so only the harness can be refused.
+  h.setClock(0);
   await assert.rejects(h.service.create(input('retired')), /not available/);
   await assert.rejects(h.service.create({ ...input('fake'), harness: 'Bad Harness' }), /valid agent harness/);
 });
