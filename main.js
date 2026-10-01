@@ -11,6 +11,7 @@ const { createApiClient, toErrorInfo } = require('./lib/api-client');
 const { JobService } = require('./lib/job-service');
 const { automationSupport } = require('./lib/continuation');
 const { DEFAULT_HARNESS, applyHarnessSettingsInput, createHarnesses, normaliseHarnessSettings, publicHarnessSettings, resolveHarnessSettings } = require('./lib/harnesses');
+const { ACCESSIBILITY_SETTINGS_URL } = require('./lib/desktop/mac-automation');
 
 const APP_NAME = 'T3 Code Auto-Continue';
 const DEFAULT_CONFIG = { t3Token: '', httpPort: 3773, bufferSeconds: 5 };
@@ -263,6 +264,8 @@ ipcMain.handle('connection:check', async (_event, harness) => {
   try { await harnessFor(harness).checkConnection(); return { online: true }; }
   catch (error) { return { online: false, error: toErrorInfo(error) }; }
 });
+// Opens only the Accessibility pane; the renderer cannot choose the URL.
+ipcMain.handle('harnesses:open-permission-settings', () => shell.openExternal(ACCESSIBILITY_SETTINGS_URL));
 ipcMain.handle('harnesses:list', () => ({ harnesses: harnesses.list().map((adapter, index) => ({ ...harnesses.describe()[index], automation: automationSupport(adapter) })), defaultHarness: DEFAULT_HARNESS }));
 ipcMain.handle('harnesses:availability', async (_event, harness) => {
   try {

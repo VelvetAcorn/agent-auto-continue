@@ -520,5 +520,6 @@ async function continuationJourney(js) {
 }
 // A hung window must fail the run rather than block CI or a shell indefinitely.
 // Before the app is ready (for example while macOS is locked) app.exit() is ignored, so force the exit.
-const hardTimeout = setTimeout(() => { console.error('Electron smoke timed out after 180 seconds.'); app.exit(1); setTimeout(() => process.exit(1), 2000); }, 180_000);
+const HARD_TIMEOUT_MS = Number(process.env.T3_SMOKE_TIMEOUT_MS) || 180_000;
+const hardTimeout = setTimeout(() => { console.error(`Electron smoke timed out after ${HARD_TIMEOUT_MS / 1000} seconds. Is the screen locked?`); app.exit(1); setTimeout(() => process.exit(1), 2000); }, HARD_TIMEOUT_MS);
 run().then(() => { clearTimeout(hardTimeout); app.exit(0); }, error => { clearTimeout(hardTimeout); console.error(error.stack); app.exit(1); });

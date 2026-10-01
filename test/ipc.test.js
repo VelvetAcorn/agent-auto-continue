@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 function appHarness(initialJobs = [], { ownsInstance = true, rawJobs, extraHarnesses, env = { T3_TOKEN: 'test-secret' } } = {}) {
-  const handlers = {}, files = new Map(), events = [], windows = [];
+  const handlers = {}, files = new Map(), events = [], windows = [], opened = [];
   let trayMenu, failWrite = false;
   let ready, response = () => new Response('<!doctype html><html>test-secret</html>', { headers: { 'content-type': 'text/html' } });
   files.set('/fixture/jobs.json', rawJobs ?? JSON.stringify(initialJobs));
@@ -24,7 +24,8 @@ function appHarness(initialJobs = [], { ownsInstance = true, rawJobs, extraHarne
     ipcMain: { handle: (name, fn) => { handlers[name] = fn; } }, BrowserWindow: Window,
     Menu: { buildFromTemplate: value => value }, Notification: { isSupported: () => false },
     Tray: class { setToolTip() {} on() {} setContextMenu(menu) { trayMenu = menu; } },
-    nativeImage: { createFromPath: () => ({ setTemplateImage() {} }) }, powerMonitor: { on() {} }
+    nativeImage: { createFromPath: () => ({ setTemplateImage() {} }) }, powerMonitor: { on() {} },
+    shell: { openExternal: async (url) => { opened.push(url); } }
   };
   const fakeFs = { readFileSync: name => { if (!files.has(name)) throw Object.assign(new Error('missing'), { code: 'ENOENT' }); return files.get(name); }, mkdirSync() {}, writeFileSync: (name, value) => { if (failWrite) throw new Error('Disk full'); files.set(name, value); }, renameSync: (from, to) => { files.set(to, files.get(from)); files.delete(from); } };
   const apiModule = require('../lib/api-client');
@@ -32,7 +33,7 @@ function appHarness(initialJobs = [], { ownsInstance = true, rawJobs, extraHarne
   const context = { require: name => name === 'electron' ? electron : name === 'node:fs' ? fakeFs : name === 'node-schedule' ? { scheduleJob: () => ({ cancel() {} }) } : name === './lib/api-client' ? { ...apiModule, createApiClient: options => apiModule.createApiClient({ ...options, fetchImpl: (...args) => response(...args) }) } : name === './lib/harnesses' && extraHarnesses ? { ...harnessModule, createHarnesses: options => harnessModule.createHarnessRegistry([require('../lib/harnesses/t3').createT3Harness({ api: options.api }), ...extraHarnesses(options)]) } : name.startsWith('./lib/') ? require(path.join(__dirname, '..', name)) : require(name), __dirname: path.join(__dirname, '..'), process: { env, pid: 123 }, console, Buffer };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8'), context);
   ready();
-  return { invoke: (name, ...args) => handlers[name]({}, ...args), setResponse: fn => { response = fn; }, files, events, windows, setWriteFailure: value => { failWrite = value; }, get trayMenu() { return trayMenu; } };
+  return { invoke: (name, ...args) => handlers[name]({}, ...args), setResponse: fn => { response = fn; }, files, events, windows, opened, setWriteFailure: value => { failWrite = value; }, get trayMenu() { return trayMenu; } };
 }
 
 test('dashboard IPC shows friendly HTML error and acknowledgment clears historical alert after restart', async () => {
@@ -78,6 +79,7 @@ test('preload exposes narrow job events with working listener cleanup', () => {
   assert.equal(calls, 1);
   assert.equal(listeners.size, 0);
   assert.equal(bridge.listJobs({ view: 'history' })[0], 'jobs:list');
+  assert.deepEqual(bridge.openPermissionSettings('https://evil.example'), ['harnesses:open-permission-settings'], 'The permission bridge forwards no URL');
 });
 
 
@@ -150,12 +152,21 @@ test('the production registry is described over IPC without touching any harness
   const app = appHarness();
   const { harnesses, defaultHarness } = app.invoke('harnesses:list');
   assert.equal(defaultHarness, 't3');
-  assert.equal(harnesses.map((item) => item.id).join(), 't3,opencode,claude-code,codex');
+  assert.equal(harnesses.map((item) => item.id).join(), 't3,opencode,claude-code,claude-desktop,codex,codex-desktop');
   for (const item of harnesses) {
-    assert.equal(item.capabilities.requiresUnlockedScreen, false, item.id);
+    assert.equal(item.capabilities.requiresUnlockedScreen, item.kind === 'desktop-app', item.id);
     assert.equal(typeof item.capabilities.canDetectCompletion, 'boolean');
   }
   assert.equal(harnesses.find((item) => item.id === 'opencode').settings.map((setting) => setting.key).join(), 'port,password');
+});
+
+test('the permission IPC opens only the fixed Accessibility pane, whatever the renderer passes', async () => {
+  const { ACCESSIBILITY_SETTINGS_URL } = require('../lib/desktop/mac-automation');
+  const app = appHarness();
+  await app.invoke('harnesses:open-permission-settings');
+  await app.invoke('harnesses:open-permission-settings', 'https://evil.example', { url: 'file:///etc/passwd' });
+  assert.deepEqual(app.opened, [ACCESSIBILITY_SETTINGS_URL, ACCESSIBILITY_SETTINGS_URL]);
+  assert.equal(ACCESSIBILITY_SETTINGS_URL, 'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility');
 });
 
 test('conversations, schedules and connection checks are routed to the chosen harness', async () => {

@@ -21,6 +21,10 @@ The executable contract is [`lib/harnesses/contract.js`](../lib/harnesses/contra
 | `lib/harnesses/claude-sessions.js` | Shared reader for Claude Code and Claude Desktop local state |
 | `lib/harnesses/codex-reader.js`, `codex-rpc.js`, `websocket.js` | Shared Codex app-server client and transports |
 | `lib/harnesses/codex-locks.js` | Shared Codex thread writer-lock inspection |
+| `lib/harnesses/session-lock.js` | `isScreenLocked()`, shared locked-screen detection for desktop-app harnesses |
+| `lib/desktop/ui-delivery.js` | The shared, verified send sequence for desktop-app harnesses |
+| `lib/desktop/mac-automation.js`, `jxa-program.js` | macOS Accessibility driver, run through `osascript` without a shell |
+| `lib/desktop/app-labels.js` | Control labels in the app's interface language |
 
 ### Identity
 
@@ -135,6 +139,8 @@ Absence of a key from a partial or windowed read is not proof of non-delivery, s
 | `process_failed` | A harness process exited unexpectedly |
 | `usage_limited` | A provider usage limit blocks the turn |
 | `unknown_harness` | A job names a harness this build does not include |
+| `permission_required` | A macOS permission is missing; `details.permission` names it and `details.settingsUrl` opens its System Settings pane |
+| `screen_locked` | The Mac is locked or another user is on the console, so a desktop app cannot be driven; always a certain non-delivery |
 
 ### Settings
 
@@ -191,6 +197,7 @@ These interfaces are stable for other features.
 | `jobs:stop`, `jobs:stop-all`, `jobs:resume` | Stop a schedule or continuation, stop every continuation, resume a paused continuation |
 | `dashboard:schedule-thread` | Accepts a conversation ID and harness ID |
 | `settings:save` | Accepts `harnesses: { <id>: { <key>: value } }` alongside the existing fields |
+| `harnesses:open-permission-settings` | Takes no arguments and opens the Accessibility pane of System Settings |
 
 ## Adding an adapter
 
@@ -201,6 +208,10 @@ These interfaces are stable for other features.
 
 Desktop-app adapters use `kind: 'desktop-app'` and must set `requiresUnlockedScreen` and `requiresAccessibilityPermission` truthfully.
 They should report `delivered` only from evidence read back from the app, and should throw `deliveryUncertain: true` whenever input may have reached the app without confirmation.
+They send through `deliverThroughUi()` in `lib/desktop/ui-delivery.js`, and report `{ state: 'unavailable', reason: 'screen_locked', source: 'reported' }` from `probeAvailability()` while the screen is locked.
+The job service does not act on that state yet, so a schedule that fires while the screen is locked fails as not sent with `screen_locked`.
+Keep-awake cannot help with a locked screen, so desktop-app schedules need the Mac left unlocked.
+See [desktop-harnesses.md](desktop-harnesses.md) for the design and the investigation behind it.
 
 ## Shared helpers
 
@@ -351,3 +362,20 @@ An in-progress turn is reported as running only while some server holds the thre
 Approval requests are answered only by the connection running that thread; read-only connections never answer, so another client's approval is left for that client.
 The app runs unattended, so approval requests are answered with the choice that stops the turn, and other requests for input are refused and the turn is interrupted.
 The outcome is then `interrupted` with error code `approval_required`.
+
+### Claude Desktop (`claude-desktop`)
+
+The adapter was built against Claude Desktop 2.16120.0 and covers its Code sessions; sending in the real app awaits the owner's check.
+It opens a session with `claude://code/continue?session=local_<uuid>`, sets the message through Accessibility and presses send; it never starts `claude` itself.
+Discovery, activity, busy state, delivery evidence, completion and usage limits come from `claude-sessions.js`.
+Delivery is confirmed by a typed prompt with exactly the scheduled text in the session transcript, written after the send attempt.
+Usage limits are inferred from Claude Desktop's plan-usage samples, without a reset time.
+Chat conversations are not supported; [desktop-harnesses.md](desktop-harnesses.md) explains why and lists every detail.
+
+### ChatGPT desktop app, Codex threads (`codex-desktop`)
+
+The adapter was built against the merged ChatGPT and Codex app 26.915.31945, bundle `com.openai.codex`; sending in the real app awaits the owner's check.
+It covers the Codex threads the app created, which the app keeps loaded with their writer locks held.
+It opens a thread with `codex://threads/<threadId>`, verifies it by the thread name, sets the message through Accessibility and presses send.
+Everything else uses `codex-reader.js` with the codex binary bundled in the app, including busy state, delivery evidence, completion and usage limits with reset times.
+ChatGPT chats are not supported; [desktop-harnesses.md](desktop-harnesses.md) explains why and lists every detail.
