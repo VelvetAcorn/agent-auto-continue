@@ -95,6 +95,9 @@ async function run() {
   const window = windows[0];
   window.webContents.debugger.attach('1.3');
   await window.webContents.debugger.sendCommand('Emulation.setFocusEmulationEnabled', { enabled: true });
+  // CI runners may have Reduce motion switched on; pin the OS preference so motion checks are deterministic.
+  const reducedMotion = value => window.webContents.debugger.sendCommand('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value }] });
+  await reducedMotion('no-preference');
   const js = code => window.webContents.executeJavaScript(code, true);
   await waitFor(() => js('Boolean(window.autoContinue && document.querySelector("main"))'), 'production renderer initialized');
   await js(`(() => { if (document.body.classList.contains('dark')) document.querySelector('[data-action="theme"]').click(); })()`);
@@ -105,7 +108,7 @@ async function run() {
   await js('window.autoContinue.scheduleThread("thread-active")');
   assert.equal(windows.length, 1);
   // DOM journey assertions are maintained below with the production selectors.
-  await rendererJourney(js);
+  await rendererJourney(js, reducedMotion);
   offline = true;
   const history = await js('window.autoContinue.listJobs({view:"history"})');
   assert.ok(history.total >= 1, 'History survives offline API');
@@ -125,7 +128,7 @@ async function run() {
   assert.ok(menu.find(item => item.label === 'Open scheduler'));
   console.log('Electron production workflow smoke passed: one window, real preload/IPC/renderer, local history, sanitized offline error, zero sends.');
 }
-async function rendererJourney(js) {
+async function rendererJourney(js, reducedMotion) {
   const click = async selector => {
     await waitFor(() => js(`Boolean(document.querySelector(${JSON.stringify(selector)}))`), `control ${selector}`);
     await js(`document.querySelector(${JSON.stringify(selector)}).click()`);
@@ -213,6 +216,7 @@ async function rendererJourney(js) {
   assert.equal(await js(`Boolean(document.querySelector('[data-thread="thread-settled"]'))`), true);
   await click('[data-nav="settings"]');
   await waitFor(() => js(`Boolean(document.querySelector('#settings-form'))`), 'settings loaded');
+  await supportStarJourney(js, click, reducedMotion);
   await click('[data-action="support"]');
   await waitFor(() => externalUrls.length === 1, 'support page opened in browser');
   assert.deepEqual(externalUrls, ['https://ko-fi.com/velvetacorn']);
@@ -224,7 +228,7 @@ async function rendererJourney(js) {
   await waitFor(() => js(`!document.querySelector('#buffer').disabled`), 'settings operation finished');
   await js(`(() => { const select=document.querySelector('#theme'); select.value='dark'; select.dispatchEvent(new Event('change',{bubbles:true})); })()`);
   assert.equal(await js(`document.body.classList.contains('dark')`), true);
-  assert.equal(await js(`document.querySelector('.support button').disabled`), false);
+  assert.equal(await js(`document.querySelector('[data-action="support"]').disabled`), false);
   assert.equal(await js(`Boolean(document.querySelector('.star svg'))`), true);
   await capture('settings-bone-outline');
   await js(`document.querySelector('.support').scrollIntoView({block:'center'})`);
@@ -234,5 +238,69 @@ async function rendererJourney(js) {
   await click('[data-action="new"]');
   assert.match(await js(`document.querySelector('#schedule-preview').textContent`), /12-second/);
   assert.equal(windows.length, 1, 'Every journey stayed in the same window');
+}
+async function supportStarJourney(js, click, reducedMotion) {
+  const phrase = () => js(`document.querySelector('#star-phrase').textContent`);
+  const phrases = await js('window.SupportStar.STICKER_PHRASES');
+  const star = await js(`(() => { const star=document.querySelector('#support-star'); return { tag: star.tagName, name: star.getAttribute('aria-label'), described: star.getAttribute('aria-describedby'), lines: star.querySelectorAll('.star-text span').length, fit: star.querySelector('.star-text').style.getPropertyValue('--fit') }; })()`);
+  assert.deepEqual({ ...star, fit: Number(star.fit) > 0 }, { tag: 'BUTTON', name: 'Shuffle sticker phrase', described: 'star-phrase', lines: star.lines, fit: true });
+  assert.ok(star.lines >= 1 && phrases.includes(await phrase()));
+  // Re-renders keep the phrase; leaving and re-entering Settings picks a different one.
+  const entered = await phrase();
+  await js(`document.querySelector('[data-action="theme"]').click()`);
+  await js(`document.querySelector('[data-action="theme"]').click()`);
+  assert.equal(await phrase(), entered);
+  await click('[data-nav="upcoming"]');
+  await click('[data-nav="settings"]');
+  await waitFor(() => js(`Boolean(document.querySelector('#support-star'))`), 'settings re-entered');
+  assert.notEqual(await phrase(), entered);
+  // Every phrase's glyphs stay inside the outline's inner edge (0.361 of the width) and the text never rotates.
+  const fit = await js(`(async () => {
+    const star = document.querySelector('#support-star'), seen = new Map();
+    for (let attempt = 0; attempt < 500 && seen.size < window.SupportStar.STICKER_PHRASES.length; attempt++) {
+      star.click();
+      const text = star.querySelector('.star-text'), style = getComputedStyle(text), size = parseFloat(style.fontSize), lineHeight = parseFloat(style.lineHeight);
+      const context = document.createElement('canvas').getContext('2d'); context.font = '900 ' + size + 'px Georgia, serif';
+      const box = star.getBoundingClientRect(), cx = box.left + box.width / 2, cy = box.top + box.height / 2;
+      let worst = 0;
+      for (const line of text.querySelectorAll('span')) {
+        const rect = line.getBoundingClientRect(), metrics = context.measureText(line.textContent);
+        const baseline = rect.top + (lineHeight - metrics.fontBoundingBoxAscent - metrics.fontBoundingBoxDescent) / 2 + metrics.fontBoundingBoxAscent;
+        for (const x of [rect.left - metrics.actualBoundingBoxLeft, rect.left + metrics.actualBoundingBoxRight]) for (const y of [baseline - metrics.actualBoundingBoxAscent, baseline + metrics.actualBoundingBoxDescent]) worst = Math.max(worst, Math.hypot(x - cx, y - cy) / box.width);
+      }
+      seen.set(star.querySelector('#star-phrase').textContent, { worst, size, rotated: style.transform !== 'none' });
+    }
+    return Object.fromEntries(seen);
+  })()`);
+  assert.deepEqual(Object.keys(fit).sort(), [...phrases].sort());
+  for (const [text, result] of Object.entries(fit)) assert.ok(result.worst < 0.355 && result.size >= 10 && !result.rotated, `${text}: ${JSON.stringify(result)}`);
+  // A click bursts and eases back without the angle ever jumping or reversing, even across a re-render.
+  const motion = await js(`new Promise(resolve => {
+    const angle = () => parseFloat(document.querySelector('#support-star polygon').style.transform.slice(7));
+    const samples = [], start = performance.now(), before = document.querySelector('#star-phrase').textContent;
+    document.querySelector('#support-star').click();
+    setTimeout(() => document.querySelector('[data-action="theme"]').click(), 300);
+    (function frame(now) { samples.push([now, angle()]); if (now - start < 1400) requestAnimationFrame(frame); else resolve({ samples, changed: document.querySelector('#star-phrase').textContent !== before, status: document.querySelector('#star-status').textContent }); })(start);
+  })`);
+  await js(`document.querySelector('[data-action="theme"]').click()`);
+  assert.equal(motion.changed, true);
+  const steps = motion.samples.slice(1).map(([time, angle], index) => ({ elapsed: time - motion.samples[index][0], turned: (angle - motion.samples[index][1] + 360) % 360 }));
+  const total = steps.reduce((sum, step) => sum + step.turned, 0), evidence = JSON.stringify({ frames: steps.length, total, span: motion.samples.at(-1)[0] - motion.samples[0][0] });
+  assert.ok(steps.length > 20, `the star animates frame by frame ${evidence}`);
+  for (const step of steps) assert.ok(step.turned <= 480 * Math.max(step.elapsed, 17) / 1000 + 0.5, `angle jumped ${JSON.stringify(step)}`);
+  // Idle alone turns about 56 degrees in 1.4 s; the burst adds roughly 190 more.
+  assert.ok(total > 150, `the click produced a fast burst ${evidence}`);
+  // Reduced motion (app toggle or OS): no spin or burst, but a click still changes the phrase.
+  const still = () => js(`new Promise(resolve => { const angle = () => document.querySelector('#support-star polygon').style.transform, before = document.querySelector('#star-phrase').textContent; document.querySelector('#support-star').click(); const first = angle(); setTimeout(() => resolve({ moved: angle() !== first, changed: document.querySelector('#star-phrase').textContent !== before }), 400); })`);
+  await click('#motion');
+  assert.deepEqual(await still(), { moved: false, changed: true });
+  await click('#motion');
+  await reducedMotion('reduce');
+  assert.deepEqual(await still(), { moved: false, changed: true });
+  await reducedMotion('no-preference');
+  await js(`document.querySelector('[data-action="theme"]').click()`);
+  await js(`document.querySelector('[data-action="theme"]').click()`);
+  const first = await js(`document.querySelector('#support-star polygon').style.transform`);
+  await waitFor(async () => (await js(`document.querySelector('#support-star polygon').style.transform`)) !== first, 'spin resumes when reduced motion ends');
 }
 run().then(() => app.exit(0), error => { console.error(error.stack); app.exit(1); });
