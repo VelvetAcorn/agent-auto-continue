@@ -7,7 +7,7 @@ const { randomUUID } = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { clearTimeout, setInterval, setTimeout } = require('node:timers');
+const { clearTimeout, setImmediate, setInterval, setTimeout } = require('node:timers');
 const schedule = require('node-schedule');
 const { arrangeAgents, normaliseConfig, validateAgentsInput, validateLayoutInput, validateSettingsInput } = require('./lib/model');
 const { createApiClient, toErrorInfo } = require('./lib/api-client');
@@ -618,7 +618,9 @@ app.whenReady().then(() => {
     event.preventDefault();
     harnessesStopped = true;
     let timeout;
-    void Promise.race([harnesses.shutdown(), new Promise((resolve) => { timeout = setTimeout(resolve, 6000); })]).finally(() => { clearTimeout(timeout); app.quit(); });
+    // Quit again on a later task, never from this handler's microtasks: with no turn running the race settles
+    // while Electron is still inside the quit this handler just prevented, and that quit would then cancel the new one.
+    void Promise.race([harnesses.shutdown(), new Promise((resolve) => { timeout = setTimeout(resolve, 6000); })]).finally(() => { clearTimeout(timeout); setImmediate(() => app.quit()); });
   });
   powerMonitor.on('suspend', () => keepAwake.handleSuspend());
   powerMonitor.on('resume', () => {
