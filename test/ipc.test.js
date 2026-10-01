@@ -5,7 +5,7 @@ const vm = require('node:vm');
 const fs = require('node:fs');
 const path = require('node:path');
 
-function appHarness(initialJobs = [], { ownsInstance = true, rawJobs } = {}) {
+function appHarness(initialJobs = [], { ownsInstance = true, rawJobs, extraHarnesses, env = { T3_TOKEN: 'test-secret' } } = {}) {
   const handlers = {}, files = new Map(), events = [], windows = [];
   let trayMenu, failWrite = false;
   let ready, response = () => new Response('<!doctype html><html>test-secret</html>', { headers: { 'content-type': 'text/html' } });
@@ -28,7 +28,8 @@ function appHarness(initialJobs = [], { ownsInstance = true, rawJobs } = {}) {
   };
   const fakeFs = { readFileSync: name => { if (!files.has(name)) throw Object.assign(new Error('missing'), { code: 'ENOENT' }); return files.get(name); }, mkdirSync() {}, writeFileSync: (name, value) => { if (failWrite) throw new Error('Disk full'); files.set(name, value); }, renameSync: (from, to) => { files.set(to, files.get(from)); files.delete(from); } };
   const apiModule = require('../lib/api-client');
-  const context = { require: name => name === 'electron' ? electron : name === 'node:fs' ? fakeFs : name === 'node-schedule' ? { scheduleJob: () => ({ cancel() {} }) } : name === './lib/api-client' ? { ...apiModule, createApiClient: options => apiModule.createApiClient({ ...options, fetchImpl: (...args) => response(...args) }) } : name.startsWith('./lib/') ? require(path.join(__dirname, '..', name)) : require(name), __dirname: path.join(__dirname, '..'), process: { env: { T3_TOKEN: 'test-secret' }, pid: 123 }, console, Buffer };
+  const harnessModule = require('../lib/harnesses');
+  const context = { require: name => name === 'electron' ? electron : name === 'node:fs' ? fakeFs : name === 'node-schedule' ? { scheduleJob: () => ({ cancel() {} }) } : name === './lib/api-client' ? { ...apiModule, createApiClient: options => apiModule.createApiClient({ ...options, fetchImpl: (...args) => response(...args) }) } : name === './lib/harnesses' && extraHarnesses ? { ...harnessModule, createHarnesses: options => harnessModule.createHarnessRegistry([require('../lib/harnesses/t3').createT3Harness({ api: options.api }), ...extraHarnesses(options)]) } : name.startsWith('./lib/') ? require(path.join(__dirname, '..', name)) : require(name), __dirname: path.join(__dirname, '..'), process: { env, pid: 123 }, console, Buffer };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8'), context);
   ready();
   return { invoke: (name, ...args) => handlers[name]({}, ...args), setResponse: fn => { response = fn; }, files, events, windows, setWriteFailure: value => { failWrite = value; }, get trayMenu() { return trayMenu; } };
@@ -133,7 +134,7 @@ test('settings persistence failure leaves active configuration unchanged', () =>
 
 
 test('corrupt and future-version schedule files are preserved and block scheduling visibly', () => {
-  for (const rawJobs of ['{"jobs":', JSON.stringify({ version: 3, jobs: [] }), JSON.stringify([{ id: 'invalid-record' }])]) {
+  for (const rawJobs of ['{"jobs":', JSON.stringify({ version: 4, jobs: [] }), JSON.stringify([{ id: 'invalid-record' }])]) {
     const app = appHarness([], { rawJobs });
     assert.equal(app.files.get('/fixture/jobs.json'), rawJobs);
     const state = app.invoke('jobs:list');
@@ -144,3 +145,57 @@ test('corrupt and future-version schedule files are preserved and block scheduli
     assert.equal(app.windows.length, 1, 'The recovery message remains accessible in the app');
   }
 });
+
+test('the production registry is described over IPC without touching any harness', () => {
+  const app = appHarness();
+  const { harnesses, defaultHarness } = app.invoke('harnesses:list');
+  assert.equal(defaultHarness, 't3');
+  assert.equal(harnesses.map((item) => item.id).join(), 't3,opencode,claude-code,codex');
+  for (const item of harnesses) {
+    assert.equal(item.capabilities.requiresUnlockedScreen, false, item.id);
+    assert.equal(typeof item.capabilities.canDetectCompletion, 'boolean');
+  }
+  assert.equal(harnesses.find((item) => item.id === 'opencode').settings.map((setting) => setting.key).join(), 'port,password');
+});
+
+test('conversations, schedules and connection checks are routed to the chosen harness', async () => {
+  const { createFakeHarness } = require('../tools/fake-harness.cjs');
+  const fake = createFakeHarness({ conversations: [{ id: 'conv-1', title: 'Fake conversation', projectName: 'Repo' }] });
+  const app = appHarness([], { extraHarnesses: () => [fake.adapter] });
+  const listed = await app.invoke('dashboard:threads', { harness: 'fake', showSettled: true });
+  assert.equal(listed.online, true);
+  assert.equal(JSON.stringify(listed.threads.map((thread) => [thread.harness, thread.id])), JSON.stringify([['fake', 'conv-1']]));
+  assert.equal((await app.invoke('connection:check', 'fake')).online, true);
+  fake.state.connectionError = new (require('../lib/harnesses/errors').HarnessError)('connection_refused', 'Fake is not running.');
+  assert.equal((await app.invoke('connection:check', 'fake')).error.code, 'connection_refused');
+  const unknown = await app.invoke('dashboard:threads', { harness: 'nope' });
+  assert.equal(unknown.online, false);
+  assert.equal(unknown.errorInfo.code, 'unknown_harness');
+  const job = await app.invoke('schedule:create', { harness: 'fake', threadId: 'conv-1', message: 'Continue', whenISO: '2099-01-01T12:00:00Z', timeZone: 'UTC' });
+  assert.equal(job.harness, 'fake');
+  assert.equal(job.harnessLabel, 'Fake Agent');
+  assert.equal(JSON.parse(app.files.get('/fixture/jobs.json')).version, 3);
+  assert.equal(JSON.parse(app.files.get('/fixture/jobs.json')).jobs[0].harness, 'fake');
+  assert.equal((await app.invoke('harnesses:availability', 'fake')).availability.state, 'available');
+  assert.equal((await app.invoke('harnesses:availability', 't3')).availability.state, 'unknown');
+  app.windows[0].finishLoad();
+  await app.invoke('dashboard:schedule-thread', 'conv-1', 'fake');
+  assert.equal(JSON.stringify(app.events.at(-1)[1]), JSON.stringify({ view: 'composer', threadId: 'conv-1', threadLabel: 'Fake conversation', harness: 'fake' }));
+  assert.equal(fake.state.submitted.length, 0);
+});
+
+test('harness settings are validated, persisted and never returned in clear text', () => {
+  const app = appHarness([], { env: { T3_TOKEN: 'test-secret', OPENCODE_SERVER_PASSWORD: '' } });
+  app.invoke('settings:save', { httpPort: 3773, bufferSeconds: 5, harnesses: { opencode: { port: 4555, password: 'oc-secret' }, 'claude-code': { executable: '/opt/claude' } } });
+  const saved = JSON.parse(app.files.get('/fixture/config.json'));
+  assert.equal(JSON.stringify(saved.harnesses), JSON.stringify({ opencode: { port: 4555, password: 'oc-secret' }, 'claude-code': { executable: '/opt/claude' } }));
+  const shown = app.invoke('settings:get');
+  assert.equal(JSON.stringify(shown.harnesses.opencode.password), JSON.stringify({ hasStoredValue: true, usingEnvironment: false }));
+  assert.equal(shown.harnesses.opencode.port.value, 4555);
+  assert.doesNotMatch(JSON.stringify(shown), /oc-secret/);
+  assert.throws(() => app.invoke('settings:save', { httpPort: 3773, bufferSeconds: 5, harnesses: { opencode: { port: 70000 } } }), /port/);
+  assert.throws(() => app.invoke('settings:save', { httpPort: 3773, bufferSeconds: 5, harnesses: { unknown: {} } }), /Unknown/);
+  app.invoke('settings:save', { httpPort: 3773, bufferSeconds: 5, harnesses: { opencode: { password: '' } } });
+  assert.equal(JSON.parse(app.files.get('/fixture/config.json')).harnesses.opencode.password, 'oc-secret', 'A blank secret keeps the stored value');
+});
+

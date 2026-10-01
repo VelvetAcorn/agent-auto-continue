@@ -4,15 +4,17 @@ const { app, BrowserWindow, Menu, Notification, Tray, ipcMain, nativeImage, powe
 const { randomUUID } = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const { setInterval, setTimeout } = require('node:timers');
 const schedule = require('node-schedule');
 const { normaliseConfig, validateSettingsInput } = require('./lib/model');
 const { createApiClient, toErrorInfo } = require('./lib/api-client');
 const { JobService } = require('./lib/job-service');
-const { normaliseThreads } = require('./lib/threads');
+const { DEFAULT_HARNESS, applyHarnessSettingsInput, createHarnesses, normaliseHarnessSettings, publicHarnessSettings, resolveHarnessSettings } = require('./lib/harnesses');
 
 const APP_NAME = 'T3 Code Auto-Continue';
 const DEFAULT_CONFIG = { t3Token: '', httpPort: 3773, bufferSeconds: 5 };
-let config = { ...DEFAULT_CONFIG };
+const TURN_POLL_MS = 30_000;
+let config = { ...DEFAULT_CONFIG, harnesses: {} };
 let service;
 let storageError;
 let tray;
@@ -45,9 +47,10 @@ function writeJson(file, value) {
 }
 
 function loadState() {
-  config = normaliseConfig(readJson(dataPath('config.json'), DEFAULT_CONFIG));
+  const raw = readJson(dataPath('config.json'), DEFAULT_CONFIG);
+  config = { ...normaliseConfig(raw), harnesses: normaliseHarnessSettings(harnesses.list(), raw?.harnesses) };
   service = new JobService({
-    jobs: readJson(dataPath('jobs.json'), []), bufferSeconds: config.bufferSeconds, api,
+    jobs: readJson(dataPath('jobs.json'), []), bufferSeconds: config.bufferSeconds, api, harnesses,
     persist: (state) => writeJson(dataPath('jobs.json'), state),
     scheduleTimer: (when, callback) => schedule.scheduleJob(when, callback),
     onChange: () => {
@@ -67,7 +70,8 @@ function ensureStorage() {
 }
 
 function publicSettings() {
-  return { storageError, httpPort: config.httpPort, bufferSeconds: config.bufferSeconds, hasStoredToken: Boolean(config.t3Token), usingEnvironmentToken: Boolean(process.env.T3_TOKEN) };
+  return { storageError, httpPort: config.httpPort, bufferSeconds: config.bufferSeconds, hasStoredToken: Boolean(config.t3Token), usingEnvironmentToken: Boolean(process.env.T3_TOKEN),
+    harnesses: publicHarnessSettings(harnesses.list(), config.harnesses, process.env) };
 }
 
 function token() {
@@ -75,6 +79,12 @@ function token() {
 }
 
 const api = createApiClient({ getConfig: () => config, getToken: token });
+// Adapters read their settings lazily so a Settings change applies to the next operation.
+const harnesses = createHarnesses({ api, clientVersion: app.getVersion?.(), getSettings: (id) => resolveHarnessSettings(harnesses.get(id), config.harnesses?.[id], process.env) });
+
+function harnessFor(id) {
+  return harnesses.get(id === undefined || id === null || id === '' ? DEFAULT_HARNESS : id);
+}
 
 function dateLabel(iso) {
   return new Date(iso).toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
@@ -95,8 +105,8 @@ function makeTrayIcon() {
   return image;
 }
 
-function openScheduleWindow(threadId, threadLabel) {
-  openDashboard({ view: 'composer', threadId, threadLabel });
+function openScheduleWindow(threadId, threadLabel, harness = DEFAULT_HARNESS) {
+  openDashboard({ view: 'composer', threadId, threadLabel, harness });
 }
 
 function openSettings() {
@@ -138,7 +148,7 @@ function openDashboard(route) {
 }
 
 async function activeThreads(options) {
-  return normaliseThreads(await api.fetchSnapshot(), options);
+  return harnessFor(options?.harness).listConversations({ showSettled: options?.showSettled === true });
 }
 
 function activeJobs() {
@@ -202,7 +212,7 @@ ipcMain.handle('settings:get', publicSettings);
 ipcMain.handle('settings:save', (_event, incoming) => {
   ensureStorage();
   const input = validateSettingsInput(incoming);
-  const next = normaliseConfig({ ...config, httpPort: input.httpPort, bufferSeconds: input.bufferSeconds });
+  const next = { ...normaliseConfig({ ...config, httpPort: input.httpPort, bufferSeconds: input.bufferSeconds }), harnesses: applyHarnessSettingsInput(harnesses.list(), config.harnesses, incoming.harnesses) };
   if (input.t3Token) next.t3Token = input.t3Token;
   saveConfig(next);
   config = next;
@@ -222,25 +232,33 @@ ipcMain.handle('jobs:reconcile', async (_event, id) => {
   try { ensureStorage(); return { ok: true, job: await service.reconcile(id) }; }
   catch (error) { return { ok: false, error: toErrorInfo(error) }; }
 });
-ipcMain.handle('connection:check', async () => {
-  try { await api.fetchSnapshot(); return { online: true }; }
+ipcMain.handle('connection:check', async (_event, harness) => {
+  try { await harnessFor(harness).checkConnection(); return { online: true }; }
   catch (error) { return { online: false, error: toErrorInfo(error) }; }
+});
+ipcMain.handle('harnesses:list', () => ({ harnesses: harnesses.describe(), defaultHarness: DEFAULT_HARNESS }));
+ipcMain.handle('harnesses:availability', async (_event, harness) => {
+  try {
+    const adapter = harnessFor(harness);
+    return { ok: true, availability: adapter.probeAvailability ? await adapter.probeAvailability() : { state: 'unknown', resetsAt: null, reason: 'This harness does not report usage limits.', source: 'none', checkedAt: new Date().toISOString() } };
+  } catch (error) { return { ok: false, error: toErrorInfo(error) }; }
 });
 ipcMain.handle('dashboard:threads', async (_event, options) => {
   const failedJobs = service.jobs.filter((job) => ['failed', 'unconfirmed'].includes(service.present(job).deliveryStatus) && !job.acknowledgedAt)
     .map((job) => ({ id: job.id, message: job.message, note: service.present(job).note }));
   try {
-    const threads = await activeThreads({ showSettled: options?.showSettled === true });
+    const threads = await activeThreads({ harness: options?.harness, showSettled: options?.showSettled === true });
     return { online: true, threads, storageError, pendingJobs: activeJobs().length, failedJobs };
   } catch (error) {
     return { online: false, error: error.message, errorInfo: toErrorInfo(error), threads: [], storageError, pendingJobs: activeJobs().length, failedJobs };
   }
 });
-ipcMain.handle('dashboard:schedule-thread', async (_event, threadId) => {
+ipcMain.handle('dashboard:schedule-thread', async (_event, threadId, harness) => {
   if (typeof threadId !== 'string' || !threadId.trim() || threadId.length > 512) throw new Error('Invalid thread ID.');
-  const thread = (await activeThreads({ showSettled: true })).find((candidate) => candidate.id === threadId);
-  if (!thread) throw new Error('That thread is no longer available. Refresh and try again.');
-  openScheduleWindow(thread.id, thread.title);
+  const adapter = harnessFor(harness);
+  const thread = (await activeThreads({ harness: adapter.id, showSettled: true })).find((candidate) => candidate.id === threadId);
+  if (!thread) throw new Error(`That ${adapter.conversationNoun} is no longer available. Refresh and try again.`);
+  openScheduleWindow(thread.id, thread.title, adapter.id);
   return { ok: true };
 });
 ipcMain.handle('dashboard:open-settings', () => {
@@ -257,7 +275,7 @@ app.whenReady().then(() => {
     service.recover();
   } catch (error) {
     storageError = { code: 'storage_unavailable', message: error.message };
-    service ||= new JobService({ jobs: [], api, persist: () => ensureStorage() });
+    service ||= new JobService({ jobs: [], api, harnesses, persist: () => ensureStorage() });
   }
   tray = new Tray(makeTrayIcon());
   tray.setToolTip(APP_NAME);
@@ -266,6 +284,15 @@ app.whenReady().then(() => {
   void rebuildMenu();
   openDashboard();
   if (!token()) openSettings();
+  setInterval(() => { if (!storageError) void service.pollTurns().catch(() => {}); }, TURN_POLL_MS).unref?.();
+  // Give supervised agent turns a bounded chance to stop cleanly before quitting.
+  let harnessesStopped = false;
+  app.on('before-quit', (event) => {
+    if (harnessesStopped) return;
+    event.preventDefault();
+    harnessesStopped = true;
+    void Promise.race([harnesses.shutdown(), new Promise((resolve) => setTimeout(resolve, 6000))]).finally(() => app.quit());
+  });
   powerMonitor.on('resume', () => !storageError && void service.resume().catch(() => notify('Schedule could not be updated', 'Check local disk space and restart the app.')));
   app.on('activate', () => { openDashboard(); void rebuildMenu(); });
 });

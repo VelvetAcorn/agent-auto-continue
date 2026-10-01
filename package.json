@@ -1,18 +1,19 @@
 {
   "name": "t3code-auto-continue",
   "version": "2.0.0",
-  "description": "Menu-bar helper that schedules a 'Continue' turn for T3 Code threads",
+  "description": "Menu-bar helper that schedules a 'Continue' turn for T3 Code, OpenCode, Claude Code and Codex conversations",
   "main": "main.js",
   "author": "T3 Code users",
   "license": "MIT",
   "scripts": {
-    "start": "electron .",
+    "start": "env -u ELECTRON_RUN_AS_NODE electron .",
     "build": "electron-builder --mac zip --publish never",
     "build:dmg": "electron-builder --mac dmg --publish never",
     "build:all": "electron-builder --publish never",
     "test": "node --test",
-    "test:electron": "electron tools/electron-smoke.cjs",
-    "icons": "electron tools/build-icons.cjs"
+    "check:syntax": "node tools/check-syntax.cjs",
+    "test:electron": "env -u ELECTRON_RUN_AS_NODE electron tools/electron-smoke.cjs",
+    "icons": "env -u ELECTRON_RUN_AS_NODE electron tools/build-icons.cjs"
   },
   "dependencies": {
     "node-schedule": "^2.1.1"

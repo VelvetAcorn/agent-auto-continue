@@ -38,7 +38,7 @@ test('create snapshots baseline and buffer; editing preserves original baseline 
   assert.equal(edited.commandId, job.commandId);
   assert.equal(edited.messageId, job.messageId);
   assert.equal(edited.activitySince, job.activitySince);
-  assert.equal(h.stored.version, 2);
+  assert.equal(h.stored.version, 3);
 });
 
 test('obsolete edited and canceled timer callbacks never dispatch', async () => {
@@ -112,6 +112,11 @@ test('crash recovery reconciles message presence without any new POST', async ()
   h.setThread({ ...thread(), messages: [{ id: 'message', role: 'user', createdAt: iso(0) }] });
   await h.service.reconcile('job');
   assert.equal(h.service.get('job').status, 'sent');
+  // The reconciled turn cannot be matched to a T3 turn, so the first poll closes it as unknown.
+  assert.equal(h.service.get('job').turn.state, 'running');
+  await h.service.pollTurns();
+  assert.equal(h.service.get('job').turn.state, 'unknown');
+  assert.deepEqual(h.service.activeWork(), []);
   assert.equal(h.calls, 0);
 });
 
@@ -183,7 +188,7 @@ test('confirmed missing and archived threads cancel without dispatch; settled al
 
 
 test('migration refuses unknown versions and invalid persisted records instead of dropping data', () => {
-  assert.throws(() => migrateJobs({ version: 3, jobs: [legacy()] }), /unsupported format/);
+  assert.throws(() => migrateJobs({ version: 4, jobs: [legacy()] }), /unsupported format/);
   assert.throws(() => migrateJobs([legacy(), { id: 'broken' }]), /invalid records/);
 });
 

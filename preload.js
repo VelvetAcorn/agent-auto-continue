@@ -30,12 +30,14 @@ contextBridge.exposeInMainWorld('autoContinue', {
   scheduleAgain: (id) => ipcRenderer.invoke('jobs:schedule-again', id),
   acknowledgeJob: (id) => ipcRenderer.invoke('jobs:acknowledge', id),
   reconcileJob: (id) => ipcRenderer.invoke('jobs:reconcile', id),
-  checkConnection: () => ipcRenderer.invoke('connection:check'),
+  checkConnection: (harness) => ipcRenderer.invoke('connection:check', harness),
+  listHarnesses: () => ipcRenderer.invoke('harnesses:list'),
+  checkAvailability: (harness) => ipcRenderer.invoke('harnesses:availability', harness),
   onJobsChanged: (callback) => {
     const listener = () => callback();
     ipcRenderer.on('jobs:changed', listener);
     return () => ipcRenderer.removeListener('jobs:changed', listener);
   },
-  scheduleThread: (threadId) => ipcRenderer.invoke('dashboard:schedule-thread', threadId),
+  scheduleThread: (threadId, harness) => ipcRenderer.invoke('dashboard:schedule-thread', threadId, harness),
   openSettings: () => ipcRenderer.invoke('dashboard:open-settings')
 });

@@ -3,3 +3,9 @@
 .thread-time-exact{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
 .row:focus .thread-time-exact,.row:hover .thread-time-exact{position:static;width:auto;height:auto;clip-path:none;overflow-wrap:anywhere}
 .row:focus .thread-time-short,.row:hover .thread-time-short{display:none}
+.harness-select{background:var(--raised);border:1.5px solid var(--line);color:var(--ink);border-radius:8px;padding:10px 11px;font-size:12px}
+.panel .harness-select{width:100%}
+.harness-row{border-top:1px solid var(--line);padding:16px 0 4px;margin-top:16px}
+.harness-row:first-child{border-top:0;margin-top:4px;padding-top:0}
+.harness-name small{display:block;margin-top:3px}
+.harness-name .harness-caps{color:var(--accent)}

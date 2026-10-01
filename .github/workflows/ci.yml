@@ -21,10 +21,7 @@ jobs:
       - run: npm ci
       - run: npm test
       - name: Check production JavaScript
-        run: |
-          node --check main.js
-          node --check preload.js
-          for file in lib/*.js renderer/*.js; do node --check "$file"; done
+        run: npm run check:syntax
   package:
     name: Package macOS app
     runs-on: macos-latest

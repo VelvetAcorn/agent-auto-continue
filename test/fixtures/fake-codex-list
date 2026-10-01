@@ -1,0 +1,24 @@
+#!/usr/bin/env node
+'use strict';
+// Minimal fake `codex app-server` whose thread/list mirrors codex-cli 0.159:
+// omitted sourceKinds means interactive sources only, and `limit` pages with nextCursor.
+const fs = require('node:fs');
+const readline = require('node:readline');
+const threads = JSON.parse(fs.readFileSync(process.env.FAKE_THREADS, 'utf8'));
+const INTERACTIVE = ['cli', 'vscode', 'appServer'];
+const send = (value) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...value }) + '\n');
+readline.createInterface({ input: process.stdin }).on('line', (line) => {
+  const message = JSON.parse(line);
+  if (message.id === undefined) return;
+  if (process.env.FAKE_LOG) fs.appendFileSync(process.env.FAKE_LOG, JSON.stringify({ method: message.method, params: message.params }) + '\n');
+  if (message.method === 'initialize') return send({ id: message.id, result: {} });
+  if (message.method === 'thread/list') {
+    const p = message.params || {};
+    const kinds = Array.isArray(p.sourceKinds) && p.sourceKinds.length ? p.sourceKinds : INTERACTIVE;
+    const matching = threads.filter((t) => kinds.includes(t.source) && Boolean(t.archived) === Boolean(p.archived)).sort((a, b) => b.updatedAt - a.updatedAt);
+    const offset = Number(p.cursor || 0), limit = p.limit || 25;
+    const page = matching.slice(offset, offset + limit);
+    return send({ id: message.id, result: { data: page, nextCursor: offset + limit < matching.length ? String(offset + limit) : null } });
+  }
+  return send({ id: message.id, error: { code: -32601, message: 'Method not found' } });
+});
