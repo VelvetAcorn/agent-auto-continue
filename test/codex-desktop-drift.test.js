@@ -236,7 +236,7 @@ test('a new view with a message box after the link is content_match; an unchange
 });
 
 test('the compatibility check reports a shown thread whose title embeds its name, and ignores other pages', async () => {
-  let { adapter, fake } = titled({ before: `${NAME} — Codex` });
+  let { adapter, fake } = titled({ before: `${NAME} \u2014 Codex` });
   let result = await adapter.checkCompatibility();
   assert.deepEqual(result.problems.map((item) => item.contactPoint), ['content_match']);
   assert.match(result.problems[0].message, /^ChatGPT \(Codex\) 27\.2\.0 changed how it shows which conversation is open\. Scheduled messages/);
