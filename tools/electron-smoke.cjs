@@ -7,9 +7,6 @@ const path = require('node:path');
 const vm = require('node:vm');
 const electron = require('electron');
 const { app, BrowserWindow } = electron;
-// A locked screen can stop Electron from ever becoming ready; fail clearly instead of hanging.
-const HARD_TIMEOUT_MS = Number(process.env.T3_SMOKE_TIMEOUT_MS) || 180_000;
-setTimeout(() => { console.error(`Electron smoke test timed out after ${HARD_TIMEOUT_MS / 1000} seconds. Is the screen locked?`); app.exit(1); }, HARD_TIMEOUT_MS).unref();
 // Chromium storage is isolated too; even theme/localStorage cannot touch user state.
 const profile = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 't3-scheduler-smoke-'));
 app.setPath('userData', profile);
@@ -332,5 +329,6 @@ async function harnessJourney(js) {
 }
 // A hung window must fail the run rather than block CI or a shell indefinitely.
 // Before the app is ready (for example while macOS is locked) app.exit() is ignored, so force the exit.
-const hardTimeout = setTimeout(() => { console.error('Electron smoke timed out after 180 seconds.'); app.exit(1); setTimeout(() => process.exit(1), 2000); }, 180_000);
+const HARD_TIMEOUT_MS = Number(process.env.T3_SMOKE_TIMEOUT_MS) || 180_000;
+const hardTimeout = setTimeout(() => { console.error(`Electron smoke timed out after ${HARD_TIMEOUT_MS / 1000} seconds. Is the screen locked?`); app.exit(1); setTimeout(() => process.exit(1), 2000); }, HARD_TIMEOUT_MS);
 run().then(() => { clearTimeout(hardTimeout); app.exit(0); }, error => { clearTimeout(hardTimeout); console.error(error.stack); app.exit(1); });
