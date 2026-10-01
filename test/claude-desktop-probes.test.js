@@ -38,7 +38,12 @@ function setup(t, { processes = async () => [], alive = () => true } = {}) {
     checked: result.checked.includes(point), problems: result.problems.filter((item) => item.contactPoint === point).map((item) => item.hint),
     unchecked: result.unchecked.filter((item) => item.contactPoint === point).map((item) => item.reason)
   });
-  return { home, registry, index, live, check, about };
+  const transcript = (cliSessionId, records) => {
+    const dir = path.join(home, '.claude', 'projects', '-work');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, `${cliSessionId}.jsonl`), records.map((record) => JSON.stringify(record)).join('\n') + '\n');
+  };
+  return { home, registry, index, live, transcript, check, about };
 }
 
 test('the live registry passes when its live entries are recognised', async (t) => {
@@ -115,4 +120,28 @@ test('the process table yields old enough interactive Claude Code processes only
   assert.deepEqual(calls[1][1], ['-o', 'pid=,args=', '-p', '101,102,105,107']);
   assert.equal(await runningClaudeProcesses({ run: async () => ({ code: null, error: new Error('ENOENT'), stdout: '' }) }), null);
   assert.deepEqual([elapsedMs('01:05'), elapsedMs('1-00:00:00'), elapsedMs('02:00:00'), elapsedMs('bad')], [65_000, 86_400_000, 7_200_000, 0]);
+});
+
+const at = (s) => new Date(NOW - 60_000 + s * 1000).toISOString();
+const conversation = [
+  { type: 'permission-mode', permissionMode: 'default', sessionId: CLI },
+  { type: 'user', uuid: 'u1', timestamp: at(0), message: { role: 'user', content: 'Review the plan' } },
+  { type: 'assistant', uuid: 'a1', timestamp: at(5), message: { role: 'assistant', content: [{ type: 'text', text: 'Done' }], stop_reason: 'end_turn' } }
+];
+
+test('recent transcripts in the known format pass, and a full check is needed to read them', async (t) => {
+  const s = setup(t);
+  s.transcript(CLI, conversation);
+  assert.deepEqual(s.about(await s.check('full'), 'transcript'), { checked: true, problems: [], unchecked: [] });
+  assert.deepEqual(s.about(await s.check('quick'), 'transcript'), { checked: false, problems: [], unchecked: ['quick'] });
+  const none = setup(t);
+  assert.deepEqual(none.about(await none.check('full'), 'transcript').unchecked, ['no_transcripts']);
+});
+
+test('a recent transcript in an unfamiliar format is a problem before any schedule fires', async (t) => {
+  const s = setup(t);
+  s.transcript(CLI, [...conversation, { type: 'prompt', uuid: 'n1', timestamp: at(9), message: { role: 'user', content: 'I am back' } }]);
+  const result = await s.check('full');
+  assert.deepEqual(s.about(result, 'transcript').problems, ['The newest message is recorded under the unknown record type "prompt". Seen in 1 of 1 recent session.']);
+  assert.equal(result.problems[0].message, 'Claude Desktop 1.0 changed how it records conversations. Scheduled messages for it may fail until Agent Auto-Continue supports this version.');
 });

@@ -125,6 +125,16 @@ test('a live registry entry that names no session refuses, because it could hold
   assert.doesNotThrow(() => adapter.prepareTurn(turn(), closed), 'Entries of processes that ended do not count');
 });
 
+test('a transcript in an unfamiliar format refuses before resuming, because user activity could not be seen', async () => {
+  const s = setup();
+  // An update records the user's newest prompt under a record type this version does not know.
+  fs.appendFileSync(path.join(s.store, `${SESSION}.jsonl`), JSON.stringify({ type: 'human', uuid: 'n1', cwd: s.project, timestamp: s.at(30), message: { role: 'user', content: 'I am back' } }) + '\n');
+  const adapter = s.make();
+  const state = await adapter.inspectConversation({ conversationId: SESSION, deliveryKey: null });
+  assert.throws(() => adapter.prepareTurn(turn(), state), (error) => error.code === 'app_version_unsupported' && error.details.contactPoint === 'transcript'
+    && error.message === 'Claude Code changed how it records conversations, so Agent Auto-Continue cannot work with it until it supports this version.');
+});
+
 async function send(s, adapter = s.make()) {
   const state = await adapter.inspectConversation({ conversationId: SESSION, deliveryKey: turn().deliveryKey });
   const { plan } = adapter.prepareTurn(turn(), state);

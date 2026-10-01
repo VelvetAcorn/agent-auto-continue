@@ -213,6 +213,59 @@ test('the stop button is recognised in the interface language from the catalogue
   assert.equal(fake.state.calls.filter((call) => call[0] === 'setComposer').length, 0);
 });
 
+const transcriptDrift = (error) => error.code === 'app_version_unsupported' && error.details.contactPoint === 'transcript' && error.deliveryUncertain === false;
+
+test('a transcript in an unfamiliar format refuses before sending instead of silently losing the activity check', async (t) => {
+  const formats = [
+    ['renamed record types', (at) => ({ type: 'prompt', uuid: 'n1', timestamp: at, message: { role: 'user', content: 'I am back' } })],
+    ['renamed timestamps', (at) => ({ type: 'user', uuid: 'n1', time: at, message: { role: 'user', content: 'I am back' } })]
+  ];
+  for (const [label, record] of formats) {
+    const { adapter, fake, fixture } = setup(t);
+    const transcript = path.join(fixture.home, '.claude', 'projects', '-work-FeedWorks-io', `${CLI}.jsonl`);
+    fs.writeFileSync(transcript, '');
+    for (let i = 0; i < 3; i++) fixture.append(record(new Date(START + i).toISOString()));
+    const state = await adapter.inspectConversation({ conversationId: SESSION });
+    assert.throws(() => adapter.prepareTurn(turn(), state), (error) => transcriptDrift(error)
+      && error.message === 'Claude Desktop 1.0 changed how it records conversations, so Agent Auto-Continue cannot work with it until it supports this version.', label);
+    assert.equal(fake.state.calls.filter((call) => call[0] === 'setComposer').length, 0);
+  }
+});
+
+test('records in a new format after an update are noticed even when older records are familiar', async (t) => {
+  const { adapter, fixture } = setup(t);
+  fixture.append({ type: 'prompt', uuid: 'n1', timestamp: new Date(START).toISOString(), message: { role: 'user', content: 'I am back' } });
+  const state = await adapter.inspectConversation({ conversationId: SESSION });
+  assert.throws(() => adapter.prepareTurn(turn(), state), (error) => transcriptDrift(error) && /unknown record type "prompt"/.test(error.details.hint));
+});
+
+test('a new or quiet transcript with no messages yet is not mistaken for a format change', async (t) => {
+  const { adapter, fixture } = setup(t);
+  const transcript = path.join(fixture.home, '.claude', 'projects', '-work-FeedWorks-io', `${CLI}.jsonl`);
+  // The shape of real sessions that were opened without a prompt: settings, attachments and bookkeeping only.
+  fs.writeFileSync(transcript, '');
+  for (const type of ['mode', 'permission-mode', 'bridge-session', 'attachment', 'attachment', 'attachment', 'system', 'bridge-session', 'cost-state', 'last-prompt', 'cost-state']) {
+    fixture.append({ type, sessionId: CLI, timestamp: new Date(START).toISOString() });
+  }
+  const state = await adapter.inspectConversation({ conversationId: SESSION });
+  assert.equal(state.context.drift, null);
+  assert.deepEqual(adapter.prepareTurn(turn(), state).plan, { sessionId: SESSION });
+});
+
+test('end to end: user activity in a changed transcript format fails the job instead of sending over it', async (t) => {
+  const { adapter, fake, fixture, now, advance } = setup(t);
+  const { service } = jobService(adapter, now);
+  const job = await schedule(service, now);
+  advance(30_000);
+  // Claude Desktop updates and records the user's new prompt in a format this version does not know.
+  fixture.append({ type: 'human', uuid: 'typed', timestamp: new Date(now()).toISOString(), message: { role: 'user', content: 'I am back' } });
+  advance(90_000);
+  await service.run(job.id);
+  const failed = service.present(service.get(job.id));
+  assert.deepEqual([failed.status, failed.error?.code, failed.error?.details.contactPoint], ['failed', 'app_version_unsupported', 'transcript']);
+  assert.equal(fake.state.sent.length, 0);
+});
+
 test('off macOS the adapter lists nothing and refuses to send', async () => {
   const adapter = createClaudeDesktopHarness({ platform: 'linux', home: os.tmpdir() });
   assert.deepEqual(await adapter.listConversations({}), []);
