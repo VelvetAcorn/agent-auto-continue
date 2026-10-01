@@ -122,7 +122,8 @@ test('an app change is a certain, sanitised failure that names the app, its vers
   assert.equal(appVersionUnsupported({ app: 'ChatGPT (Codex)', contactPoint: 'made_up' }).details.contactPoint, 'unknown', 'Unknown contact points are not passed through');
   assert.match(appVersionUnsupported({ app: 'ChatGPT (Codex)', contactPoint: 'deep_link' }).message, /^ChatGPT \(Codex\) changed how its links open a conversation/, 'An unknown version is left out');
   assert.match(driftMessage({ app: 'A', appVersion: '1', verifiedVersion: '1', contactPoint: 'send_label' }), /^A 1 did not match what this version of Agent Auto-Continue expects/);
-  assert.match(driftMessage({ app: 'A', appVersion: '2', contactPoint: 'send_label', sending: false }), /^A 2 changed how its send button is labelled\. Scheduled messages for it may fail/);
+  assert.match(driftMessage({ app: 'A', appVersion: '2', contactPoint: 'send_label', during: 'check' }), /^A 2 changed how its send button is labelled\. Scheduled messages for it may fail/);
+  assert.match(appVersionUnsupported({ app: 'A', contactPoint: 'transcript', during: 'read' }).message, /^A changed how it records conversations, so Agent Auto-Continue cannot work with it until it supports this version\.$/);
   for (const id of Object.keys(CONTACT_POINTS)) assert.match(id, /^[a-z_]+$/);
 });
 

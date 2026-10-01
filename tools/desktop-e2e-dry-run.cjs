@@ -21,6 +21,7 @@ const { isScreenLocked } = require('../lib/harnesses/session-lock');
 const claude = require('../lib/harnesses/claude-desktop');
 const codex = require('../lib/harnesses/codex-desktop');
 const { claudeDesktop, codexDesktop, deepLinkFor } = require('../lib/desktop/profiles');
+const { createAppLocator } = require('../lib/desktop/app-location');
 
 if (process.env.AAC_DESKTOP_E2E !== '1') {
   console.error('Refusing to run: set AAC_DESKTOP_E2E=1 to drive the real desktop apps (read-only dry run).');
@@ -35,7 +36,9 @@ const automation = new Proxy(real, { get(target, name) {
   return target[name];
 } });
 
-const claudeLabels = createAppLabels({ catalogueDirectory: path.join(claudeDesktop.appCandidates[0], claudeDesktop.bundledFiles.labelCatalogue.path), controls: claude.CONTROLS });
+// The catalogue lives inside Claude Desktop wherever Launch Services says it is installed.
+let claudeApp = null;
+const claudeLabels = createAppLabels({ catalogueDirectory: () => (claudeApp ? path.join(claudeApp, claudeDesktop.bundledFiles.labelCatalogue.path) : null), controls: claude.CONTROLS });
 const apps = {
   'claude-desktop': {
     bundleId: claude.BUNDLE_ID,
@@ -108,6 +111,7 @@ async function main() {
   report('Screen locked', await isScreenLocked());
   report('Front app', env.frontmost);
   if (!env.trusted) return;
+  claudeApp = (await createAppLocator({ profile: claudeDesktop, automation }).locate()).appPath;
   for (const [name, spec] of Object.entries(apps)) await check(name, spec, open?.harness === name ? open.id : null);
   console.log(`\nDry run complete. ${path.basename(__filename)} never types or sends.`);
 }

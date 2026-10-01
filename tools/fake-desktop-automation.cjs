@@ -7,7 +7,7 @@ const { normaliseText } = require('../lib/desktop/ui-delivery');
 
 function createFakeDesktopAutomation({ bundleId, pid = 4242, view = {}, navigate = () => null, onSend = () => {} } = {}) {
   const state = {
-    trusted: true, screenLocked: false, onConsole: true, installed: true, running: true, version: '1.0',
+    trusted: true, screenLocked: false, onConsole: true, installed: true, running: true, version: '1.0', installedPath: null,
     frontmost: { bundleId: 'com.example.editor', pid: 777 },
     // The conversation currently shown: { urlSegment?, title?, language, composerLabel, sendLabel, composer, sendEnabled, stop }
     view: { urlSegment: null, title: null, language: 'en-US', composerLabel: 'Prompt', sendLabel: 'Send', composer: '', stop: false, sendEnabled: null, ...view },
@@ -61,7 +61,7 @@ function createFakeDesktopAutomation({ bundleId, pid = 4242, view = {}, navigate
       if (injected) return injected;
       const apps = {};
       for (const id of bundleIds) apps[id] = id === bundleId && state.installed
-        ? { installedPath: `/Applications/${id}.app`, version: state.version, running: state.running, pid: state.running ? pid : null, active: state.frontmost?.bundleId === id }
+        ? { installedPath: state.installedPath || `/Applications/${id}.app`, version: state.version, running: state.running, pid: state.running ? pid : null, active: state.frontmost?.bundleId === id }
         : { installedPath: null, version: null, running: false, pid: null, active: false };
       return { ok: true, trusted: state.trusted, screenLocked: state.screenLocked, onConsole: state.onConsole, frontmost: state.frontmost, apps };
     },
