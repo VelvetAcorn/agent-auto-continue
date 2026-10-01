@@ -256,3 +256,43 @@ test('the compatibility check reports a shown thread whose title embeds its name
   fake.state.view.composerLabel = 'Something else';
   assert.deepEqual((await adapter.checkCompatibility()).problems, []);
 });
+
+// The ChatGPT app shown in another interface language, with its labels translated.
+function localised(view) {
+  const result = titled({ before: NAME });
+  Object.assign(result.fake.state.view, view);
+  return result;
+}
+const languageRefusal = (contactPoint, what, language) => (error) => {
+  assert.deepEqual([error.code, error.deliveryUncertain, error.details.contactPoint, error.details.reason, error.details.language, error.details.appVersion], ['harness_not_configured', false, contactPoint, 'unsupported_language', language, '27.2.0']);
+  assert.match(error.message, new RegExp(`^ChatGPT \\(Codex\\) 27\\.2\\.0 shows its interface in .*\\(${language}\\), but Agent Auto-Continue only knows its English labels, so it could not find the ${what}\\. Switch ChatGPT to English to schedule messages in it\\. Nothing was sent\\.$`));
+  return true;
+};
+
+test('a translated message box in another interface language is reported as unsupported, not as an app change', async () => {
+  const { fake, send } = localised({ language: 'de-DE', composerLabel: 'Frag einfach' });
+  await assert.rejects(send(), languageRefusal('composer_label', 'message box', 'de-DE'));
+  assert.deepEqual(fake.state.calls.filter((call) => ['setComposer', 'submit'].includes(call[0])), []);
+});
+
+test('a translated send button is reported the same way, and the inserted text is removed', async () => {
+  const { fake, send } = localised({ language: 'fr', sendLabel: 'Envoyer' });
+  await assert.rejects(send(), languageRefusal('send_label', 'send button', 'fr'));
+  assert.equal(fake.state.sent.length, 0);
+  assert.equal(fake.state.view.composer, '');
+});
+
+test('in English, a renamed label is still an app change; with a translated label the check says why', async () => {
+  const english = localised({ language: 'en-GB', composerLabel: 'Ask ChatGPT' });
+  await assert.rejects(english.send(), (error) => error.code === 'app_version_unsupported' && error.details.contactPoint === 'composer_label');
+  let result = await localised({ language: 'en-GB', composerLabel: 'Ask ChatGPT' }).adapter.checkCompatibility();
+  assert.match(result.problems[0].message, /changed how its message box is labelled/);
+  const german = localised({ language: 'de-DE', composerLabel: 'Frag einfach' });
+  result = await german.adapter.checkCompatibility();
+  assert.deepEqual(result.problems.map((item) => item.contactPoint), ['composer_label']);
+  assert.match(result.problems[0].message, /^ChatGPT \(Codex\) 27\.2\.0 shows its interface in .*\(de-DE\), but Agent Auto-Continue only knows its English labels\. Scheduled messages for it will fail until ChatGPT is switched to English\.$/);
+  assert.match(result.problems[0].hint, /Interface language: de-DE/);
+  assert.deepEqual(writes(german.fake), []);
+  // Labels that still match in another language are fine.
+  assert.deepEqual((await localised({ language: 'de-DE' }).adapter.checkCompatibility()).problems, []);
+});

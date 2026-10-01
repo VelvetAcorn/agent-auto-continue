@@ -218,7 +218,11 @@ Threads without a name, and threads whose name any other listed thread shares, a
 The check pages through every thread, and refuses when the listing cannot be finished.
 The message box is an `AXTextArea` described as `Do anything`, whose value includes the placeholder text while empty.
 The send button is labelled `Send` or `Send message`, and a `Stop` button near the message box means a turn is running.
-The app ships no readable message catalogue, so these labels are English only, and another interface language fails safely with `app_version_unsupported` before anything is typed.
+The app ships no readable message catalogue, so these labels are English only.
+When they are not found in a thread whose content area reports another language (`AXLanguage`), the language is named as the reason instead of an app change.
+The send fails with `harness_not_configured`, `details.reason` `unsupported_language` and the contact point of the missing control, for example "ChatGPT (Codex) 27.0 shows its interface in German (de-DE), but Agent Auto-Continue only knows its English labels, so it could not find the message box. Switch ChatGPT to English to schedule messages in it. Nothing was sent."
+The full compatibility check words its problem the same way.
+Labels that still match in another language work as usual, and in English a missing label remains an app change.
 
 Everything else uses the supported app-server protocol through `lib/harnesses/codex-reader.js`, with the codex binary bundled inside the app (`Contents/Resources/codex`, wherever the app is installed) so the protocol version matches.
 Reads use a private server that never loads a thread for writing.
