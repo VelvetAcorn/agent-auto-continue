@@ -80,8 +80,10 @@ npm install
 npm start
 ```
 
-On launch, the app waits in the menu bar. Click the icon to open the popover, or right-click it for the menu.
-A first launch opens Settings so you can enter the T3 Code bearer token and check the other agents. The default server address is fixed to `http://127.0.0.1:3773`; Settings only permits changing the port, so the app cannot be pointed at a remote host.
+On launch, the app waits in the menu bar.
+Click the icon to open the popover, or right-click it for the menu.
+A first launch opens Settings so you can enter the T3 Code bearer token and check the other agents.
+The default server address is fixed to `http://127.0.0.1:3773`; Settings only permits changing the port, so the app cannot be pointed at a remote host.
 The **Agents** section of Settings lists every harness with its status, a Check button, an info tip with what it supports, including whether it works while the screen is locked, and its own fields: the OpenCode port and password and optional CLI executable paths.
 The CLIs are found automatically in common install locations.
 Use the arrows to arrange the agents and the Show box to hide ones you do not use; hidden agents are not checked and do not appear in the header or the picker.
@@ -90,10 +92,13 @@ The popover is one screen.
 Choose a conversation from the picker, which lists every shown agent's conversations newest first.
 Choose when: 5 min, 30 min, 1 hour, Tomorrow 9:00, When free (for agents that report usage limits) or Custom for an ISO date (`yyyy-mm-dd`), 24-hour time and timezone.
 Choose how far for agents that report when a turn finishes: Once, Up to a number of turns, or Until done.
+With Up to or Until done, an optional stop phrase such as `TASK COMPLETE` ends the continuation when the agent's last message contains it.
 The message is `Continue` unless you hover the message line and press Edit.
 The sentence under the Continue button says exactly what will happen; daylight-saving gaps are rejected and repeated local times ask which occurrence to use.
-The queue sits underneath. Hover a row for Edit and Cancel, or Stop for a running continuation; click a row for its details.
+The queue sits underneath.
+Hover a row for Edit and Cancel, or Stop for a running continuation; click a row for its details.
 Recent outcomes follow the queue, with Resume and Check where they apply, and All history opens the full log with filters and Load more.
+The details of an unconfirmed delivery offer Check delivery and, after you have looked in the conversation yourself, Mark as not delivered, which asks for confirmation first.
 The laptop toggle in the header turns keep-awake on and off; its tooltip explains why the Mac is awake.
 The expand control opens the same screen as a resizable window, and the window's collapse control returns to the menu bar; the choice is remembered.
 Only one copy may run at a time.

@@ -341,6 +341,16 @@ test('the rail is a hidden popover at launch and the layout switch rebuilds the 
   assert.equal(rail.visible, true);
   app.trayEvents.click[0]();
   assert.equal(rail.visible, false);
+  // Clicking the icon while the rail is open blurs it first: the deferred hide lets that click close the rail instead of reopening it.
+  app.trayEvents.click[0]();
+  rail.handlers.blur();
+  assert.equal(rail.visible, true, 'A blur does not hide the rail at once');
+  app.trayEvents.click[0]();
+  assert.equal(rail.visible, false, 'The click that caused the blur closes the rail');
+  app.trayEvents.click[0]();
+  rail.handlers.blur();
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(rail.visible, false, 'Focus moving elsewhere hides the rail after the grace period');
   app.invoke('window:fit', 9999);
   assert.equal(rail.contentSize.join(), '380,760', 'Height follows the content within the limits');
   app.invoke('window:fit', 10);

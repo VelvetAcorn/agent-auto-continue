@@ -57,6 +57,11 @@ let remote;
 let quitting = false;
 let firstRun = false;
 let trayMenu;
+// A pending blur-hide of the rail, deferred so a click on the menu-bar icon can close it instead of reopening it.
+let railHideTimer;
+// Where the rail was last anchored under the icon; a rail dragged elsewhere is not pulled back on resize.
+let railAnchor;
+const RAIL_BLUR_HIDE_MS = 150;
 
 const ownsInstance = app.requestSingleInstanceLock();
 if (!ownsInstance) app.quit();
@@ -275,6 +280,12 @@ function positionRail() {
   const x = Math.round(Math.min(Math.max(area.x, bounds.x + bounds.width / 2 - width / 2), area.x + area.width - width));
   const y = Math.round(Math.min(Math.max(area.y, bounds.y + bounds.height + 4), area.y + area.height - height));
   dashboardWindow.setPosition(x, y, false);
+  railAnchor = [x, y];
+}
+
+function cancelRailHide() {
+  clearTimeout(railHideTimer);
+  railHideTimer = undefined;
 }
 
 function showDashboard() {
@@ -286,12 +297,15 @@ function showDashboard() {
 }
 
 function hideDashboard() {
+  cancelRailHide();
   if (dashboardWindow && !dashboardWindow.isDestroyed()) dashboardWindow.hide?.();
 }
 
 // The rail opens and closes from the menu-bar icon; the window layout simply opens.
+// Clicking the icon blurs an open rail first, so a blur-hide still pending counts as "it was open".
 function toggleDashboard() {
-  if (config.layout === 'rail' && dashboardWindow && !dashboardWindow.isDestroyed() && dashboardWindow.isVisible?.()) hideDashboard();
+  const open = config.layout === 'rail' && dashboardWindow && !dashboardWindow.isDestroyed() && (railHideTimer !== undefined || dashboardWindow.isVisible?.());
+  if (open) hideDashboard();
   else openDashboard();
 }
 
@@ -328,7 +342,7 @@ function openDashboard(route, { show = true } = {}) {
   dashboardWindow.loadFile(path.join(__dirname, 'dashboard.html'));
   if (rail) {
     // A popover closes when it loses focus or when Command-W is pressed; the app keeps running in the tray.
-    dashboardWindow.on('blur', () => { if (!dashboardWindow?.webContents.isDevToolsOpened?.()) hideDashboard(); });
+    dashboardWindow.on('blur', () => { if (dashboardWindow?.webContents.isDevToolsOpened?.()) return; cancelRailHide(); railHideTimer = setTimeout(() => { railHideTimer = undefined; hideDashboard(); }, RAIL_BLUR_HIDE_MS); });
     dashboardWindow.on('close', (event) => { if (!quitting) { event.preventDefault?.(); hideDashboard(); } });
   }
   const created = dashboardWindow;
@@ -354,7 +368,8 @@ function fitRail(height) {
   if (config.layout !== 'rail' || !dashboardWindow || dashboardWindow.isDestroyed() || !dashboardWindow.setContentSize) return;
   const clamped = Math.round(Math.min(RAIL_MAX_HEIGHT, Math.max(RAIL_MIN_HEIGHT, Number(height) || RAIL_MIN_HEIGHT)));
   dashboardWindow.setContentSize(RAIL_WIDTH, clamped, false);
-  positionRail();
+  const position = dashboardWindow.getPosition?.();
+  if (!railAnchor || !position || (position[0] === railAnchor[0] && position[1] === railAnchor[1])) positionRail();
 }
 
 async function activeThreads(options) {
@@ -466,6 +481,7 @@ ipcMain.handle('settings:get', publicSettings);
 ipcMain.handle('settings:save', (_event, incoming) => {
   ensureStorage();
   const input = validateSettingsInput(incoming);
+  const previousPort = config.httpPort;
   const next = { ...normaliseConfig({ ...config, httpPort: input.httpPort, bufferSeconds: input.bufferSeconds }), harnesses: applyHarnessSettingsInput(harnesses.list(), config.harnesses, incoming.harnesses) };
   if (input.t3Token) next.t3Token = input.t3Token;
   if (incoming.agents !== undefined) next.agents = validateAgentsInput(incoming.agents, harnesses.list().map((adapter) => adapter.id));
@@ -474,8 +490,9 @@ ipcMain.handle('settings:save', (_event, incoming) => {
   service.bufferSeconds = config.bufferSeconds;
   for (const window of BrowserWindow.getAllWindows()) window.webContents.send('settings:changed', publicSettings());
   void rebuildMenu();
-  // A changed port, token or path may connect a harness, or disconnect one.
-  void trayConversations.refresh({ force: true });
+  // A changed port, token or path may connect a harness, or disconnect one. Arranging the agents
+  // only needs the cache to fill in any agent shown for the first time.
+  void trayConversations.refresh({ force: incoming.harnesses !== undefined || Boolean(input.t3Token) || input.httpPort !== previousPort });
   return { ok: true };
 });
 // A new desktop-app schedule checks its app right away, through the job service's report to the monitor.

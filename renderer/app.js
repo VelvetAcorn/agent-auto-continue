@@ -474,7 +474,8 @@
   function fitWindow() {
     if (state.layout !== 'rail' || !api.fitWindow) return;
     requestAnimationFrame(() => {
-      const height = Math.min(RAIL_MAX_HEIGHT, Math.max(RAIL_MIN_HEIGHT, Math.ceil(document.documentElement.scrollHeight)));
+      // The content's own height, not the viewport's, so the rail shrinks back after a long view.
+      const height = Math.min(RAIL_MAX_HEIGHT, Math.max(RAIL_MIN_HEIGHT, Math.ceil(app.getBoundingClientRect().height)));
       if (height === lastHeight) return;
       lastHeight = height;
       void api.fitWindow(height).catch(() => {});
@@ -652,7 +653,7 @@
   }
   function action(name, data = {}) {
     if (name === 'settings') return navigate('settings', { focus: '[data-section="agents"]' });
-    if (name === 'back') { const target = state.view === 'detail' ? state.returnView : state.view === 'picker' ? 'home' : 'home'; state.pickerQuery = ''; return navigate(target, { focus: state.view === 'picker' ? '#pick' : undefined }); }
+    if (name === 'back') { const target = state.view === 'detail' ? state.returnView : 'home'; state.pickerQuery = ''; return navigate(target, { focus: state.view === 'picker' ? '#pick' : undefined }); }
     if (name === 'history') { state.returnView = 'home'; return navigate('history', { focus: '#search' }); }
     if (name === 'pick') { if (draft().editId) return; return navigate('picker', { focus: '#picker-search' }); }
     if (name === 'toggle-settled') { state.showSettled = !state.showSettled; render('[data-action="toggle-settled"]'); return; }
@@ -684,7 +685,8 @@
     if (name === 'keep') { state.confirmCancel = false; render('[data-action="cancel"]'); return; }
     if (name === 'mark-not-delivered') { state.confirmMark = true; render('[data-action="confirm-mark"]'); return; }
     if (name === 'keep-mark') { state.confirmMark = false; render('[data-action="mark-not-delivered"]'); return; }
-    if (name === 'confirm-mark') { void perform(() => api.markNotDelivered(job.id, { confirm: true }), { success: async (updated) => { state.selectedJob = updated; state.confirmMark = false; await refreshJobs(false); toast((updated.deliveryStatus || updated.status) === 'sent' ? 'The message was found after all. Delivery confirmed.' : 'Marked as not delivered.'); } }); return; }
+    // The service refuses the mark when its last check finds the message, having confirmed the delivery instead; that is good news, not an error.
+    if (name === 'confirm-mark') { void perform(() => api.markNotDelivered(job.id, { confirm: true }).catch(async (error) => { const fresh = await api.getJob(job.id).catch(() => null); if (fresh && (fresh.deliveryStatus || fresh.status) === 'sent') return fresh; throw error; }), { success: async (updated) => { state.selectedJob = updated; state.confirmMark = false; await refreshJobs(false); toast((updated.deliveryStatus || updated.status) === 'sent' ? 'The message was found after all. Delivery confirmed.' : 'Marked as not delivered.'); } }); return; }
     if (name === 'confirm-cancel') { void perform(() => api.cancelJob(job.id), { success: async (updated) => { state.selectedJob = updated; state.confirmCancel = false; await refreshJobs(false); toast('Canceled. The record stays in History.'); } }); return; }
     if (name === 'ack') { void perform(() => api.acknowledgeJob(job.id), { success: async (updated) => { state.selectedJob = updated; await refreshJobs(false); toast('Acknowledged. The record stays in History.'); } }); return; }
     if (name === 'reconcile') { void perform(() => api.reconcileJob(job.id), { success: async (result) => { if (!result.ok) throw new Error(result.error?.message || 'Could not check delivery.'); state.selectedJob = result.job; await refreshJobs(false); toast((result.job.deliveryStatus || result.job.status) === 'sent' ? 'Delivery confirmed.' : 'Delivery remains unconfirmed. No resend was attempted.'); } }); return; }
