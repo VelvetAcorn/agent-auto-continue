@@ -208,10 +208,14 @@ async function remoteJourney(js, click, fill) {
   await waitFor(() => js(`document.querySelector('.token-reveal img').complete && document.querySelector('.token-reveal img').naturalWidth > 0`), 'QR code rendered');
   const token = await js(`document.querySelector('#remote-new-token').textContent`);
   assert.match(token, /^aac_[A-Za-z0-9_-]{43}$/);
-  const previousClipboard = electron.clipboard.readText();
-  await click('[data-action="remote-copy"]');
-  await waitFor(() => electron.clipboard.readText() === token, 'token copied to the clipboard');
-  electron.clipboard.writeText(previousClipboard);
+  // Electron's clipboard API is asynchronous.
+  const previousClipboard = await electron.clipboard.readText();
+  try {
+    await click('[data-action="remote-copy"]');
+    await waitFor(async () => (await electron.clipboard.readText()) === token, 'token copied to the clipboard');
+  } finally {
+    await electron.clipboard.writeText(previousClipboard);
+  }
   await js(`document.querySelector('#toast-dismiss')?.click(); document.querySelector('.token-reveal').scrollIntoView({block:'center'})`);
   await capture('settings-remote-token');
   const call = (method, route, body) => fetch(`http://127.0.0.1:${port}${route}`, { method, headers: { Authorization: `Bearer ${token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });

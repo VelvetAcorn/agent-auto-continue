@@ -12,8 +12,8 @@
     "build:all": "electron-builder --publish never",
     "test": "node --test",
     "check:syntax": "node tools/check-syntax.cjs",
-    "test:electron": "env -u ELECTRON_RUN_AS_NODE electron tools/electron-smoke.cjs && node tools/keep-awake-e2e.cjs",
-    "icons": "env -u ELECTRON_RUN_AS_NODE electron tools/build-icons.cjs",
+    "test:electron": "env -u ELECTRON_RUN_AS_NODE ApplePersistenceIgnoreState=YES electron tools/electron-smoke.cjs && node tools/keep-awake-e2e.cjs",
+    "icons": "env -u ELECTRON_RUN_AS_NODE ApplePersistenceIgnoreState=YES electron tools/build-icons.cjs",
     "lint": "eslint ."
   },
   "dependencies": {
@@ -26,8 +26,8 @@
     "@eslint/js": "^10.0.1",
     "@modelcontextprotocol/client": "^2.2.0",
     "@modelcontextprotocol/sdk": "^1.31.0",
-    "electron": "^33.2.0",
-    "electron-builder": "^24.13.3",
+    "electron": "^44.5.1",
+    "electron-builder": "^26.15.3",
     "eslint": "^10.11.0",
     "globals": "^17.13.0"
   },
