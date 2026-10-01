@@ -1,6 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { HarnessError } = require('../lib/harnesses/errors');
 const { deliverThroughUi, normaliseText } = require('../lib/desktop/ui-delivery');
 const { createFakeDesktopAutomation } = require('../tools/fake-desktop-automation.cjs');
 
@@ -172,4 +173,16 @@ test('focus is only given back after the harness itself opened a link', async ()
   assert.deepEqual(fake.state.opened, []);
   assert.equal(calls(fake, 'activate').length, 0, 'The user is not pulled out of the app they chose');
   assert.equal(fake.state.frontmost.bundleId, BUNDLE);
+});
+
+test('text inserted by a write whose result is lost is removed again', async () => {
+  // The real driver turns an osascript timeout into this certain HarnessError.
+  for (const outcome of [() => { throw new HarnessError('timeout', 'The desktop app did not respond to Accessibility requests in time.'); }, () => ({ ok: false, error: 'script_error' })]) {
+    const { fake, run } = setup({ view: { urlSegment: 'conv-1' } });
+    // The app accepted the text, but the automation call did not report success.
+    fake.state.faults.setComposer = () => { fake.state.view.composer = 'Continue'; return outcome(); };
+    await assert.rejects(run(), (error) => error.deliveryUncertain === false);
+    assert.equal(fake.state.sent.length, 0);
+    assert.equal(fake.state.view.composer, '', 'Our own text does not stay behind in the message box');
+  }
 });
