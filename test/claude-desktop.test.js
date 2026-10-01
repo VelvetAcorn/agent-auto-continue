@@ -188,6 +188,31 @@ test('localised labels are read from the catalogue inside the app wherever it is
   assert.deepEqual(await adapter.submitTurn(turn(), { sessionId: SESSION }), { turnId: 'sent-de' });
 });
 
+test('the stop button near the message box is a second busy signal, independent of the registry', async (t) => {
+  // The registry says nothing is running, as it would if an update moved it.
+  const { adapter, fake } = setup(t);
+  fake.state.view = { ...fake.state.view, urlSegment: SESSION, stop: true, stopLabel: 'Stop response' };
+  await assert.rejects(adapter.submitTurn(turn(), { sessionId: SESSION }), (error) => error.code === 'conversation_busy' && error.deliveryUncertain === false);
+  assert.equal(fake.state.calls.filter((call) => call[0] === 'setComposer').length, 0, 'Nothing typed');
+  const target = fake.state.calls.find((call) => call[0] === 'inspect')[1];
+  assert.deepEqual(target.stopLabels, ['Stop response'], 'Both catalogue IDs read "Stop response" in English');
+});
+
+test('the stop button is recognised in the interface language from the catalogue', async (t) => {
+  const { fixture } = setup(t);
+  const bundle = path.join(fixture.home, 'Claude.app');
+  const catalogue = path.join(bundle, 'Contents', 'Resources', 'ion-dist', 'i18n');
+  fs.mkdirSync(catalogue, { recursive: true });
+  fs.writeFileSync(path.join(catalogue, 'de-DE.json'), JSON.stringify({ iWKE8shLIt: 'Eingabe', '9WRlF4R2gm': 'Senden', '9PawskFnw4': 'Antwort stoppen' }));
+  const fake = createFakeDesktopAutomation({ bundleId: BUNDLE_ID, view: { urlSegment: SESSION, language: 'de-DE', composerLabel: 'Eingabe', sendLabel: 'Senden', stop: true, stopLabel: 'Antwort stoppen' } });
+  fake.state.installedPath = bundle;
+  let clock = START;
+  const adapter = createClaudeDesktopHarness({ home: fixture.home, env: {}, isAlive: () => false, automation: fake.automation, isLocked: async () => false, platform: 'darwin',
+    now: () => clock, sleep: async (ms) => { clock += ms; }, timings: { navigateMs: 1000, confirmMs: 1000, pollMs: 250 } });
+  await assert.rejects(adapter.submitTurn(turn(), { sessionId: SESSION }), (error) => error.code === 'conversation_busy');
+  assert.equal(fake.state.calls.filter((call) => call[0] === 'setComposer').length, 0);
+});
+
 test('off macOS the adapter lists nothing and refuses to send', async () => {
   const adapter = createClaudeDesktopHarness({ platform: 'linux', home: os.tmpdir() });
   assert.deepEqual(await adapter.listConversations({}), []);

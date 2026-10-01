@@ -9,7 +9,8 @@ function createFakeDesktopAutomation({ bundleId, pid = 4242, view = {}, navigate
   const state = {
     trusted: true, screenLocked: false, onConsole: true, installed: true, running: true, version: '1.0', installedPath: null,
     frontmost: { bundleId: 'com.example.editor', pid: 777 },
-    // The conversation currently shown: { urlSegment?, title?, language, composerLabel, sendLabel, composer, sendEnabled, stop }
+    // The conversation currently shown: { urlSegment?, title?, language, composerLabel, sendLabel, composer, sendEnabled, stop, stopLabel? }.
+    // With `stopLabel` set, a shown stop button is only found by a target that lists that label.
     view: { urlSegment: null, title: null, language: 'en-US', composerLabel: 'Prompt', sendLabel: 'Send', composer: '', stop: false, sendEnabled: null, ...view },
     // Number of inspections before a navigation takes effect, to model page loads.
     navigationDelay: 0, pendingView: null,
@@ -37,7 +38,8 @@ function createFakeDesktopAutomation({ bundleId, pid = 4242, view = {}, navigate
     if (!shows(target.match)) return { error: 'content_mismatch' };
     const composer = (target.composerLabels || []).includes(state.view.composerLabel);
     const send = composer && (target.sendLabels || []).includes(state.view.sendLabel);
-    return { composer, send };
+    const stop = Boolean(state.view.stop) && (state.view.stopLabel === undefined || (target.stopLabels || []).includes(state.view.stopLabel));
+    return { composer, send, stop };
   }
   function summary(found) {
     const view = state.view;
@@ -45,7 +47,7 @@ function createFakeDesktopAutomation({ bundleId, pid = 4242, view = {}, navigate
       content: { url: view.urlSegment ? `https://example.test/${view.urlSegment}` : 'app://-/index.html', title: view.title || '', language: view.language },
       composer: found.composer ? { value: view.composer, focused: true } : null,
       send: found.send ? { enabled: sendEnabled() } : null,
-      stop: view.stop
+      stop: found.stop
     };
   }
   // Mirrors guard() in jxa-program.js: clearing needs trust but not an unlocked screen.
