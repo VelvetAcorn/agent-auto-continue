@@ -64,6 +64,13 @@ test('threads from other harnesses are refused and named', async () => {
   await assert.rejects(adapter.inspectConversation({ conversationId: '01a0f400-0000-7000-8000-000000000001' }), (error) => error.code === 'owned_by_other_harness' && error.details.harness === 't3');
 });
 
+test('a thread from another Codex app is not sent to the Codex harness either', async () => {
+  const { adapter, reader } = setup();
+  const id = '01a0f400-0000-7000-8000-000000000009';
+  reader.state.threads.push({ id, name: 'IDE thread', originator: 'codex_vscode', source: 'vscode', cwd: '/work/app', updatedAt: 1 });
+  await assert.rejects(adapter.inspectConversation({ conversationId: id }), (error) => error.code === 'owned_by_other_harness' && error.details.harness === 'other' && !/Codex harness/.test(error.message));
+});
+
 test('inspect reports activity and an in-progress turn as busy', async () => {
   const { adapter, reader } = setup();
   let state = await adapter.inspectConversation({ conversationId: THREAD, deliveryKey: null });
@@ -170,3 +177,4 @@ test('a twin older than the most recent 100 threads is still found, and a listin
   reader.state.listComplete = false;
   await assert.rejects(adapter.prepareTurn(turn(), state), (error) => error.code === 'conversation_busy' && /could not all be checked/.test(error.message));
 });
+
