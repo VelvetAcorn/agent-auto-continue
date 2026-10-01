@@ -230,6 +230,17 @@ The full compatibility check opens one read-only connection and checks the repli
 Delivery is confirmed when a turn that started no earlier than five seconds before the send attempt contains a user message with exactly the scheduled text.
 A turn without a start time is never evidence, because it could be any earlier turn with the same text.
 Threads with originator `Codex Desktop`, and older top-level threads with no originator and source `vscode`, belong to this harness, and the Codex harness refuses them.
+
+Ownership stays strict when an app update renames that originator: threads with an unknown originator belong to no harness.
+The harness still notices the rename, so the update does not look like an empty thread list.
+An unknown originator counts as the app's only when two signals agree.
+First, the app's own process holds the writer lock of one of its threads.
+Second, one of its threads was created by the codex binary bundled with the app: every thread records the creating codex version as `cliVersion`, and the bundled app-server reports its version in its `initialize` reply.
+Either signal alone is not enough, because the app can open threads other Codex clients created, and another client could ship the same codex build.
+When no recognised thread is left, the thread list then fails with `app_version_unsupported` and contact point `originator`, for example "ChatGPT (Codex) 27.0.1 creates its threads as "ChatGPT Desktop", which this version of Agent Auto-Continue does not recognise yet, so its threads are not listed here until Agent Auto-Continue supports this version."
+Scheduling such a thread is refused with the same explanation.
+The full compatibility check reports the problem too, so the dashboard shows it while older recognised threads are still listed.
+The check proves the originator when a recognised thread was created by the app's current codex build, and leaves it unchecked otherwise.
 A lock holder that cannot be determined counts as busy.
 
 ## Not supported
@@ -263,6 +274,10 @@ Live evidence gathered on 2026-10-01, all read-only apart from inserting and cle
 - Setting and clearing the Claude Code message box through `AXValue`, in the foreground and in the background, with the send button tracking the text.
 - The dry run discovered 16 Claude Desktop Code sessions and 11 ChatGPT Codex threads, matching both apps' sidebars.
 - Locked-screen detection, and the collapsed Accessibility tree while locked.
+- The ChatGPT app's thread metadata, read through its bundled codex 0.155.0-alpha.9.2: of 80 listed threads, 11 had originator `Codex Desktop`, 54 `codex_exec` and 15 `t3code_desktop`, with none lacking an originator.
+- Desktop threads record the app's own codex builds as `cliVersion` (`0.153.4`, `0.154.0-alpha.6.2` and `0.155.0-alpha.9.2`, the newest equal to the bundled binary), while CLI and T3 Code threads record released CLI versions, and the version is fixed when a thread is created.
+- The app held eight writer locks, one on a top-level desktop thread and seven on its subagent threads.
+- The protocol probe, the originator check and an in-memory rename of the real desktop threads' originator, which was detected, found no false problem.
 
 Pressing send in a real app has not been exercised, because no message was sent to a real conversation.
 The owner should confirm one send per app in a throwaway conversation before relying on these harnesses.

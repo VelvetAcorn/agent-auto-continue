@@ -412,6 +412,8 @@ Threads with originator `Codex Desktop`, and older top-level threads with no ori
 Threads whose originator starts with `t3code` belong to T3 Code, which drives its own Codex process for them.
 The Codex CLI adapter claims only threads with originator `codex_cli_rs` or `codex_exec`, or with no originator and source `cli` or `exec`; any other originator, such as an IDE extension, is reported as `other`.
 Threads it does not own are not listed, and sending to one fails with `owned_by_other_harness`.
+An unknown originator is never claimed by either Codex adapter, even when an app update renamed the desktop app's originator; the Codex desktop harness reports that case as an app change instead (see [desktop-harnesses.md](desktop-harnesses.md#chatgpt-desktop-app-codex-threads-codex-desktop)).
+A JSON-RPC `Method not found` error never counts as a missing thread, so it cannot cancel a job.
 Listed threads show their source, so threads created by `codex exec` automation are recognisable.
 
 Codex serialises writers with a lock file per thread, and a second `thread/resume` fails with "already has an active writer".

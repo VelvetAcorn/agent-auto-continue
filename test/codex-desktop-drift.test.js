@@ -113,3 +113,87 @@ test('a JSON-RPC "Method not found" is a protocol change, never a missing thread
   assert.deepEqual([missing.code, missing.details.rpcCode, missing.details.method], ['unsupported_response_shape', -32601, 'thread/turns/list']);
   assert.equal(toHarnessError(new RpcError(-32600, `thread not found: ${THREAD}`)).code, 'conversation_not_found');
 });
+
+// A ChatGPT update that renames the originator its threads are created with.
+const APP_CODEX = '0.160.0-alpha.1';
+const RENAMED = 'ChatGPT Desktop';
+const NEW_THREAD = '01a0f500-0000-7000-8000-000000000001';
+function renamed({ threads, writers = new Map([[NEW_THREAD, { pid: 4242, owner: 'codex-desktop' }]]), version = APP_CODEX } = {}) {
+  const state = {
+    threads: threads || [
+      { id: NEW_THREAD, name: 'Plan the launch', originator: RENAMED, source: 'vscode', cliVersion: APP_CODEX, cwd: '/work/app', createdAt: 1790900000, updatedAt: 1790900100 },
+      { id: '01a0f500-0000-7000-8000-000000000002', name: 'Draft notes', originator: RENAMED, source: 'vscode', cliVersion: APP_CODEX, cwd: '/work/app', createdAt: 1790900200, updatedAt: 1790900300 },
+      { id: '01a0f499-0000-7000-8000-000000000003', name: 'Exec run', originator: 'codex_exec', source: 'exec', cliVersion: '0.159.0', cwd: '/work/app', createdAt: 1790800000, updatedAt: 1790800000 }
+    ],
+    writers, version, turns: new Map()
+  };
+  const reader = {
+    listThreads: async () => state.threads,
+    listAllThreads: async () => ({ threads: state.threads, complete: true }),
+    readThread: async (id) => state.threads.find((item) => item.id === id),
+    recentTurns: async (id) => state.turns.get(id) || [],
+    threadWriter: async (id) => state.writers?.get(id) || null,
+    threadWriters: async () => state.writers,
+    serverVersion: async () => state.version,
+    rateLimits: async () => null
+  };
+  const fake = createFakeDesktopAutomation({ bundleId: BUNDLE_ID, view: { title: 'Plan the launch', composerLabel: 'Do anything', sendLabel: 'Send' } });
+  fake.state.version = '27.0.1';
+  const adapter = createCodexDesktopHarness({ createReader: () => reader, automation: fake.automation, platform: 'darwin', isLocked: async () => false, sleep: async () => {}, codexPath: () => '/x/codex', exists: () => true });
+  return { adapter, fake, state };
+}
+const originatorDrift = (error) => {
+  assert.equal(error.code, 'app_version_unsupported');
+  assert.deepEqual([error.details.contactPoint, error.details.appVersion], ['originator', '27.0.1']);
+  assert.match(error.message, /^ChatGPT \(Codex\) 27\.0\.1 creates its threads as "ChatGPT Desktop", which this version of Agent Auto-Continue does not recognise yet/);
+  assert.match(error.details.hint, /2 recent threads with originator "ChatGPT Desktop" \(source vscode\)/);
+  return true;
+};
+
+test('an originator renamed by an app update is reported, not shown as an empty thread list', async () => {
+  const { adapter } = renamed();
+  await assert.rejects(adapter.listConversations({}), originatorDrift);
+});
+
+test('a thread created under the renamed originator is refused with the reason, and never claimed', async () => {
+  const { ownerOfThread } = require('../lib/harnesses/codex-reader');
+  const { adapter, state } = renamed();
+  await assert.rejects(adapter.inspectConversation({ conversationId: NEW_THREAD }), (error) => originatorDrift(error) && /cannot schedule this thread yet/.test(error.message));
+  // Neither Codex harness claims it: ownership stays strict.
+  assert.equal(ownerOfThread(state.threads[0]), 'other');
+});
+
+test('the compatibility check reports the renamed originator, and proves the known one', async () => {
+  const drifted = renamed();
+  let result = await drifted.adapter.checkCompatibility();
+  assert.deepEqual(result.problems.map((item) => item.contactPoint), ['originator']);
+  assert.match(result.problems[0].message, /^ChatGPT \(Codex\) 27\.0\.1 creates its threads as "ChatGPT Desktop", which this version of Agent Auto-Continue does not recognise yet/);
+  assert.deepEqual(writes(drifted.fake), []);
+  const healthy = renamed({ threads: [{ id: NEW_THREAD, name: 'Plan the launch', originator: 'Codex Desktop', source: 'vscode', cliVersion: APP_CODEX, cwd: '/w', createdAt: 1, updatedAt: 2 }] });
+  result = await healthy.adapter.checkCompatibility();
+  assert.ok(result.checked.includes('originator'));
+  const stale = renamed({ threads: [{ id: NEW_THREAD, name: 'Plan the launch', originator: 'Codex Desktop', source: 'vscode', cliVersion: '0.150.0', cwd: '/w', createdAt: 1, updatedAt: 2 }] });
+  result = await stale.adapter.checkCompatibility();
+  assert.equal(result.unchecked.find((item) => item.contactPoint === 'originator')?.reason, 'no_recent_threads', 'No thread made by this build proves nothing either way');
+});
+
+test('one signal alone is not drift: other Codex apps keep their own threads', async () => {
+  // The ChatGPT app opened a thread another Codex client created: it holds the lock, but another build made it.
+  const opened = renamed({ threads: [{ id: NEW_THREAD, name: 'IDE thread', originator: 'codex_vscode', source: 'vscode', cliVersion: '0.158.0', cwd: '/w', createdAt: 1, updatedAt: 2 }] });
+  assert.deepEqual(await opened.adapter.listConversations({}), []);
+  await assert.rejects(opened.adapter.inspectConversation({ conversationId: NEW_THREAD }), (error) => error.code === 'owned_by_other_harness' && error.details.harness === 'other');
+  assert.equal((await opened.adapter.checkCompatibility()).problems.length, 0);
+  // Another client that ships the same codex build, with no lock held by the app.
+  const sameBuild = renamed({ writers: new Map() });
+  assert.deepEqual(await sameBuild.adapter.listConversations({}), []);
+  // Lock holders that cannot be read, or a server version that cannot be, detect nothing.
+  assert.deepEqual(await renamed({ writers: null }).adapter.listConversations({}), []);
+  assert.deepEqual(await renamed({ version: null }).adapter.listConversations({}), []);
+});
+
+test('with recognised threads too, they stay listed and the check carries the warning', async () => {
+  const { adapter, state } = renamed();
+  state.threads.push({ id: THREAD, name: NAME, originator: 'Codex Desktop', source: 'vscode', cliVersion: '0.155.0-alpha.9.2', cwd: '/work/app', createdAt: 1790806000, updatedAt: 1790806722 });
+  assert.deepEqual((await adapter.listConversations({})).map((item) => item.id), [THREAD]);
+  assert.deepEqual((await adapter.checkCompatibility()).problems.map((item) => item.contactPoint), ['originator']);
+});
