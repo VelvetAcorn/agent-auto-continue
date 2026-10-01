@@ -124,3 +124,20 @@ test('without the app the harness reports it as not installed', async () => {
   const adapter = createCodexDesktopHarness({ createReader: reader.createReader, platform: 'darwin', codexPath: () => null });
   await assert.rejects(adapter.listConversations({}), (error) => error.code === 'harness_not_installed');
 });
+
+test('a turn without a start time is never delivery evidence, even with the same text', async () => {
+  const { adapter, reader } = setup();
+  // The protocol allows startedAt to be null, for example for turns rebuilt from older rollouts.
+  reader.state.turns.get(THREAD).push({ id: 'turn-old', status: 'completed', startedAt: null, items: [{ type: 'userMessage', content: [{ type: 'text', text: 'Continue' }] }] });
+  assert.equal((await adapter.findDelivery(turn())).delivered, false, 'An undated earlier "Continue" is not this delivery');
+  assert.equal((await adapter.inspectConversation(turn())).delivered, false);
+  assert.equal((await adapter.findDelivery(turn({ dispatchAttemptedAt: 'not a time' }))).delivered, false, 'Without a valid send time nothing can be confirmed');
+});
+
+test('an undated earlier turn with the same text does not make an unproven send look delivered', async () => {
+  const { adapter, fake, reader } = setup();
+  reader.state.turns.get(THREAD).push({ id: 'turn-old', status: 'completed', startedAt: null, items: [{ type: 'userMessage', content: [{ type: 'text', text: 'Continue' }] }] });
+  // The press is reported, but the app never records the message.
+  fake.state.faults.submit = () => ({ ok: true, pressed: true });
+  await assert.rejects(adapter.submitTurn(turn(), { threadId: THREAD, name: 'Update live Ko-fi account' }), (error) => error.code === 'timeout' && error.deliveryUncertain === true);
+});
