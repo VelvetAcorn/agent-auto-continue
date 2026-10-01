@@ -459,7 +459,8 @@ test('harness error codes: approval_required pauses for the user, agent and proc
   const stopped = owned.service.present(job(owned, o.id));
   assert.equal(stopped.automation.state, 'stopped');
   assert.equal(stopped.automation.reasonCode, 'owned_by_other_harness');
-  assert.match(stopped.automation.reason, /belongs to claude-desktop/);
+  assert.match(stopped.automation.reason, /Claude Desktop owns this session/, 'An owner that is not a harness here is described in the adapter\'s words');
+  assert.doesNotMatch(stopped.automation.reason, /claude-desktop/);
   assert.equal(stopped.deliveryStatus, 'failed');
   assert.equal(stopped.canResume, false);
   await owned.advance(HOUR);
@@ -927,5 +928,90 @@ test('the wait reason follows the latest cause: a busy retry after a locked send
     await h.service.retryAfterUnlock();
     assert.equal(h.fake.state.calls.filter(([name]) => name === 'inspectConversation').length, inspections, busy);
     assert.equal(h.fake.state.submitted.length, 0);
+  }
+});
+
+test('awaiting input pauses a chain before sending, once, whether the inspection reports it or the harness refuses with awaiting_input', async () => {
+  // Inspection: the chain's own check handles it, so the one-off refusal never also fails the job.
+  const inspected = setup();
+  const a = await create(inspected, { turnLimit: 3 });
+  inspected.fake.state.conversations.get('conv').awaitingInput = true;
+  await inspected.advance(5_000);
+  const paused = inspected.service.present(job(inspected, a.id));
+  assert.equal(paused.status, 'pending');
+  assert.equal(paused.error ?? null, null);
+  assert.equal(paused.automation.state, 'paused');
+  assert.equal(paused.automation.reasonCode, 'awaiting_input');
+  assert.equal(paused.automation.sentTurns, 0);
+  assert.deepEqual(inspected.notifications.map(([title]) => title), ['Continuation paused']);
+  // A busy conversation is checked again, never refused as a failure.
+  inspected.fake.state.conversations.get('conv').awaitingInput = false;
+  inspected.fake.state.conversations.get('conv').busy = true;
+  inspected.service.resumeChain(a.id);
+  await inspected.advance(5_000);
+  assert.equal(job(inspected, a.id).status, 'pending');
+  assert.equal(job(inspected, a.id).error ?? null, null);
+  assert.equal(job(inspected, a.id).chain.state, 'active');
+
+  // The harness itself refuses with awaiting_input, before or at submit.
+  for (const stage of ['prepareError', 'submitError']) {
+    const h = setup();
+    const created = await create(h, { continuous: true });
+    h.fake.state[stage] = new HarnessError('awaiting_input', 'The agent is waiting for your answer.');
+    await h.advance(5_000);
+    const refused = h.service.present(job(h, created.id));
+    assert.equal(refused.status, 'pending', stage);
+    assert.equal(refused.dispatchAttemptedAt, null);
+    assert.equal(refused.automation.state, 'paused');
+    assert.equal(refused.automation.reasonCode, 'awaiting_input');
+    assert.equal(refused.automation.sentTurns, 0);
+    assert.equal(refused.canResume, true);
+    h.fake.state[stage] = null;
+    h.service.resumeChain(created.id);
+    await h.advance(5_000);
+    assert.equal(h.fake.state.submitted.length, 1, stage);
+    assert.equal(job(h, created.id).messageId, created.messageId, 'The unsent turn keeps its IDs');
+  }
+});
+
+test('a turn still running after 24 hours stops being tracked and pauses the chain with a clear reason', async () => {
+  const h = setup();
+  h.fake.state.completion = null;
+  const created = await create(h, { continuous: true });
+  await h.advance(5_000);
+  h.fake.state.turn = { state: 'running' };
+  await h.advance(23 * HOUR);
+  await h.service.pollTurns();
+  assert.equal(job(h, created.id).chain.state, 'active');
+  await h.advance(HOUR + MIN);
+  await h.service.pollTurns();
+  const paused = h.service.present(job(h, created.id));
+  assert.equal(paused.automation.state, 'paused');
+  assert.equal(paused.automation.reasonCode, 'tracking_expired');
+  assert.match(paused.automation.reason, /still running after 24 hours/);
+  assert.equal(paused.automation.turns[0].error.code, 'tracking_expired');
+  assert.equal(paused.needsAttention, true);
+  assert.deepEqual(h.service.activeWork(), [], 'Keep-awake is released');
+  await h.advance(HOUR);
+  assert.equal(h.fake.state.submitted.length, 1);
+  // Resuming moves on to the next turn without resending.
+  h.service.resumeChain(created.id);
+  await h.advance(5_000);
+  assert.equal(h.fake.state.submitted.length, 2);
+  assert.equal(job(h, created.id).chain.previousTurns, 1);
+});
+
+test('a conversation owned by another registered harness names it; Codex owners outside this build use the adapter message', async () => {
+  for (const [owner, message, expected] of [['t3', 'This thread belongs to T3 Code. Schedule it with that harness instead.', /belongs to T3 Code, so it cannot be continued through Fake Agent\. Schedule it from T3 Code instead/],
+    ['other', 'This thread belongs to another Codex app. Schedule it with that harness instead.', /belongs to another Codex app/]]) {
+    const h = setup();
+    h.service.harnesses = createHarnessRegistry([h.service.adapterFor({ harness: 'fake' }), createT3Harness({ api: {} })]);
+    const created = await create(h, { continuous: true });
+    h.fake.state.prepareError = new HarnessError('owned_by_other_harness', message, { harness: owner });
+    await h.advance(5_000);
+    const stopped = h.service.present(job(h, created.id));
+    assert.equal(stopped.automation.reasonCode, 'owned_by_other_harness');
+    assert.match(stopped.automation.reason, expected, owner);
+    assert.doesNotMatch(stopped.automation.reason, /belongs to other\b|from other\b/);
   }
 });

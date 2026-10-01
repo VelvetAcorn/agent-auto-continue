@@ -69,9 +69,11 @@ The transition from a finished turn to the next pending turn is a single persist
 | Three usage-limited turns in a row | The chain pauses (`repeated_limits`) |
 | Three completed turns in a row that each took under a minute | The chain pauses (`no_progress`), because the task may already be done |
 | `interrupted` with error code `approval_required` | The chain pauses (`awaiting_input`) |
+| Still `running` 24 hours after it was sent (`unknown` with error code `tracking_expired`) | The chain pauses (`tracking_expired`) and stops keeping the Mac awake; resuming moves on to the next turn |
 | `failed` (including `agent_error` and `process_failed`), `interrupted` or `unknown` | The chain pauses; nothing further is sent |
 
 When the limit is reached, the chain finishes even if the last turn did not end normally, and the reason says so.
+The 24-hour tracking limit bounds how long any one turn can keep a chain active: a harness that keeps reporting `running`, such as T3 Code, which has no turn deadline of its own, cannot hold the chain or keep-awake forever.
 
 ## Before each send
 
@@ -89,17 +91,18 @@ Harnesses that cannot report usage limits, such as T3 Code, skip this read; a tu
 | `unavailable` with reason `screen_locked` | Check again every minute, and at once when the Mac is unlocked |
 
 The job service then inspects the conversation, as for every schedule.
-For a chain, the following hold the turn back without counting it:
+For a chain, the following hold the turn back without counting it.
+A plain schedule instead fails without sending when the conversation is busy or awaiting input; a chain handles both itself and is never also failed by that check.
 
 | Conversation state or send error | Result |
 | --- | --- |
 | Archived, or `conversation_not_found` | The chain stops |
 | User activity since the previous turn was sent | The chain pauses (`user_activity`) with the turn still unsent |
-| `awaitingInput: true` | The chain pauses (`awaiting_input`) with the turn still unsent |
+| `awaitingInput: true`, or a certain `awaiting_input` error | The chain pauses (`awaiting_input`) with the turn still unsent |
 | `busy: true`, or a certain `conversation_busy` error | The same unsent turn is checked again with the backoff above, shown as Waiting for the agent to finish |
 | A certain `screen_locked` error | The same unsent turn is checked again in a minute |
 | A certain `usage_limited` error, except on a timed first turn | The same unsent turn waits until the error's `resetsAt` plus the safety buffer, or backs off as above |
-| `owned_by_other_harness` | The chain stops and names the owning harness |
+| `owned_by_other_harness` | The chain stops; it names the owning harness when that harness is in this app, and otherwise uses the adapter's own description of the owner |
 | Any other certain failure | The job fails and the chain pauses (`send_failed`) |
 | Uncertain delivery | The job becomes unconfirmed and the chain pauses (`delivery_unconfirmed`) |
 
@@ -144,7 +147,7 @@ At startup, `recover()` sends nothing:
 
 | Stored state | Result |
 | --- | --- |
-| `dispatching` without `dispatchAttemptedAt` | Nothing was submitted, so the turn returns to `pending`, or is canceled if the chain was stopped |
+| `dispatching` without `dispatchAttemptedAt` | Nothing was submitted, so the turn returns to `pending` and is checked again, or is canceled if the chain was stopped; plain schedules follow the same rule |
 | `dispatching` with `dispatchAttemptedAt` | Unconfirmed, and the chain pauses |
 | A finished turn whose follow-up was not written | The follow-up is computed now |
 | A delivered turn with no tracked outcome | The chain pauses (`turn_unknown`) |
