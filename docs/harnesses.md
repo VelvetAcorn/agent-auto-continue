@@ -238,8 +238,13 @@ The on-disk and protocol details below are internal to each tool unless stated o
 The adapter uses T3 Code's loopback orchestration API as before; see [the implementation reference](implementation-review.md#local-api-contract).
 Delivery evidence is the `{sequence}` acceptance response or the stable message ID in the thread.
 `awaitingInput` follows T3 Code 0.0.40's own open-request accounting of `approval.*` and `user-input.*` activities.
-T3 Code exposes `latestTurn` state, but associating it with a scheduled message has not been verified, so completion is not reported.
-T3 Code does not expose provider usage limits.
+Completion was derived from the T3 Code 0.0.40 server sources and has not yet been observed against a live T3 Code turn.
+The thread's `latestTurn.requestedAt` is the `createdAt` of the `thread.turn.start` command that started it, so the adapter records that time as the turn key and maps `latestTurn.state` to the turn outcome.
+A `provider.turn.start.failed` activity whose `payload.requestId` is the message ID means the turn failed to start.
+A failed turn reports a usage limit when the session's `lastError` reads as one, with its reset time when the text states one.
+When a later turn has replaced the scheduled one, or the turn has not started within 15 minutes, the outcome is `unknown`.
+Turns confirmed through reconciliation have no recorded command time, so their outcome is `unknown`.
+T3 Code does not expose account-level usage limits, so availability is not reported.
 
 ### OpenCode (`opencode`)
 

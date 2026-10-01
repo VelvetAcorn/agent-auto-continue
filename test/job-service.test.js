@@ -112,7 +112,10 @@ test('crash recovery reconciles message presence without any new POST', async ()
   h.setThread({ ...thread(), messages: [{ id: 'message', role: 'user', createdAt: iso(0) }] });
   await h.service.reconcile('job');
   assert.equal(h.service.get('job').status, 'sent');
-  assert.equal(h.service.get('job').turn, undefined);
+  // The reconciled turn cannot be matched to a T3 turn, so the first poll closes it as unknown.
+  assert.equal(h.service.get('job').turn.state, 'running');
+  await h.service.pollTurns();
+  assert.equal(h.service.get('job').turn.state, 'unknown');
   assert.deepEqual(h.service.activeWork(), []);
   assert.equal(h.calls, 0);
 });

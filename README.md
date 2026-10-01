@@ -27,7 +27,7 @@ The existing package name and macOS app identity are retained to preserve compat
 ## What it does
 
 - Lets you choose an agent harness, then lists its conversations by most recent update with relative and exact times, hiding settled T3 Code threads by default with a Show settled option.
-- Shows which harness each schedule targets, and for Claude Code, Codex and OpenCode, whether the agent's turn finished.
+- Shows which harness each schedule targets and whether the agent's turn finished.
 - Skips a schedule without sending when the harness reports a usage limit that has not reset yet.
 - Shows upcoming schedules and local delivery history, including failed, canceled and unconfirmed outcomes.
 - Schedules a message for a chosen thread, with `+5 min`, `+30 min`, `+1 hour`, and tomorrow shortcuts.

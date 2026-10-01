@@ -5,7 +5,7 @@ const { CAPABILITIES, availability, conversationState, defineHarness, describeHa
 const { HarnessError, redact, toErrorInfo } = require('../lib/harnesses/errors');
 const { createHarnessRegistry } = require('../lib/harnesses/registry');
 const { applyHarnessSettingsInput, normaliseHarnessSettings, publicHarnessSettings, resolveHarnessSettings } = require('../lib/harnesses/settings');
-const { awaitingInput, createT3Harness } = require('../lib/harnesses/t3');
+const { awaitingInput, createT3Harness, turnOutcomeFor } = require('../lib/harnesses/t3');
 const { JobService, migrateJobs } = require('../lib/job-service');
 const { createFakeHarness } = require('../tools/fake-harness.cjs');
 
@@ -53,7 +53,7 @@ test('T3 adapter capabilities describe the existing local API behaviour', () => 
   const t3 = createT3Harness({ api: {} });
   assert.equal(t3.capabilities.requiresUnlockedScreen, false);
   assert.equal(t3.capabilities.canConfirmDelivery, true);
-  assert.equal(t3.capabilities.canDetectCompletion, false);
+  assert.equal(t3.capabilities.canDetectCompletion, true);
   assert.equal(t3.capabilities.canDetectUsageLimit, false);
 });
 
@@ -307,3 +307,48 @@ test('reconciliation restores turn tracking after interrupted dispatch recovery'
   await restored.service.pollTurns();
   assert.deepEqual(restored.service.activeWork(), []);
 });
+
+test('T3 turn outcomes follow the turn its command started', () => {
+  const requested = '2026-10-01T10:00:00.000Z';
+  const turn = { conversationId: 'thread', deliveryKey: 'message', turnId: `requested:${requested}` };
+  const now = Date.parse('2026-10-01T10:05:00Z');
+  const latest = (state, extra = {}) => ({ latestTurn: { turnId: 't-1', state, requestedAt: requested, startedAt: requested, completedAt: state === 'running' ? null : '2026-10-01T10:04:00.000Z' }, ...extra });
+  assert.equal(turnOutcomeFor(latest('running'), turn, now).state, 'running');
+  assert.deepEqual([turnOutcomeFor(latest('completed'), turn, now).state, turnOutcomeFor(latest('completed'), turn, now).completedAt], ['completed', '2026-10-01T10:04:00.000Z']);
+  assert.equal(turnOutcomeFor(latest('interrupted'), turn, now).state, 'interrupted');
+  const limited = turnOutcomeFor(latest('error', { session: { status: 'error', lastError: "You've hit your usage limit · resets 3pm (UTC)" } }), turn, now);
+  assert.equal(limited.state, 'failed');
+  assert.equal(limited.error.code, 'usage_limited');
+  assert.equal(limited.usageLimit.resetsAt, '2026-10-01T15:00:00.000Z');
+  assert.equal(turnOutcomeFor(latest('error', { session: { lastError: 'Provider crashed' } }), turn, now).error.code, 'agent_error');
+  const failedStart = turnOutcomeFor({ latestTurn: null, activities: [{ kind: 'provider.turn.start.failed', summary: 'Provider turn start failed', payload: { requestId: 'message', detail: 'Codex is not signed in' } }] }, turn, now);
+  assert.equal(failedStart.state, 'failed');
+  assert.match(failedStart.error.message, /not signed in/);
+  assert.equal(turnOutcomeFor({ latestTurn: { state: 'completed', requestedAt: '2026-10-01T10:02:00.000Z' } }, turn, now).state, 'unknown', 'A later turn hides this turn result');
+  assert.equal(turnOutcomeFor({ latestTurn: { state: 'completed', requestedAt: '2026-10-01T09:00:00.000Z' } }, turn, now).state, 'running', 'Queued behind an earlier turn');
+  assert.equal(turnOutcomeFor({ latestTurn: null }, turn, Date.parse('2026-10-01T11:00:00Z')).state, 'unknown', 'A turn that never starts stops being tracked');
+  assert.equal(turnOutcomeFor(latest('running'), { ...turn, turnId: null }, now).state, 'unknown');
+});
+
+test('a T3 job records the turn its command starts and reports completion', async () => {
+  let thread = { id: 'thread', title: 'T3 thread', projectId: 'p', messages: [], modelSelection: { model: 'm', instanceId: 'i' }, runtimeMode: 'full-access', interactionMode: 'default', latestTurn: null };
+  const commands = [];
+  const api = { fetchThread: async () => thread, fetchSnapshot: async () => ({ threads: [thread], projects: [] }), dispatch: async (command) => { commands.push(command); return { sequence: 1 }; } };
+  let clock = Date.now() + 60_000;
+  const service = new JobService({ harnesses: createHarnessRegistry([createT3Harness({ api, now: () => clock })]), now: () => clock, persist: () => {}, scheduleTimer: () => ({ cancel() {} }) });
+  const job = await service.create({ harness: 't3', threadId: 'thread', message: 'Continue', whenISO: new Date(clock + 60_000).toISOString(), timeZone: 'UTC' });
+  clock += 120_000;
+  await service.run(job.id);
+  const sent = service.get(job.id);
+  assert.equal(sent.status, 'sent');
+  assert.equal(sent.turn.turnId, `requested:${commands[0].createdAt}`);
+  thread = { ...thread, latestTurn: { turnId: 'turn-9', state: 'running', requestedAt: commands[0].createdAt, startedAt: commands[0].createdAt, completedAt: null } };
+  await service.pollTurns();
+  assert.equal(service.get(job.id).turn.state, 'running');
+  assert.equal(service.activeWork()[0].phase, 'running');
+  thread = { ...thread, latestTurn: { ...thread.latestTurn, state: 'completed', completedAt: new Date(clock).toISOString() } };
+  await service.pollTurns();
+  assert.equal(service.get(job.id).turn.state, 'completed');
+  assert.deepEqual(service.activeWork(), []);
+});
+
