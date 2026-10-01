@@ -15,5 +15,5 @@ config.json
 jobs.json
 remote-control.json
 
-# Compiled legacy Swift helpers
-.build/
+# Local working notes that are not part of the public repository
+docs/internal/

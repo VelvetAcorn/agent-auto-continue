@@ -59,7 +59,7 @@ function readJson(file, fallback) {
     return JSON.parse(fs.readFileSync(file, 'utf8'));
   } catch (error) {
     if (error.code === 'ENOENT') return fallback;
-    throw new Error(`The local ${path.basename(file)} file could not be read. Restore or repair it before restarting. Existing data has not been changed.`);
+    throw new Error(`The local ${path.basename(file)} file could not be read. Restore or repair it before restarting. Existing data has not been changed.`, { cause: error });
   }
 }
 
@@ -317,7 +317,7 @@ function trayJobItem(job) {
 async function rebuildMenu() {
   if (!tray) return;
   const revision = ++menuRevision;
-  let threadItems = [];
+  let threadItems;
   let connectionLabel = `T3 Code on port ${config.httpPort}`;
   try {
     const threads = await activeThreads();

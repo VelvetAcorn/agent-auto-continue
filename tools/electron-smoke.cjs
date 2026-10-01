@@ -7,7 +7,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { execFileSync } = require('node:child_process');
 const electron = require('electron');
-const { app, BrowserWindow } = electron;
+const { app } = electron;
 // Chromium storage is isolated too; even theme/localStorage cannot touch user state.
 const profile = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 't3-scheduler-smoke-'));
 app.setPath('userData', profile);

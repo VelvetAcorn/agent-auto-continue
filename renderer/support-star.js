@@ -44,7 +44,6 @@
       if (!best || size > best.size + 1e-9 || tie && (lines.length < best.lines.length || lines.length === best.lines.length && room > best.room)) best = { lines, size, room };
     }
     return { lines: best.lines, size: best.size };
-    return best;
   }
 
   // The sticker's motion is a sequence of analytic segments, each starting from the exact angle and velocity of
