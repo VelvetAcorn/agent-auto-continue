@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const { JobService, migrateJobs } = require('../lib/job-service');
 const { createHarnessRegistry } = require('../lib/harnesses/registry');
 const { createT3Harness } = require('../lib/harnesses/t3');
-const { HarnessError } = require('../lib/harnesses/errors');
+const { HarnessError, appVersionUnsupported } = require('../lib/harnesses/errors');
 const continuation = require('../lib/continuation');
 const { createFakeHarness } = require('../tools/fake-harness.cjs');
 
@@ -16,7 +16,7 @@ const HOUR = 60 * MIN;
 const settle = async () => { for (let i = 0; i < 6; i++) await new Promise((resolve) => setImmediate(resolve)); };
 
 // A service over one fake harness whose clock only moves when the test says so.
-function setup({ capabilities, jobs = [], conversation = {} } = {}) {
+function setup({ capabilities, jobs = [], conversation = {}, serviceOptions = {} } = {}) {
   const fake = createFakeHarness({ capabilities, conversations: [{ id: 'conv', title: 'Refactor', projectName: 'repo', ...conversation }] });
   let clock = start;
   let stored;
@@ -25,7 +25,7 @@ function setup({ capabilities, jobs = [], conversation = {} } = {}) {
   fake.state.completion = () => new Promise((resolve) => finishers.push(resolve));
   const make = (initial) => new JobService({ jobs: initial, harnesses: createHarnessRegistry([fake.adapter]), now: () => clock,
     persist: (value) => { stored = JSON.parse(JSON.stringify(value)); }, notify: (...args) => notifications.push(args),
-    scheduleTimer: (date, callback) => { const timer = { date, callback, canceled: false, fired: false, cancel() { this.canceled = true; } }; timers.push(timer); return timer; } });
+    scheduleTimer: (date, callback) => { const timer = { date, callback, canceled: false, fired: false, cancel() { this.canceled = true; } }; timers.push(timer); return timer; }, ...serviceOptions });
   const h = {
     fake, timers, notifications, finishers, service: make(jobs),
     get stored() { return stored; },
@@ -1014,4 +1014,82 @@ test('a conversation owned by another registered harness names it; Codex owners 
     assert.match(stopped.automation.reason, expected, owner);
     assert.doesNotMatch(stopped.automation.reason, /belongs to other\b|from other\b/);
   }
+});
+
+// Desktop app drift (#13) meets continuations (#14): app_version_unsupported is a certain
+// non-delivery that only an app or Agent Auto-Continue update fixes, so retrying never helps.
+const drift = (contactPoint = 'app_server') => appVersionUnsupported({ app: 'Fake Agent', appVersion: '2.0', verifiedVersion: '1.0', contactPoint, during: 'read' });
+
+test('a desktop app change found while checking availability pauses the chain with the drift error instead of retrying', async () => {
+  const events = [];
+  const h = setup({ serviceOptions: { observe: (event) => events.push(event) } });
+  h.fake.state.availabilityError = drift();
+  const created = await create(h, { continuous: true });
+  await h.advance(5_000);
+  const paused = job(h, created.id);
+  assert.equal(paused.chain.state, 'paused');
+  assert.equal(paused.chain.reasonCode, 'app_version_unsupported');
+  assert.match(paused.chain.reason, /Fake Agent 2\.0 changed how its built-in Codex server answers/);
+  assert.equal(paused.status, 'failed');
+  assert.equal(paused.error.code, 'app_version_unsupported');
+  assert.equal(paused.error.details.contactPoint, 'app_server');
+  assert.equal(h.service.present(paused).displayStatus, 'failed');
+  assert.equal(h.armedTimers().length, 0, 'nothing checks again on its own');
+  assert.equal(h.fake.state.submitted.length, 0);
+  assert.equal(h.service.activeWork().length, 0, 'keep-awake stops tracking it');
+  assert.deepEqual(events.map((event) => [event.jobId, event.status, event.error?.details?.contactPoint]), [[created.id, 'scheduled', undefined], [created.id, 'failed', 'app_server']]);
+  assert.deepEqual(h.notifications.at(-1)[0], 'App version not supported yet');
+});
+
+test('a desktop app change refused before sending pauses the chain with its own reason code', async () => {
+  const h = setup();
+  h.fake.state.prepareError = drift('composer_label');
+  const created = await create(h, { turnLimit: 3 });
+  await h.advance(5_000);
+  const paused = job(h, created.id);
+  assert.deepEqual([paused.status, paused.chain.state, paused.chain.reasonCode], ['failed', 'paused', 'app_version_unsupported']);
+  assert.match(paused.chain.reason, /^The message was not sent: Fake Agent 2\.0 changed how its message box is labelled/);
+  assert.match(paused.chain.reason, /Resume once/);
+  assert.equal(h.fake.state.submitted.length, 0);
+});
+
+test('a desktop app change that stops turn tracking pauses the chain at once instead of following the turn for 24 hours', async () => {
+  const events = [];
+  const h = setup({ serviceOptions: { observe: (event) => events.push(event) } });
+  h.fake.state.completion = null;
+  const created = await create(h, { continuous: true });
+  await h.advance(5_000);
+  assert.equal(job(h, created.id).turn.state, 'running');
+  h.fake.state.turnError = drift();
+  await h.service.pollTurns();
+  const paused = job(h, created.id);
+  assert.equal(paused.chain.state, 'paused');
+  assert.equal(paused.chain.reasonCode, 'app_version_unsupported');
+  assert.match(paused.chain.reason, /changed how its built-in Codex server answers[\s\S]*no further message was sent/);
+  assert.equal(paused.turn.state, 'unknown');
+  assert.equal(paused.turn.error.code, 'app_version_unsupported');
+  assert.equal(h.service.activeWork().length, 0, 'keep-awake stops tracking the unreadable turn');
+  assert.deepEqual(events.at(-1).error.details.contactPoint, 'app_server', 'the monitor hears about it');
+  assert.equal(h.fake.state.submitted.length, 1);
+  // A transient failure to read a turn is still retried on the next poll.
+  const other = setup();
+  other.fake.state.completion = null;
+  const second = await create(other, { continuous: true });
+  await other.advance(5_000);
+  other.fake.state.turnError = new HarnessError('agent_unavailable', 'Fake Agent is not running.');
+  await other.service.pollTurns();
+  assert.equal(job(other, second.id).turn.state, 'running');
+});
+
+test('a running continuation for a harness with an app problem is shown at risk, like a pending schedule', async () => {
+  let risky = null;
+  const h = setup({ serviceOptions: { riskFor: () => risky } });
+  h.fake.state.completion = null;
+  const created = await create(h, { continuous: true });
+  await h.advance(5_000);
+  assert.equal(h.service.present(job(h, created.id)).displayStatus, 'running');
+  risky = { appVersion: '2.0', contactPoints: ['composer_label'], message: 'Fake Agent 2.0 changed how its message box is labelled.' };
+  assert.equal(h.service.present(job(h, created.id)).risk.message, risky.message, 'its next turn is at risk');
+  h.service.stop(created.id);
+  assert.equal(h.service.present(job(h, created.id)).risk, null, 'a stopped chain sends nothing more');
 });

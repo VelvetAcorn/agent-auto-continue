@@ -24,7 +24,7 @@ async function remoteWithRuns(t, options = {}) {
 
 test('continuations can be started, listed, stopped, stopped all and resumed over REST', async (t) => {
   const f = await remoteWithRuns(t, { jobs: { version: 4, jobs: [paused('paused-run'), paused('uncertain-run', { status: 'unconfirmed', deliveryCertainty: 'unknown', dispatchAttemptedAt: '2026-10-01T08:00:05.000Z' })] } });
-  assert.deepEqual((await f.request('GET', '/v1/status')).body.capabilities, { keepAwake: false, continuousRuns: true });
+  assert.deepEqual((await f.request('GET', '/v1/status')).body.capabilities, { keepAwake: false, continuousRuns: true, compatibility: false });
 
   // T3 Code reports turn completion, so it can run several turns, but it cannot start when available.
   const continuous = await f.request('POST', '/v1/jobs', { body: { threadId: 'thread-a', delayMinutes: 30, continuous: true, idempotencyKey: 'night-run' } });

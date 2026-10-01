@@ -228,7 +228,7 @@ async function remoteJourney(js, click, fill) {
   assert.equal((await mcp.callTool({ name: 'cancel_job', arguments: { id: job.id } })).structuredContent.job.status, 'canceled');
   // The production harness registry, continuation runs and keep-awake status are wired into remote control.
   assert.deepEqual((await (await call('GET', '/v1/harnesses')).json()).harnesses.map(item => item.id), ['t3', 'fake', 'desk']);
-  assert.deepEqual((await (await call('GET', '/v1/status')).json()).capabilities, { keepAwake: true, continuousRuns: true });
+  assert.deepEqual((await (await call('GET', '/v1/status')).json()).capabilities, { keepAwake: true, continuousRuns: true, compatibility: true });
   const started = await call('POST', '/v1/jobs', { harness: 'fake', threadId: 'conv-fake', message: 'Remote continuation', delayMinutes: 120, continuous: true });
   assert.equal(started.status, 201);
   const run = (await started.json()).job;
@@ -734,6 +734,40 @@ async function compatibilityJourney(js) {
   await click('[data-action="cancel"]');
   await click('[data-action="confirm-cancel"]');
   await waitFor(() => js(`window.autoContinue.getJob(${JSON.stringify(job.id)}).then(item=>item.status==='canceled')`), 'desktop schedule canceled');
+  // A continuation for the same app is at risk as well, and its detail explains what happens to the next turn.
+  desk.state.compatibility = ({ depth }) => depth === 'quick' ? supported : { ...supported, appVersion: '2.17.0', checked: ['app_path'], problems: [{ contactPoint: 'composer_label', message: 'Claude Desktop 2.17.0 changed how its message box is labelled. Scheduled messages for it may fail until Agent Auto-Continue supports this version.', hint: 'No text area labelled "Prompt".' }] };
+  const chain = await js(`window.autoContinue.createSchedule({ harness: 'desk', threadId: 'local_fixture', message: 'Keep going', whenISO: '2099-10-03T09:30:00Z', timeZone: 'UTC', turnLimit: 3 })`);
+  await click('[data-nav="upcoming"]');
+  await heading('Upcoming');
+  await click(`[data-job="${chain.id}"]`);
+  await waitFor(() => js(`document.querySelector('.risk-detail h3')?.textContent === 'The next turn may not be sent'`), 'continuation risk shown in the detail');
+  assert.equal(await js(`document.querySelector('.detail-header .pill.risk')?.textContent`), 'At risk');
+  assert.match(await js(`document.querySelector('.risk-detail').textContent`), /nothing is sent and it pauses/);
+  await js(`document.querySelector('.risk-detail').scrollIntoView({block:'center'}); document.querySelector('#toast').hidden = true`);
+  await capture('compatibility-continuation-dark');
+  await click('[data-action="theme"]');
+  await waitFor(() => js(`!document.body.classList.contains('dark')`), 'light theme');
+  await js(`document.querySelector('.risk-detail').scrollIntoView({block:'center'})`);
+  await capture('compatibility-continuation-light');
+  // Settings names the checks and shows each desktop app's last result.
+  await click('[data-nav="settings"]');
+  await waitFor(() => js(`Boolean(document.querySelector('#harness-form'))`), 'agent settings');
+  assert.match(await js(`document.querySelector('#harness-form').closest('.card').textContent`), /Desktop apps are checked read-only[\s\S]*Version 2\.17\.0 · Not supported yet · checked/);
+  await js(`document.querySelector('#harness-form').closest('.card').scrollIntoView({block:'start'}); document.querySelector('#toast').hidden = true`);
+  await capture('compatibility-settings-light');
+  await click('[data-action="theme"]');
+  await waitFor(() => js(`document.body.classList.contains('dark')`), 'dark theme');
+  await js(`document.querySelector('#harness-form').closest('.card').scrollIntoView({block:'start'})`);
+  await capture('compatibility-settings-dark');
+  await click('[data-nav="upcoming"]');
+  await heading('Upcoming');
+  await click(`[data-job="${chain.id}"]`);
+  await waitFor(() => js(`Boolean(document.querySelector('.risk-detail'))`), 'continuation detail again');
+  desk.state.compatibility = supported;
+  await click('#notices [data-action="recheck-compatibility"]');
+  await waitFor(() => js(`!document.querySelector('.risk-detail')`), 'continuation risk cleared');
+  await click('[data-action="stop"]');
+  await waitFor(() => js(`window.autoContinue.getJob(${JSON.stringify(chain.id)}).then(item=>item.automation.state==='stopped')`), 'desktop continuation stopped');
 }
 // A hung window must fail the run rather than block CI or a shell indefinitely.
 // Before the app is ready (for example while macOS is locked) app.exit() is ignored, so force the exit.

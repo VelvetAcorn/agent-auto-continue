@@ -6,6 +6,7 @@ const assert = require('node:assert/strict');
 const { appHarness } = require('./app-harness');
 const { freePort } = require('./remote-fixture');
 const { createFakeHarness } = require('../tools/fake-harness.cjs');
+const { appVersionUnsupported } = require('../lib/harnesses/errors');
 
 const json = (value) => new Response(JSON.stringify(value), { headers: { 'content-type': 'application/json' } });
 const thread = { id: 'thread', title: 'T3 thread', projectId: 'p', updatedAt: '2026-09-30T10:00:00.000Z', settledOverride: null, messages: [], session: null };
@@ -62,7 +63,7 @@ test('a continuation on any harness keeps the Mac awake through its waiting phas
   assert.deepEqual([...app.blockers.values()], ['prevent-display-sleep'], 'a harness that drives an app interface keeps the display on');
 
   const status = (await call('GET', '/v1/status')).body.keepAwake;
-  assert.deepEqual((await call('GET', '/v1/status')).body.capabilities, { keepAwake: true, continuousRuns: true });
+  assert.deepEqual((await call('GET', '/v1/status')).body.capabilities, { keepAwake: true, continuousRuns: true, compatibility: true });
   assert.equal(status.state, 'armed');
   assert.equal(status.holding, 'display');
   assert.deepEqual(status.tasks.map((task) => [task.id, task.harness, task.requiresUnlockedScreen]), [[`job:${id}`, 'desk', true]]);
@@ -121,5 +122,82 @@ test('saving keep-awake settings keeps every saved harness setting', () => {
   assert.deepEqual(saved.keepAwake, keepAwakeOn);
   assert.deepEqual(saved.harnesses, { opencode: { port: 4555 } });
   assert.equal(app.invoke('settings:get').harnesses.opencode.port.value, 4555);
+  app.invoke('keep-awake:stop');
+});
+
+// Desktop app compatibility (#13) across remote control (#12), continuations (#14) and keep-awake (#9).
+const healthy = { appVersion: '2.0', verifiedVersion: '1.0', problems: [], checked: ['app_path', 'composer_label'], unchecked: [] };
+const changed = { ...healthy, checked: ['app_path'], problems: [{ contactPoint: 'composer_label', message: 'Desk App 2.0 changed how its message box is labelled. Scheduled messages for it may fail until Agent Auto-Continue supports this version.', hint: 'No "Prompt" text area.' }] };
+const deskApp = (compatibility = healthy) => createFakeHarness({ id: 'desk', label: 'Desk App', kind: 'desktop-app', compatibility, capabilities: { requiresUnlockedScreen: true, requiresAccessibilityPermission: true }, conversations: [{ id: 'conv-d', title: 'Desk session' }] });
+const checks = (desk) => desk.state.calls.filter((call) => call[0] === 'checkCompatibility').map((call) => call[1].depth);
+
+test('remote control answers an unsupported app version with 503 app_version_unsupported, not a generic harness failure', async (t) => {
+  const desk = deskApp();
+  desk.state.inspectError = appVersionUnsupported({ app: 'Desk App', appVersion: '2.0', verifiedVersion: '1.0', contactPoint: 'session_store', hint: 'No session files.', during: 'read' });
+  const { call } = await remoteApp(t, { extraHarnesses: () => [desk.adapter] });
+  const refused = await call('POST', '/v1/jobs', { harness: 'desk', threadId: 'conv-d', delayMinutes: 30 });
+  assert.equal(refused.status, 503);
+  assert.equal(refused.body.error.code, 'app_version_unsupported');
+  assert.match(refused.body.error.message, /Desk App 2\.0 changed how it stores its sessions/);
+  assert.deepEqual([refused.body.error.details.upstream.details.contactPoint, refused.body.error.details.upstream.details.appVersion], ['session_store', '2.0']);
+});
+
+test('a schedule created over REST checks its desktop app like one created on the desktop, and shows the risk', async (t) => {
+  const desk = deskApp(({ depth }) => depth === 'full' ? changed : healthy);
+  const { call } = await remoteApp(t, { extraHarnesses: () => [desk.adapter] });
+  const created = await call('POST', '/v1/jobs', { harness: 'desk', threadId: 'conv-d', delayMinutes: 120 });
+  assert.equal(created.status, 201);
+  await settle();
+  assert.deepEqual(checks(desk), ['full'], 'creating the schedule runs one full check');
+  const fetched = await call('GET', `/v1/jobs/${created.body.job.id}`);
+  assert.match(fetched.body.job.risk.message, /changed how its message box is labelled/);
+  assert.equal(fetched.body.job.status, 'pending', 'a risk never cancels a schedule');
+});
+
+test('get_status reports desktop app compatibility from the last check and never runs a check itself', async (t) => {
+  const desk = deskApp(changed);
+  const { app, call } = await remoteApp(t, { extraHarnesses: () => [desk.adapter] });
+  const before = (await call('GET', '/v1/status')).body;
+  assert.deepEqual(before.capabilities, { keepAwake: true, continuousRuns: true, compatibility: true });
+  assert.deepEqual(before.harnesses.find((item) => item.id === 'desk').compatibility, { ok: null, appVersion: null, verifiedVersion: null, checkedAt: null, problems: [] }, 'not checked yet');
+  assert.equal('compatibility' in before.harnesses.find((item) => item.id === 't3'), false, 'harnesses without a compatibility check have no entry');
+  await app.invoke('harnesses:check-compatibility', 'desk');
+  assert.deepEqual(checks(desk), ['full']);
+  for (let poll = 0; poll < 3; poll++) {
+    const status = (await call('GET', '/v1/status')).body;
+    const entry = status.harnesses.find((item) => item.id === 'desk').compatibility;
+    assert.deepEqual([entry.ok, entry.appVersion, entry.verifiedVersion, typeof entry.checkedAt], [false, '2.0', '1.0', 'string']);
+    assert.deepEqual(entry.problems.map((problem) => [problem.contactPoint, problem.message]), [['composer_label', changed.problems[0].message]]);
+    assert.equal(entry.problems[0].hint, undefined, 'technical hints stay on the Mac for Copy diagnostics');
+  }
+  assert.deepEqual(checks(desk), ['full'], 'polling get_status never checks an app, which would enable its accessibility tree');
+});
+
+test('keep-awake never holds for compatibility checks, and lets go of a continuation that an app change paused', async (t) => {
+  const desk = deskApp();
+  let release;
+  desk.state.compatibility = () => new Promise((resolve) => { release = () => resolve(changed); });
+  // No safety buffer, so the run is due at once; the fixture's timers never fire, but waking the Mac runs due work.
+  const { app, call } = await remoteApp(t, { extraHarnesses: () => [desk.adapter], config: { httpPort: 3773, bufferSeconds: 0 } });
+  app.invoke('keep-awake:configure', keepAwakeOn);
+  const checking = app.invoke('harnesses:check-compatibility', 'desk');
+  await settle();
+  assert.equal(app.invoke('keep-awake:get').state, 'off', 'a running check is not work to stay awake for');
+  release();
+  await checking;
+  assert.equal(app.invoke('keep-awake:get').state, 'off', 'neither is a problem it found');
+  desk.state.compatibility = changed;
+  desk.state.availabilityError = appVersionUnsupported({ app: 'Desk App', appVersion: '2.0', verifiedVersion: '1.0', contactPoint: 'app_server', during: 'read' });
+  const created = await call('POST', '/v1/jobs', { harness: 'desk', threadId: 'conv-d', trigger: 'available', continuous: true });
+  assert.equal(created.status, 201);
+  await settle();
+  assert.equal(app.invoke('keep-awake:get').state, 'armed', 'the run waits for its first availability check');
+  app.powerEvents.resume();
+  await settle(); await settle();
+  const run = (await call('GET', '/v1/runs')).body.runs.find((item) => item.id === created.body.job.id);
+  assert.deepEqual([run.state, run.status], ['paused', 'failed']);
+  assert.equal(app.invoke('jobs:get', created.body.job.id).chain.reasonCode, 'app_version_unsupported');
+  assert.notEqual(app.invoke('keep-awake:get').state, 'armed', 'a paused chain does not keep the Mac awake');
+  assert.deepEqual(app.invoke('keep-awake:get').tasks, []);
   app.invoke('keep-awake:stop');
 });

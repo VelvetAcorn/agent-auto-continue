@@ -40,7 +40,7 @@ test('status reports desktop, storage, harness reachability, queue counts and op
   assert.equal(ok.status, 200);
   assert.deepEqual(ok.body.harnesses, [{ id: 't3', label: 'T3 Code', conversationNoun: 'thread', online: true, checkedAt: '2026-10-01T08:00:00.000Z' }]);
   assert.equal(ok.body.defaultHarness, 't3');
-  assert.deepEqual(ok.body.capabilities, { keepAwake: true, continuousRuns: false });
+  assert.deepEqual(ok.body.capabilities, { keepAwake: true, continuousRuns: false, compatibility: false });
   assert.deepEqual(ok.body.storage, { ok: true });
   assert.deepEqual(ok.body.jobs, { upcoming: 0, unacknowledgedFailures: 0 });
   assert.deepEqual(ok.body.keepAwake, { available: true, active: false });

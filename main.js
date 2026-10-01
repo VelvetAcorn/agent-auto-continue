@@ -151,6 +151,8 @@ function createRemoteControl() {
     // Remote stop, stop-all and resume use the same job service calls as the detail view and the tray.
     automation: createContinuationRuns({ getService: () => service, ensureStorage }),
     keepAwake: { status: () => remoteStatus(requireKeepAwake().snapshot()) },
+    // The monitor's last results only: get_status never runs a check.
+    compatibility: { supported: (id) => Boolean(compatibility?.supported(id)), snapshot: () => compatibility?.snapshot() || [] },
     appInfo: { name: APP_NAME, version: app.getVersion?.() || '' },
     onChange: () => { for (const window of BrowserWindow.getAllWindows()) window.webContents.send('remote:changed'); }
   });
@@ -371,14 +373,8 @@ ipcMain.handle('settings:save', (_event, incoming) => {
   void rebuildMenu();
   return { ok: true };
 });
-ipcMain.handle('schedule:create', (_event, incoming) => {
-  ensureStorage();
-  return service.create(incoming).then((job) => {
-    // A new desktop-app schedule checks its app right away; the check never changes anything.
-    if (compatibility?.supported(job.harness)) void compatibility.check(job.harness, { depth: 'full' });
-    return job;
-  });
-});
+// A new desktop-app schedule checks its app right away, through the job service's report to the monitor.
+ipcMain.handle('schedule:create', (_event, incoming) => { ensureStorage(); return service.create(incoming); });
 ipcMain.handle('jobs:get', (_event, id) => service.present(service.get(id)));
 ipcMain.handle('jobs:list', (_event, options) => ({ ...service.list(options), storageError }));
 ipcMain.handle('jobs:edit', (_event, id, incoming) => { ensureStorage(); return service.edit(id, incoming); });

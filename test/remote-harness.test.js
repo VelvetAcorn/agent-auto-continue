@@ -86,7 +86,7 @@ test('continuous runs are optional: 501 without a provider, listed and stoppable
   };
   const f = await startRemote({ automation });
   t.after(f.close);
-  assert.deepEqual((await f.request('GET', '/v1/status')).body.capabilities, { keepAwake: false, continuousRuns: true });
+  assert.deepEqual((await f.request('GET', '/v1/status')).body.capabilities, { keepAwake: false, continuousRuns: true, compatibility: false });
   assert.equal((await f.request('GET', '/v1/runs')).body.runs[0].turnsSent, 3);
   assert.equal((await f.request('POST', '/v1/runs/run-1/stop', { token: f.read.token })).status, 403);
   const stopped = await f.request('POST', '/v1/runs/run-1/stop');

@@ -236,8 +236,8 @@ These interfaces are stable for other features.
 | `job.error.code === 'usage_limited'` with `job.error.details.resetsAt` | A schedule that was skipped because of a usage limit |
 | `job.turn.usageLimit` | A delivered turn that stopped at a usage limit |
 | `registry.describe()` | Serialisable harness metadata and capabilities |
-| `observe` and `riskFor` passed to `JobService` | `observe({ harness, jobId, status, error })` hears every send outcome, and `riskFor(harness)` returns `{ message, appVersion, contactPoints }` or `null` |
-| `job.risk` | Present on pending and sending jobs whose harness has a compatibility problem; such jobs are never canceled for it |
+| `observe` and `riskFor` passed to `JobService` | `observe({ harness, jobId, status, error })` hears every new schedule (`status: 'scheduled'`), every send outcome, and a running turn that could not be read because the app changed (`status: 'turn_unreadable'`); `riskFor(harness)` returns `{ message, appVersion, contactPoints }` or `null` |
+| `job.risk` | Present on pending and sending jobs and on active continuations whose harness has a compatibility problem; such jobs are never canceled for it |
 
 ### IPC
 

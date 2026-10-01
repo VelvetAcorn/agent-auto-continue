@@ -1,13 +1,14 @@
 # Agent Auto-Continue
 
 Agent Auto-Continue is a macOS menu-bar companion that schedules a user message (by default, `Continue`) for an existing agent conversation.
-It supports T3 Code threads, OpenCode sessions, Claude Code CLI sessions and Codex CLI threads.
+It supports T3 Code threads, OpenCode sessions, Claude Code CLI sessions, Codex CLI threads, Claude Desktop Code sessions and ChatGPT app Codex threads.
 Its Paper Focus interface keeps the queue, history, conversation picker, composer and settings in one window.
 Each harness is reached through its own local interface: T3 Code's and OpenCode's loopback HTTP APIs, Claude Code's headless mode, and the Codex app-server protocol.
-It does not modify those apps, simulate keyboard input, or send messages to a remote service of its own.
+Claude Desktop and the ChatGPT app run their agents inside the app, so those two harnesses fill in and press the app's own message box and send button through macOS Accessibility; see [desktop app harnesses](docs/desktop-harnesses.md).
+It does not modify those apps, post keyboard events, or send messages to a remote service of its own.
 
 The repository is [agent-auto-continue](https://github.com/VelvetAcorn/agent-auto-continue).
-Desktop apps and automation modes are tracked in the [future feature backlog](docs/roadmap.md).
+Ideas not yet built are tracked in the [future feature backlog](docs/roadmap.md).
 [Agent harness adapters](docs/harnesses.md) documents the adapter contract, every integration and its limits.
 The existing package name and macOS app identity are retained to preserve compatibility with installed copies and their saved data.
 
@@ -36,6 +37,7 @@ The existing package name and macOS app identity are retained to preserve compat
 - For agents that report when a turn finishes, sends follow-up turns up to a turn limit, or continuously until stopped; see [automatic continuations](docs/continuations.md).
 - Stops any schedule or continuation at once from its detail view, the Upcoming Stop all control, or the menu-bar tray.
 - Persists jobs through quitting, restarting, and sleep/wake.
+- Checks Claude Desktop and the ChatGPT app read-only at launch, when something is scheduled for them and every five minutes while it waits, so an app update that changed what the app relies on is shown on the dashboard, with the schedules it puts at risk, before they are due; see [surviving app updates](docs/desktop-harnesses.md#checking-before-schedules-fire).
 - Optionally keeps the Mac awake while scheduled work waits or runs, and shows why and for which tasks.
 - Snapshots a configurable post-time safety buffer per job (5 seconds by default).
 - Checks the conversation before dispatching. It cancels a job if the conversation is missing, archived, or has newer user activity.
@@ -50,6 +52,7 @@ The existing package name and macOS app identity are retained to preserve compat
   - OpenCode running as a server, for example `opencode serve --port 4096`.
   - Claude Code CLI (`claude`), signed in.
   - Codex CLI (`codex`), signed in.
+  - Claude Desktop or the ChatGPT app running, with Accessibility permission for this app and the Mac unlocked when a message is due.
 - Node.js 20+ for development.
 - For T3 Code, a bearer token. Create one according to your installed T3 Code version's authentication instructions. For versions supporting the session-issue command:
 
@@ -96,6 +99,7 @@ The environment token takes precedence for that launch.
 Settings includes an optional **Remote control** section, off by default.
 When enabled, the app serves a REST API and an MCP server on `127.0.0.1`, and optionally on a Tailscale or other private address you choose; it never listens on public or all-interface addresses.
 Each phone or agent gets its own revocable bearer token, shown once with a QR code, and every remote change appears under Remote activity.
+Status includes each desktop app's last compatibility check without running a new one, and a send refused because an app changed answers `503 app_version_unsupported`; see [remote control](docs/remote-control.md).
 Remote clients can schedule for any harness, start, stop and resume automatic continuations, and read the keep-awake status.
 See [remote control](docs/remote-control.md) for the security model, Tailscale setup, MCP client configuration and the API reference.
 
@@ -118,6 +122,7 @@ Keep-awake is off by default; turn it on in **Settings → Keep awake**.
 While it is on, the app holds a macOS power assertion for as long as tracked work is waiting or running.
 Tracked work covers every harness: pending schedules, automatic continuations while they wait for availability or for the next turn, deliveries in flight, and the agent turn a delivery started.
 Paused continuations wait for you, so they do not keep the Mac awake.
+Compatibility checks of the desktop apps are never tracked work, and a continuation that pauses because its app changed lets the Mac sleep.
 You can also track every running T3 Code agent turn.
 By default the display may sleep; choose **Keep the display on too** to keep it lit.
 Work for Claude Desktop or ChatGPT Codex threads drives the app's interface, so the display stays on while it is tracked.

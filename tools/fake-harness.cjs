@@ -10,7 +10,7 @@ function createFakeHarness({ id = 'fake', label = 'Fake Agent', kind = 'cli', no
   const state = {
     conversations: new Map(conversations.map((item) => [item.id, { messages: [], archived: false, ...item }])),
     calls: [], submitted: [], availability: { state: 'available', resetsAt: null, reason: '', source: 'reported' },
-    turn: { state: 'running' }, submitError: null, prepareError: null, turnError: null, completion: null, connectionError: null, compatibility
+    turn: { state: 'running' }, inspectError: null, availabilityError: null, submitError: null, prepareError: null, turnError: null, completion: null, connectionError: null, compatibility
   };
   const record = (name, ...args) => state.calls.push([name, ...args]);
   const find = (id) => {
@@ -32,6 +32,7 @@ function createFakeHarness({ id = 'fake', label = 'Fake Agent', kind = 'cli', no
     },
     async inspectConversation(ref, options) {
       record('inspectConversation', ref, options);
+      if (state.inspectError) throw state.inspectError;
       const item = find(ref.conversationId);
       const users = item.messages.filter((message) => message.role === 'user').map((message) => Date.parse(message.createdAt)).filter(Number.isFinite);
       return { id: item.id, title: item.title || '(Untitled)', projectId: item.projectId || '', projectName: item.projectName || '', archived: item.archived,
@@ -57,7 +58,7 @@ function createFakeHarness({ id = 'fake', label = 'Fake Agent', kind = 'cli', no
       return { delivered: find(turn.conversationId).messages.some((message) => message.id === turn.deliveryKey) };
     },
     async checkTurn(turn) { record('checkTurn', turn); if (state.turnError) throw state.turnError; return { ...state.turn }; },
-    async probeAvailability() { record('probeAvailability'); return { ...state.availability, checkedAt: new Date().toISOString() }; },
+    async probeAvailability() { record('probeAvailability'); if (state.availabilityError) throw state.availabilityError; return { ...state.availability, checkedAt: new Date().toISOString() }; },
     async shutdown() { record('shutdown'); },
     ...(compatibility ? {
       async checkCompatibility(options = {}) {

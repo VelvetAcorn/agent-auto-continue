@@ -199,7 +199,7 @@ Errors use one shape:
 | `429` | `too_many_failures`, `rate_limited`, with `Retry-After`; `idempotency_capacity` |
 | `501` | `not_supported` |
 | `502` | `harness_unavailable`, with sanitized `details.upstream` |
-| `503` | `storage_unavailable`; `screen_locked` with `Retry-After: 60`; `permission_required`; `usage_limited` |
+| `503` | `storage_unavailable`; `screen_locked` with `Retry-After: 60`; `permission_required`; `usage_limited`; `app_version_unsupported` |
 
 Errors from a harness keep the [harness error code](harnesses.md#error-codes) when it describes the conversation or the Mac rather than an unreachable harness, with the original in `details.upstream`:
 
@@ -211,11 +211,13 @@ Errors from a harness keep the [harness error code](harnesses.md#error-codes) wh
 | `screen_locked` | `503 screen_locked` | A desktop-app harness needs the Mac unlocked |
 | `permission_required` | `503 permission_required` | Grant the macOS permission in `details.upstream.details.permission` on the Mac |
 | `usage_limited` | `503 usage_limited` | The provider's usage limit is in force |
+| `app_version_unsupported` | `503 app_version_unsupported` | A desktop app update changed something the harness relies on; `details.upstream.details` names the app version and contact point, and an update of Agent Auto-Continue or the app fixes it |
 | `conversation_not_found` | `404 thread_not_found` | Pick another thread |
 | `unknown_harness` | `400 unknown_harness` | Use an ID from `GET /v1/harnesses` |
 | any other | `502 harness_unavailable` | The harness is not running, not signed in, or answered unexpectedly |
 
 A scheduled message that later fails on the Mac reports the harness code in `job.error.code`.
+A job whose desktop app has a known compatibility problem carries `job.risk`, `{ message, appVersion, contactPoints }`, while it is pending or its continuation is active; it stays scheduled.
 
 ### Examples
 
@@ -241,9 +243,14 @@ curl -s -X POST "$BASE/jobs/JOB_ID/cancel" -H "$AUTH"
   "desktop": { "app": "T3 Code Auto-Continue", "version": "2.0.0", "time": "2026-10-01T08:00:00.000Z", "timeZone": "Europe/London" },
   "storage": { "ok": true },
   "defaultHarness": "t3",
-  "harnesses": [{ "id": "t3", "label": "T3 Code", "conversationNoun": "thread", "online": true, "checkedAt": "2026-10-01T08:00:00.000Z" }],
+  "harnesses": [
+    { "id": "t3", "label": "T3 Code", "conversationNoun": "thread", "online": true, "checkedAt": "2026-10-01T08:00:00.000Z" },
+    { "id": "claude-desktop", "label": "Claude Desktop", "conversationNoun": "session", "online": true, "checkedAt": "2026-10-01T08:00:00.000Z",
+      "compatibility": { "ok": false, "appVersion": "2.17.0", "verifiedVersion": "2.16120.0", "checkedAt": "2026-10-01T07:55:00.000Z",
+        "problems": [{ "contactPoint": "composer_label", "message": "Claude Desktop 2.17.0 changed how its message box is labelled. Scheduled messages for it may fail until Agent Auto-Continue supports this version.", "since": "2026-10-01T07:55:00.000Z" }] } }
+  ],
   "jobs": { "upcoming": 2, "unacknowledgedFailures": 0 },
-  "capabilities": { "keepAwake": true, "continuousRuns": true },
+  "capabilities": { "keepAwake": true, "continuousRuns": true, "compatibility": true },
   "keepAwake": {
     "enabled": true, "state": "armed", "holding": "system", "reason": "Waiting for 1 scheduled task.", "requiresUnlockedScreen": false,
     "since": "2026-10-01T07:59:00.000Z", "deadline": "2026-10-01T19:59:00.000Z", "releaseAt": null, "ended": null,
@@ -257,6 +264,8 @@ curl -s -X POST "$BASE/jobs/JOB_ID/cancel" -H "$AUTH"
 `harnesses` lists every harness in the app.
 Each connection result is reused for 30 seconds, as `checkedAt` shows, so a phone that polls status does not start a harness process on the Mac for every request; `GET /v1/harnesses/{harness}/connection` always checks live.
 `keepAwake` is read-only and has no settings; change keep-awake in the desktop app.
+Desktop-app harnesses carry `compatibility`, the result of the desktop app's last [compatibility check](desktop-harnesses.md#checking-before-schedules-fire): `ok` is `null` until the first check, and `problems` lists what changed, without the technical hints that Copy diagnostics on the Mac includes.
+Status never runs a check, because a full check enables the app's accessibility tree; the desktop app checks on its own schedule, and creating a schedule over the API checks its app as it does on the desktop.
 
 ## Browser clients
 
@@ -272,6 +281,7 @@ The remote layer lives in `lib/remote/` and reaches the rest of the app through 
 | `getService()` | The shared `JobService`; all validation and state rules come from it |
 | `harnesses` | A registry with `defaultHarness`, `describe()`, `has(id)` and `get(id)`, whose adapters provide `checkConnection()`, `listConversations({ showSettled })` and optionally `probeAvailability()`; `main.js` passes the production registry, with `automation` support added to each description, and `lib/remote/harnesses.js` keeps a T3-only stand-in for tests |
 | `keepAwake` | Optional `{ status() }`, reported read-only in `get_status`; `main.js` passes `remoteStatus()` of the keep-awake controller |
+| `compatibility` | Optional `{ supported(id), snapshot() }`, reported read-only per harness in `get_status`; `main.js` passes the compatibility monitor, and nothing in the remote layer runs a check |
 | `automation` | Optional `{ listRuns(), stopRun(id), stopAll(), resumeRun(id) }`; `main.js` passes `lib/remote/continuations.js`, backed by the job service. Without a method, its resource answers `501 not_supported` and its MCP tool is hidden |
 
 Settings, token digests, the audit log and idempotency keys are stored in `remote-control.json` beside `config.json`, with owner-only permissions.

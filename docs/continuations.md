@@ -70,6 +70,7 @@ The transition from a finished turn to the next pending turn is a single persist
 | Three completed turns in a row that each took under a minute | The chain pauses (`no_progress`), because the task may already be done |
 | `interrupted` with error code `approval_required` | The chain pauses (`awaiting_input`) |
 | Still `running` 24 hours after it was sent (`unknown` with error code `tracking_expired`) | The chain pauses (`tracking_expired`) and stops keeping the Mac awake; resuming moves on to the next turn |
+| Cannot be read because the desktop app changed (`unknown` with error code `app_version_unsupported`) | The chain pauses (`app_version_unsupported`) at once and stops keeping the Mac awake; other read failures are tried again on the next poll |
 | `failed` (including `agent_error` and `process_failed`), `interrupted` or `unknown` | The chain pauses; nothing further is sent |
 
 When the limit is reached, the chain finishes even if the last turn did not end normally, and the reason says so.
@@ -88,6 +89,7 @@ Harnesses that cannot report usage limits, such as T3 Code, skip this read; a tu
 | `limited` with a past `resetsAt`, or `inferred` without one | Send; if the limit still applies, the turn outcome reports it |
 | `limited`, `reported` without `resetsAt` | Check again after 1, 2, 5, 10, then every 15 minutes |
 | `unavailable`, or the read threw | Check again after 1, 2, 5, 10, then every 15 minutes |
+| The read threw `app_version_unsupported` | The turn fails without sending and the chain pauses (`app_version_unsupported`); an app change is never retried |
 | `unavailable` with reason `screen_locked` | Check again every minute, and at once when the Mac is unlocked |
 
 The job service then inspects the conversation, as for every schedule.
@@ -103,6 +105,7 @@ A plain schedule instead fails without sending when the conversation is busy or 
 | A certain `screen_locked` error | The same unsent turn is checked again in a minute |
 | A certain `usage_limited` error, except on a timed first turn | The same unsent turn waits until the error's `resetsAt` plus the safety buffer, or backs off as above |
 | `owned_by_other_harness` | The chain stops; it names the owning harness when that harness is in this app, and otherwise uses the adapter's own description of the owner |
+| A certain `app_version_unsupported` error | The job fails and the chain pauses (`app_version_unsupported`) until the app is supported again; see [Desktop harnesses](desktop-harnesses.md#continuations-that-meet-a-change) |
 | Any other certain failure | The job fails and the chain pauses (`send_failed`) |
 | Uncertain delivery | The job becomes unconfirmed and the chain pauses (`delivery_unconfirmed`) |
 

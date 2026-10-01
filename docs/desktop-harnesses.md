@@ -107,14 +107,25 @@ The ChatGPT app may hide its send button while the message box is empty, so a mi
 The app runs the checks through `lib/compatibility-monitor.js`:
 
 - ten seconds after launch, a quick check of each desktop harness, and a full one when that harness has scheduled work or its app version differs from the last version that passed;
-- a full check whenever a schedule is created for the harness;
+- a full check whenever a schedule is created for the harness, on the desktop or over remote control;
 - every five minutes while the harness has scheduled work, a quick check, followed by a full one when the app version changed since the last full check, when the version has not passed yet and the last full check is 15 minutes old, or hourly;
 - a full check right after a delivery failure that names a contact point.
 
 A version passes when a full check saw its message box and found no problem, and the last passing version is kept per harness in `compatibility.json` in the app's data folder.
 A problem stays until a later check proves that contact point works, a send to the harness succeeds, or the app version changes.
-While a harness has a problem, its pending schedules are marked at risk in the list and the detail, but they are never canceled; if the problem remains when one is due, it fails without sending.
+While a harness has a problem, its pending schedules and active continuations are marked at risk in the list and the detail, but they are never canceled; if the problem remains when one is due, it fails without sending.
 A newly found problem with scheduled work also raises a notification.
+Remote control reports the last results read-only in `get_status` and never runs a check itself, because a full check enables the app's accessibility tree; see [Status object](remote-control.md#status-object).
+Checks are not work for keep-awake: only the scheduled work they mark at risk keeps the Mac awake, as it would without them.
+
+### Continuations that meet a change
+
+An automatic continuation never retries an app change, because only an update fixes it.
+A change found before a turn is sent, including while reading availability, fails that turn with `app_version_unsupported` and pauses the chain with the reason code `app_version_unsupported`.
+A change found while following a running turn ends the turn as unknown with that error and pauses the chain the same way, instead of polling it for 24 hours.
+An unsent turn is not counted, and a sent one counts as it would after any other pause.
+Either way keep-awake stops tracking the chain, and the monitor logs the contact point and checks the app again.
+Resume the chain once Check again on the dashboard shows the app is supported.
 
 ### Diagnostics
 

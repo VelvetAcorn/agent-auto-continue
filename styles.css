@@ -70,5 +70,6 @@ label.check:has(input:disabled){color:var(--muted);cursor:default}
 /* Desktop app compatibility */
 .pills{display:inline-flex;align-items:center;gap:6px;flex-shrink:0}.pill.risk{color:var(--amber)}
 .risk-detail{border-left:2px solid var(--amber);padding-left:14px;margin:22px 0;font-size:12px}.risk-detail p{font-size:12px}
+.harness-name .harness-caps.risk{color:var(--amber)}
 /* Headings take focus after navigation for screen readers only; they are not controls. */
 h1[tabindex="-1"]:focus{outline:none}
