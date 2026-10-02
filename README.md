@@ -121,7 +121,8 @@ With Up to or Until done, an optional stop phrase such as `TASK COMPLETE` ends t
 The message is `Continue` unless you hover the message line and press Edit.
 The sentence under the Continue button says exactly what will happen; daylight-saving gaps are rejected and repeated local times ask which occurrence to use.
 The queue sits underneath.
-Hover a row for Edit and Cancel, or Stop for a running continuation; click a row for its details.
+Hover a row for Edit and Cancel, or Edit and Stop for a running continuation; click a row for its details.
+Once a continuation has sent its first turn, Edit changes only its stop phrase while it is running or paused, and every other setting stays locked.
 Recent outcomes follow the queue, with Resume and Check where they apply, and All history opens the full log with filters and Load more.
 The details of an unconfirmed delivery offer Check delivery and, after you have looked in the conversation yourself, Mark as not delivered, which asks for confirmation first.
 The laptop toggle in the header turns keep-awake on and off; its tooltip explains why the Mac is awake.

@@ -211,3 +211,4 @@ IPC adds `jobs:stop`, `jobs:stop-all`, `jobs:resume` and `jobs:mark-not-delivere
 `schedule:create` and `jobs:edit` accept `trigger`, `turnLimit`, `continuous` and `stopPhrase`.
 `harnesses:list` adds `automation: { whenAvailable, multipleTurns, stopPhrase }` to each harness, each `{ supported, reason }`, so the UI explains disabled modes in the app's own words.
 The window offers the stop phrase under How far when Up to or Until done is chosen, shows it in the continuation's details, and offers Mark as not delivered, with a confirmation, in the details of an unconfirmed delivery.
+After the first turn of an active or paused continuation, Edit on its queue row and Edit stop phrase in its details open the composer with every other setting locked, and Save changes sends only `stopPhrase`; an ended continuation offers neither.

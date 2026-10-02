@@ -58,6 +58,7 @@
     const loading = { supported: false, reason: `Checking what ${harnessLabel(id)} supports…` };
     return harnessInfo(id)?.automation || { whenAvailable: loading, multipleTurns: loading };
   }
+  const editScopeOf = (job) => compose.editScope(job, { stopPhrase: Boolean(support(job.harness || 't3').stopPhrase?.supported) });
   function badge(id, { small = false, title } = {}) {
     const info = harnessInfo(id);
     const { mark, round } = icons.markFor(id, info?.kind);
@@ -122,7 +123,7 @@
   function newDraft(harness = visibleAgents()[0]?.id || state.harnesses[0]?.id || 't3', threadId = '', message = 'Continue', zone = localZone) {
     const when = time.quickTime(5, zone);
     return { harness, threadId, threadTitle: '', projectName: '', message, when: '5', whenTouched: false, date: when.date, time: when.time, timeZone: zone, occurrence: '',
-      waitIfLimited: false, far: 'once', turnLimit: '1', stopPhrase: '', editId: null, bufferSeconds: state.settings?.bufferSeconds ?? 5 };
+      waitIfLimited: false, far: 'once', turnLimit: '1', stopPhrase: '', editId: null, editScope: null, bufferSeconds: state.settings?.bufferSeconds ?? 5 };
   }
   const draft = () => { if (!state.draft) state.draft = newDraft(); return state.draft; };
   // Automation fields of a job or scheduleAgain payload, in draft form.
@@ -219,32 +220,34 @@
     const can = support(d.harness);
     const label = harnessLabel(d.harness);
     const conversation = conversationOf(d);
+    // Once a continuation has started, only its stop phrase can change; everything else stays visible but locked.
+    const locked = d.editScope === 'stopPhrase';
     const title = conversation?.title || d.threadTitle || (d.threadId ? `${noun(d.harness).replace(/^./, (c) => c.toUpperCase())} ${d.threadId}` : `Choose a ${noun(d.harness)}`);
     const project = conversation?.projectName || d.projectName || '';
     const sub = d.threadId ? [label, project, conversation?.updatedAt ? relative(conversation.updatedAt).toLocaleLowerCase() : ''].filter(Boolean).join(' · ') : 'Most recent first, from every agent';
     const picker = `<button type="button" class="pick" id="pick" data-action="pick" ${d.editId ? 'disabled' : ''} aria-label="${escape(d.threadId ? `Conversation: ${title}` : `Choose a ${noun(d.harness)}`)}">${d.threadId ? badge(d.harness, { title: label }) : '<span class="badge empty" aria-hidden="true">?</span>'}<span class="t"><b>${escape(title)}</b><small>${escape(sub)}</small></span><span class="chev" aria-hidden="true">${d.editId ? '' : '▾'}</span></button>`;
     const whenChips = compose.WHEN.map(([value, text]) => {
       const off = value === 'available' && !can.whenAvailable.supported;
-      return `<button type="button" data-when="${value}" class="${d.when === value ? 'active' : ''}" aria-pressed="${d.when === value}" ${off ? `disabled title="${escape(can.whenAvailable.reason)}"` : ''}>${text}</button>`;
+      return `<button type="button" data-when="${value}" class="${d.when === value ? 'active' : ''}" aria-pressed="${d.when === value}" ${off ? `disabled title="${escape(can.whenAvailable.reason)}"` : locked ? 'disabled' : ''}>${text}</button>`;
     }).join('');
     const availability = availabilityFor(d.harness);
     const limited = availability?.state === 'limited';
-    const hint = can.whenAvailable.supported && limited ? `<div class="hint">${escape(label)} is limited${availability.resetsAt ? ` until ${escape(availability.resetsAtLabel)}` : ', reset time unknown'} <button type="button" class="link" data-action="check-availability">check again</button></div>` : '';
-    const wait = can.whenAvailable.supported && d.when !== 'available' ? `<label class="check"><input id="wait-if-limited" type="checkbox" ${d.waitIfLimited ? 'checked' : ''}> If ${escape(label)} is at a usage limit then, wait for it</label>` : '';
-    const custom = d.when === 'custom' ? `<div class="custom" id="custom-time"><div class="two"><label class="sr-only" for="date">Date, yyyy-mm-dd</label><input id="date" inputmode="numeric" value="${escape(d.date)}" placeholder="yyyy-mm-dd" aria-describedby="plan-error"><label class="sr-only" for="time">Time, 24-hour</label><input id="time" inputmode="numeric" value="${escape(d.time)}" placeholder="HH:mm" aria-describedby="plan-error"></div>${occurrence(d)}<label class="zone">Timezone <input id="timezone" list="timezones" value="${escape(d.timeZone)}" autocomplete="off" spellcheck="false"><datalist id="timezones">${zones().map((zone) => `<option value="${escape(zone)}"></option>`).join('')}</datalist></label></div>` : '';
-    const far = can.multipleTurns.supported ? `<div class="lbl" id="far-label">How far</div><div class="seg" role="group" aria-labelledby="far-label">${[['once', 'Once'], ['upto', 'Up to'], ['until', 'Until done']].map(([value, text]) => `<button type="button" data-far="${value}" class="${d.far === value ? 'active' : ''}" aria-pressed="${d.far === value}">${text}</button>${value === 'upto' ? `<input id="turn-limit" class="num" type="text" inputmode="numeric" value="${escape(d.turnLimit)}" aria-label="Turn limit" ${d.far === 'upto' ? '' : 'disabled'}>` : ''}`).join('')}</div>${can.stopPhrase?.supported && d.far !== 'once' ? `<label class="zone phrase">Or stop at <input id="stop-phrase" type="text" maxlength="200" spellcheck="false" placeholder="a phrase in the agent's last message, e.g. TASK COMPLETE" value="${escape(d.stopPhrase)}" title="${escape(can.stopPhrase.reason)}"></label>` : ''}` : '';
+    const hint = can.whenAvailable.supported && limited && !locked ? `<div class="hint">${escape(label)} is limited${availability.resetsAt ? ` until ${escape(availability.resetsAtLabel)}` : ', reset time unknown'} <button type="button" class="link" data-action="check-availability">check again</button></div>` : '';
+    const wait = can.whenAvailable.supported && d.when !== 'available' ? `<label class="check"><input id="wait-if-limited" type="checkbox" ${d.waitIfLimited ? 'checked' : ''} ${locked ? 'disabled' : ''}> If ${escape(label)} is at a usage limit then, wait for it</label>` : '';
+    const custom = d.when === 'custom' ? `<div class="custom" id="custom-time"><div class="two"><label class="sr-only" for="date">Date, yyyy-mm-dd</label><input id="date" inputmode="numeric" value="${escape(d.date)}" placeholder="yyyy-mm-dd" aria-describedby="plan-error" ${locked ? 'disabled' : ''}><label class="sr-only" for="time">Time, 24-hour</label><input id="time" inputmode="numeric" value="${escape(d.time)}" placeholder="HH:mm" aria-describedby="plan-error" ${locked ? 'disabled' : ''}></div>${occurrence(d)}<label class="zone">Timezone <input id="timezone" list="timezones" value="${escape(d.timeZone)}" autocomplete="off" spellcheck="false" ${locked ? 'disabled' : ''}><datalist id="timezones">${zones().map((zone) => `<option value="${escape(zone)}"></option>`).join('')}</datalist></label></div>` : '';
+    const far = can.multipleTurns.supported ? `<div class="lbl" id="far-label">How far</div><div class="seg" role="group" aria-labelledby="far-label">${[['once', 'Once'], ['upto', 'Up to'], ['until', 'Until done']].map(([value, text]) => `<button type="button" data-far="${value}" class="${d.far === value ? 'active' : ''}" aria-pressed="${d.far === value}" ${locked ? 'disabled' : ''}>${text}</button>${value === 'upto' ? `<input id="turn-limit" class="num" type="text" inputmode="numeric" value="${escape(d.turnLimit)}" aria-label="Turn limit" ${d.far === 'upto' && !locked ? '' : 'disabled'}>` : ''}`).join('')}</div>${can.stopPhrase?.supported && d.far !== 'once' ? `<label class="zone phrase">Or stop at <input id="stop-phrase" type="text" maxlength="200" spellcheck="false" placeholder="a phrase in the agent's last message, e.g. TASK COMPLETE" value="${escape(d.stopPhrase)}" title="${escape(can.stopPhrase.reason)}"></label>` : ''}` : '';
     const message = state.messageOpen
       ? `<textarea id="message" maxlength="4000" rows="3" aria-label="Message">${escape(d.message)}</textarea>`
-      : `<div class="msg" id="message-line"><span>${escape(d.message)}</span><button type="button" class="ghost" data-action="edit-message">Edit</button></div>`;
+      : `<div class="msg" id="message-line"><span>${escape(d.message)}</span>${locked ? '' : '<button type="button" class="ghost" data-action="edit-message">Edit</button>'}</div>`;
     const plan = compose.planSentence({ draft: d, label, availability, time, display, supportsTurns: can.multipleTurns.supported });
-    const editing = d.editId ? `<div class="editing"><span>Editing a queued message</span><button type="button" class="ghost" data-action="cancel-edit">Cancel</button></div>` : '';
+    const editing = d.editId ? `<div class="editing"><span>${locked ? `Editing a ${findJob(d.editId)?.automation?.state === 'paused' ? 'paused' : 'running'} continuation` : 'Editing a queued message'}</span><button type="button" class="ghost" data-action="cancel-edit">Cancel</button></div>${locked ? '<p class="help" id="edit-scope">This continuation has already started, so only its stop phrase can change.</p>' : ''}` : '';
     return `<section class="compose" aria-label="Continue a conversation"><form id="continue-form">${editing}${picker}<div class="lbl" id="when-label">When</div><div class="seg" role="group" aria-labelledby="when-label">${whenChips}</div>${hint}${wait}${custom}${far}<div class="lbl">Message</div>${message}<p class="error" id="plan-error" role="alert"></p><div class="go"><button type="submit" class="primary" id="continue">${d.editId ? 'Save changes' : 'Continue'}</button><small id="plan">${escape(plan)}</small></div></form></section>`;
   }
   function occurrence(d) {
     let candidates;
     try { candidates = time.wallTimeCandidates(d.date, d.time, d.timeZone); } catch { return ''; }
     if (candidates.length < 2) return '';
-    return `<label class="zone">This time occurs twice <select id="occurrence"><option value="">Choose which</option>${candidates.map((candidate, index) => `<option value="${candidate.iso}" ${d.occurrence === candidate.iso ? 'selected' : ''}>${index === 0 ? 'First' : 'Second'} · ${time.offsetLabel(candidate.offsetMinutes)}</option>`).join('')}</select></label>`;
+    return `<label class="zone">This time occurs twice <select id="occurrence" ${d.editScope === 'stopPhrase' ? 'disabled' : ''}><option value="">Choose which</option>${candidates.map((candidate, index) => `<option value="${candidate.iso}" ${d.occurrence === candidate.iso ? 'selected' : ''}>${index === 0 ? 'First' : 'Second'} · ${time.offsetLabel(candidate.offsetMinutes)}</option>`).join('')}</select></label>`;
   }
   function zones() { try { return [localZone, 'UTC', ...Intl.supportedValuesOf('timeZone')].filter((value, index, list) => list.indexOf(value) === index); } catch { return [localZone, 'UTC', 'Europe/London', 'America/New_York', 'Asia/Tokyo']; } }
 
@@ -254,11 +257,11 @@
     const status = job.displayStatus || job.deliveryStatus || job.status;
     const running = status === 'running';
     const auto = job.automation;
-    const editable = status === 'pending' && (!auto || (auto.state === 'active' && auto.currentTurn === 1));
+    const scope = history ? null : editScopeOf(job);
     const act = (name, text, cls = 'ghost', extra = '') => `<button type="button" class="${cls}" data-action="${name}" data-job="${escape(job.id)}" ${extra}>${text}</button>`;
     const actions = history
       ? (job.canResume ? act('resume', 'Resume') : status === 'unconfirmed' ? act('reconcile', 'Check') : '')
-      : `${editable ? act('edit', 'Edit') : ''}${job.canStop ? (auto ? act('stop', 'Stop') : act('cancel', '×', 'x', 'title="Cancel" aria-label="Cancel"')) : ''}`;
+      : `${scope ? act('edit', 'Edit', 'ghost', scope === 'stopPhrase' ? 'title="Edit stop phrase"' : '') : ''}${job.canStop ? (auto ? act('stop', 'Stop') : act('cancel', '×', 'x', 'title="Cancel" aria-label="Cancel"')) : ''}`;
     const pills = history ? jobPill(job) : job.risk ? '<span class="pill risk">At risk</span>' : '';
     return `<div class="q${running ? ' running' : ''}" data-job="${escape(job.id)}"><button type="button" class="open" data-open="${escape(job.id)}" aria-label="${escape(job.threadTitle || job.threadId)}">${badge(job.harness || 't3', { small: true, title: harnessLabel(job.harness || 't3') })}<span class="t"><b>${escape(job.threadTitle || job.threadId)}</b><small data-meta="${history ? 'history' : 'queue'}">${escape(compose.queueMeta(job, { ...rowContext(), labelled: !history }))}</small></span></button>${pills}<span class="acts" data-acts="${escape(job.id)}">${actions}</span></div>`;
   }
@@ -329,7 +332,8 @@
     const actions = [];
     if (job.canResume) actions.push('<button type="button" class="primary" data-action="resume">Resume</button>');
     if (status === 'unconfirmed') actions.push('<button type="button" class="primary" data-action="reconcile">Check delivery</button>');
-    if (status === 'pending' && auto.state === 'active' && auto.currentTurn === 1) actions.push('<button type="button" data-action="edit">Edit</button>');
+    const scope = editScopeOf(job);
+    if (scope) actions.push(`<button type="button" data-action="edit">${scope === 'stopPhrase' ? 'Edit stop phrase' : 'Edit'}</button>`);
     if (job.canStop) actions.push('<button type="button" class="danger" data-action="stop">Stop continuing</button>');
     if (!job.canStop && !['pending', 'dispatching', 'unconfirmed'].includes(status)) actions.push('<button type="button" class="primary" data-action="again">Continue again</button>');
     if (job.canStop) actions.push(`<p class="help stop-help">Stopping takes effect at once and never sends.${status === 'sent' && auto.state === 'active' ? ' The turn in progress keeps running in the agent.' : ''}</p>`);
@@ -646,19 +650,24 @@
   function submit(event) {
     event.preventDefault();
     const d = draft();
-    let when;
+    const phraseOnly = d.editScope === 'stopPhrase';
+    let when, input;
     try {
-      if (!d.threadId) throw new Error(`Choose a ${noun(d.harness)} first.`);
-      if (!d.message.trim()) throw new Error('Enter a message.');
-      if (d.far === 'upto' && !/^\d+$/.test(String(d.turnLimit).trim())) throw new Error('Turn limit must be a whole number of 1 or more.');
-      when = compose.resolveWhen(d, time);
+      // A started continuation accepts an edit of its stop phrase alone, so nothing else is sent.
+      if (phraseOnly) input = compose.stopPhraseEdit(d);
+      else {
+        if (!d.threadId) throw new Error(`Choose a ${noun(d.harness)} first.`);
+        if (!d.message.trim()) throw new Error('Enter a message.');
+        if (d.far === 'upto' && !/^\d+$/.test(String(d.turnLimit).trim())) throw new Error('Turn limit must be a whole number of 1 or more.');
+        when = compose.resolveWhen(d, time);
+        input = { harness: d.harness, threadId: d.threadId, message: d.message, timeZone: d.timeZone, trigger: when.trigger, continuous: d.far === 'until', ...(d.far === 'until' ? {} : { turnLimit: d.far === 'upto' ? Number(d.turnLimit) : 1 }), ...(d.far !== 'once' ? { stopPhrase: d.stopPhrase.trim() || null } : {}), ...(when.whenISO ? { whenISO: when.whenISO } : {}) };
+      }
     } catch (error) { $('#plan-error').textContent = errorMessage(error); return; }
-    const input = { harness: d.harness, threadId: d.threadId, message: d.message, timeZone: d.timeZone, trigger: when.trigger, continuous: d.far === 'until', ...(d.far === 'until' ? {} : { turnLimit: d.far === 'upto' ? Number(d.turnLimit) : 1 }), ...(d.far !== 'once' ? { stopPhrase: d.stopPhrase.trim() || null } : {}), ...(when.whenISO ? { whenISO: when.whenISO } : {}) };
     const editId = d.editId;
     void perform(() => editId ? api.editJob(editId, input) : api.createSchedule(input), { errorTarget: '#plan-error', success: async () => {
       state.draft = newDraft(d.harness); state.messageOpen = false;
       await refreshJobs(false);
-      toast(editId ? 'Message updated.' : when.trigger === 'available' ? `Waiting for ${harnessLabel(d.harness)} to be free.` : 'Queued.');
+      toast(phraseOnly ? (input.stopPhrase ? 'Stop phrase updated.' : 'Stop phrase removed.') : editId ? 'Message updated.' : when.trigger === 'available' ? `Waiting for ${harnessLabel(d.harness)} to be free.` : 'Queued.');
     } });
   }
   // Arrangement changes save at once; there is nothing else to confirm.
@@ -733,11 +742,13 @@
     if (name === 'again') { void perform(() => api.scheduleAgain(job.id), { success: (payload) => { state.draft = { ...newDraft(payload.harness || job.harness || 't3', payload.threadId, payload.message, payload.timeZone || localZone), threadTitle: job.threadTitle, projectName: job.projectName, ...automationDraft(payload) }; fitDraft(state.draft); state.messageOpen = false; state.view = 'home'; void refreshAvailability(state.draft.harness); } }); }
   }
   function startEdit(job) {
+    const scope = editScopeOf(job);
+    if (!scope) return;
     const wall = time.formatInstant(job.scheduleAt, job.timeZone || localZone);
-    state.draft = { ...newDraft(job.harness || 't3', job.threadId, job.message, job.timeZone || localZone), ...wall, when: job.automation?.trigger === 'available' ? 'available' : 'custom', whenTouched: true, occurrence: job.scheduleAt, editId: job.id, bufferSeconds: job.bufferSeconds, threadTitle: job.threadTitle, projectName: job.projectName, ...automationDraft(job) };
+    state.draft = { ...newDraft(job.harness || 't3', job.threadId, job.message, job.timeZone || localZone), ...wall, when: job.automation?.trigger === 'available' ? 'available' : 'custom', whenTouched: true, occurrence: job.scheduleAt, editId: job.id, editScope: scope, bufferSeconds: job.bufferSeconds, threadTitle: job.threadTitle, projectName: job.projectName, ...automationDraft(job) };
     fitDraft(state.draft);
     state.messageOpen = false; state.returnView = 'home';
-    navigate('home', { focus: '#continue' });
+    navigate('home', { focus: scope === 'stopPhrase' ? '#stop-phrase' : '#continue' });
     void refreshAvailability(state.draft.harness);
   }
 
