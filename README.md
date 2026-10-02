@@ -173,7 +173,7 @@ The disk image window background (`build/background.png` and `build/background@2
 
 ## Keep awake
 
-Keep-awake is off by default; turn it on in **Settings → Keep awake**.
+Keep-awake is off by default; turn it on in **Settings > Keep the Mac awake**.
 While it is on, the app holds a macOS power assertion for as long as tracked work is waiting or running.
 Tracked work covers every harness: pending schedules, automatic continuations while they wait for availability or for the next turn, deliveries in flight, and the agent turn a delivery started.
 Paused continuations wait for you, so they do not keep the Mac awake.
@@ -218,7 +218,7 @@ Interrupted sends and ambiguous POST responses become `unconfirmed` and never re
 Reconciliation only reads the conversation, marking delivery confirmed if the stable message key is found.
 Absence from a windowed snapshot is not proof of nondelivery.
 When the user has checked the conversation and the message is not there, they can mark it as not delivered, with explicit confirmation, from the tray or over remote control; the app checks once more and records the assertion on the job, and a continuation then resends that turn on Resume with a new delivery key.
-Schedule again provides a draft only for confirmed terminal outcomes; it is blocked for unconfirmed delivery until it is confirmed or marked as not delivered.
+Continue again provides a draft only for confirmed terminal outcomes; it is blocked for unconfirmed delivery until it is confirmed or marked as not delivered.
 Acknowledgment clears an attention badge without deleting history or sending anything.
 
 The renderer uses queue/history, edit/cancel, acknowledgment, reconciliation and job-change APIs.

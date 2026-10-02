@@ -57,7 +57,7 @@ test('turn limit input: default 1, whole numbers only, zero and negatives reject
   assert.deepEqual(continuation.validateAutomation({ turnLimit: 250_000 }), { trigger: 'time', limit: 250_000, stopPhrase: null });
   assert.deepEqual(continuation.validateAutomation({ turnLimit: '12' }), { trigger: 'time', limit: 12, stopPhrase: null });
   assert.deepEqual(continuation.validateAutomation({ trigger: 'available', continuous: true, turnLimit: 0 }), { trigger: 'available', limit: null, stopPhrase: null });
-  assert.throws(() => continuation.validateAutomation({ turnLimit: 0 }), /at least 1/);
+  assert.throws(() => continuation.validateAutomation({ turnLimit: 0 }), /at least 1\. To keep going without a limit, choose Until done\.$/, 'The way out names the composer\'s own control');
   assert.throws(() => continuation.validateAutomation({ turnLimit: -3 }), /at least 1/);
   assert.throws(() => continuation.validateAutomation({ turnLimit: 2.5 }), /whole number/);
   assert.throws(() => continuation.validateAutomation({ turnLimit: 'lots' }), /whole number/);

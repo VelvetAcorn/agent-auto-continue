@@ -22,7 +22,7 @@ Remote control is off by default.
 - **Browser isolation.** Requests carrying an `Origin` header are rejected unless that origin is explicitly allowed, and no CORS headers are sent by default.
   The loopback listener only answers requests addressed to `127.0.0.1` or `localhost`, which blocks DNS rebinding.
 - **Bounded requests.** Bodies are limited to 64 KiB, headers must arrive within 10 seconds and whole requests within 30 seconds, and each listener accepts at most 64 concurrent connections.
-- **Visible audit trail.** Every remote change, denial, failed authentication and token or settings change is recorded and shown under Settings, Remote activity.
+- **Visible audit trail.** Every remote change, denial, failed authentication and token or settings change is recorded and shown under Settings > Remote control > Remote activity.
   Requests refused for a foreign host name, a disallowed browser origin or a rate limit are recorded too, collapsed to one entry per address per minute with a count of the rest.
   Retries answered from an idempotency key are marked as repeats that changed nothing.
   Routine reads are not logged, so a polling phone cannot push older entries out of the 500-entry log.
@@ -32,7 +32,7 @@ Over loopback and Tailscale this is protected by the operating system or by Wire
 
 Earlier versions could also listen on a local-network address.
 At launch, a saved local-network address is dropped before any listener starts: remote control stays on, loopback keeps serving, and the change is recorded.
-The app shows a notification once, adds an entry to Settings, Remote activity, and keeps a notice in `remote-control.json` (`notices`, also returned as `notices` by the desktop state, newest first).
+The app shows a notification once, adds an entry to Settings > Remote control > Remote activity, and keeps a notice in `remote-control.json` (`notices`, also returned as `notices` by the desktop state, newest first).
 If the file cannot be written, the address is still never used, and the change is made again at the next launch.
 A saved Tailscale address is kept even while Tailscale is disconnected.
 
@@ -49,7 +49,7 @@ If the chosen Tailscale address is not available, for example because Tailscale 
 ## Reach it from your phone over Tailscale
 
 1. Install [Tailscale](https://tailscale.com/download) on the Mac and on your phone, and sign both into the same tailnet.
-2. In **Settings, Remote control, Network access**, choose the entry labelled `Tailscale · 100.x.y.z (utunN)`, then save.
+2. In **Settings > Remote control > Network access**, choose the entry labelled `Tailscale · 100.x.y.z (utunN)`, then save.
 3. On the phone, use `http://100.x.y.z:3799` or the Mac's MagicDNS name, such as `http://my-mac.tailnet-name.ts.net:3799`, as the base URL.
 4. Send the token as a bearer token with every request.
 
@@ -297,7 +297,7 @@ Status never runs a check, because a full check enables the app's accessibility 
 
 ## Browser clients
 
-A web app that calls the API from a browser needs its exact origin, such as `https://phone.example`, under **Settings, Remote control, Browser access**.
+A web app that calls the API from a browser needs its exact origin, such as `https://phone.example`, under **Settings > Remote control > Browser access**.
 The list is empty by default, wildcards and paths are refused, and requests or preflights from any other origin are rejected with `403`.
 
 ## Integration points
