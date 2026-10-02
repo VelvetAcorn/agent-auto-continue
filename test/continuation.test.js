@@ -66,6 +66,16 @@ test('turn limit input: default 1, whole numbers only, zero and negatives reject
   assert.throws(() => continuation.validateAutomation({ continuous: 'yes' }), /continuous/);
 });
 
+test('a paused turn quotes its error once, keeping the error\'s own full stop', () => {
+  const job = { chain: continuation.newChain(5, '2026-10-01T00:00:00Z'), dispatchedAt: '2026-10-01T00:00:00Z' };
+  const reason = (state, message) => continuation.afterTurn(job, { state, ...(message === undefined ? {} : { error: { message } }) }, Date.now()).reason;
+  assert.equal(reason('failed', 'The agent crashed.'), 'The last turn failed: The agent crashed. No further message was sent. Resume to keep continuing.');
+  assert.equal(reason('failed', 'The agent crashed'), 'The last turn failed: The agent crashed. No further message was sent. Resume to keep continuing.');
+  assert.equal(reason('interrupted', 'Stopped by the user? '), 'The last turn was interrupted: Stopped by the user? No further message was sent. Resume to keep continuing.');
+  assert.equal(reason('failed', ''), 'The last turn failed. No further message was sent. Resume to keep continuing.');
+  assert.equal(reason('unknown'), 'The app could not tell how the last turn ended. No further message was sent. Resume to keep continuing.');
+});
+
 test('modes a harness cannot support are rejected with the reason, and T3 offers turn limits but not auto-start', async () => {
   const blind = setup({ capabilities: { canDetectUsageLimit: false, canReportResetTime: false, canDetectCompletion: false } });
   await assert.rejects(create(blind), /does not report usage limits/);
