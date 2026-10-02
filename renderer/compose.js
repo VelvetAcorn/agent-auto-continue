@@ -4,9 +4,9 @@
   else root.Compose = api;
 })(typeof globalThis === 'object' ? globalThis : this, function () {
   'use strict';
-  // Pure helpers for the one-screen interface: what the chips mean, the plan sentence under
-  // the Continue button, the meta line of a queued row, the merged conversation list and the
-  // status of each agent in the header. No DOM here, so node:test covers them directly.
+  // Pure helpers for the one-screen interface: what the chips mean, what Edit may change, the plan
+  // sentence under the Continue button, the meta line of a queued row, the merged conversation list
+  // and the status of each agent in the header. No DOM here, so node:test covers them directly.
   const WHEN = Object.freeze([['5', '5 min'], ['30', '30 min'], ['60', '1 hour'], ['tomorrow', 'Tomorrow 9:00'], ['available', 'When free'], ['custom', 'Custom…']]);
   const QUICK = new Set(['5', '30', '60', 'tomorrow']);
 
@@ -32,8 +32,23 @@
     return 'once';
   }
 
+  // What Edit may change: everything until anything has been sent, then only the stop phrase of a
+  // continuation that is running or paused and may send more than one turn, and nothing once it ended.
+  function editScope(job, { stopPhrase = false } = {}) {
+    const status = job.deliveryStatus || job.status;
+    const auto = job.automation;
+    if (status === 'pending' && (!auto || (auto.state === 'active' && auto.currentTurn === 1))) return 'all';
+    if (auto && ['active', 'paused'].includes(auto.state) && auto.limit !== 1 && stopPhrase) return 'stopPhrase';
+    return null;
+  }
+  // The edit Save changes sends when only the stop phrase may change, so every other setting stays as saved.
+  function stopPhraseEdit(draft) {
+    return { stopPhrase: String(draft.stopPhrase ?? '').trim() || null };
+  }
+
   // One line that says exactly what Continue will do.
   function planSentence({ draft, label, availability, time, display, now = Date.now(), supportsTurns = true }) {
+    if (draft.editScope === 'stopPhrase') return `From the next finished turn · ${farLabel(draft)}`;
     const far = supportsTurns ? ` · ${farLabel(draft)}` : '';
     if (draft.when === 'available') {
       const reset = availability?.state === 'limited' && availability.resetsAt ? `, around ${display(availability.resetsAt, draft.timeZone, 'time')}` : '';
@@ -102,5 +117,5 @@
     return { tone: 'unknown', text: 'Checking…' };
   }
 
-  return { WHEN, QUICK, resolveWhen, farLabel, planSentence, queueMeta, mergeConversations, agentStatus };
+  return { WHEN, QUICK, resolveWhen, farLabel, editScope, stopPhraseEdit, planSentence, queueMeta, mergeConversations, agentStatus };
 });

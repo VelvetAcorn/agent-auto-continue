@@ -2,7 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const time = require('../renderer/date-time');
-const { resolveWhen, farLabel, planSentence, queueMeta, mergeConversations, agentStatus, WHEN } = require('../renderer/compose');
+const { resolveWhen, farLabel, editScope, stopPhraseEdit, planSentence, queueMeta, mergeConversations, agentStatus, WHEN } = require('../renderer/compose');
 
 const display = (iso, zone, style) => `${style}:${iso}@${zone}`;
 const relative = () => 'In 25 min';
@@ -33,6 +33,38 @@ test('the plan sentence says when, whether it waits for a limit, and how far', (
   assert.equal(planSentence({ draft: { ...base, when: 'custom' }, label: 'T3 Code', time, display, now }), 'full:2099-10-02T06:30:00.000Z@UTC · once');
   assert.match(planSentence({ draft: { ...base, when: 'custom', date: '2026-03-29', time: '01:30', timeZone: 'Europe/London' }, label: 'T3 Code', time, display, now }), /does not exist/);
   assert.match(planSentence({ draft: { ...base, when: 'custom', date: '2026-10-25', time: '01:30', timeZone: 'Europe/London' }, label: 'T3 Code', time, display, now }), /occurs twice/);
+});
+
+test('Edit changes everything before anything is sent, then only the stop phrase until the continuation ends', () => {
+  const auto = (patch) => ({ state: 'active', currentTurn: 1, limit: 5, ...patch });
+  const phrase = { stopPhrase: true };
+  assert.equal(editScope({ deliveryStatus: 'pending' }), 'all');
+  assert.equal(editScope({ status: 'pending', displayStatus: 'waiting' }), 'all', 'A one-off message waiting for the agent can still be edited');
+  assert.equal(editScope({ deliveryStatus: 'sent' }, phrase), null);
+  assert.equal(editScope({ deliveryStatus: 'pending', automation: auto() }), 'all');
+  assert.equal(editScope({ deliveryStatus: 'pending', automation: auto({ limit: null }) }, phrase), 'all');
+  // After the first turn: a running, waiting, sending or paused continuation offers the stop phrase alone.
+  assert.equal(editScope({ deliveryStatus: 'sent', automation: auto({ currentTurn: 2 }) }, phrase), 'stopPhrase');
+  assert.equal(editScope({ deliveryStatus: 'pending', automation: auto({ currentTurn: 3, limit: null }) }, phrase), 'stopPhrase');
+  assert.equal(editScope({ deliveryStatus: 'dispatching', automation: auto({ currentTurn: 2 }) }, phrase), 'stopPhrase');
+  assert.equal(editScope({ deliveryStatus: 'failed', automation: auto({ state: 'paused', currentTurn: 2 }) }, phrase), 'stopPhrase');
+  assert.equal(editScope({ deliveryStatus: 'unconfirmed', automation: auto({ state: 'paused' }) }, phrase), 'stopPhrase', 'A paused first turn has already been attempted');
+  // Nothing on an ended chain, a single-turn chain, or a harness that cannot end on a phrase.
+  assert.equal(editScope({ deliveryStatus: 'sent', automation: auto({ state: 'finished', currentTurn: 3 }) }, phrase), null);
+  assert.equal(editScope({ deliveryStatus: 'canceled', automation: auto({ state: 'stopped' }) }, phrase), null);
+  assert.equal(editScope({ deliveryStatus: 'sent', automation: auto({ currentTurn: 1, limit: 1 }) }, phrase), null);
+  assert.equal(editScope({ deliveryStatus: 'sent', automation: auto({ currentTurn: 2 }) }), null);
+  assert.equal(editScope({ deliveryStatus: 'sent', automation: auto({ currentTurn: 2 }) }, { stopPhrase: false }), null);
+});
+
+test('a stop phrase edit sends the phrase alone and says when it applies', () => {
+  assert.deepEqual(stopPhraseEdit({ ...base, far: 'until', message: 'Keep going', stopPhrase: '  ALL DONE ' }), { stopPhrase: 'ALL DONE' });
+  assert.deepEqual(stopPhraseEdit({ ...base, far: 'upto', stopPhrase: '   ' }), { stopPhrase: null }, 'A blank phrase removes it');
+  assert.deepEqual(stopPhraseEdit({ ...base, far: 'upto' }), { stopPhrase: null });
+  const now = Date.parse('2026-10-01T22:40:00Z');
+  const draft = { ...base, when: 'custom', date: '2020-01-01', far: 'upto', turnLimit: '5', stopPhrase: 'ALL DONE', editScope: 'stopPhrase' };
+  assert.equal(planSentence({ draft, label: 'Claude Code', time, display, now }), 'From the next finished turn · up to 5 turns, or at “ALL DONE”', 'The past start time is not mentioned');
+  assert.equal(planSentence({ draft: { ...draft, far: 'until', stopPhrase: '' }, label: 'Claude Code', time, display, now }), 'From the next finished turn · until done');
 });
 
 test('queued and recent rows get one honest meta line', () => {

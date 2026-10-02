@@ -76,11 +76,11 @@ const desk = createFakeHarness({ id: 'desk', label: 'Claude Desktop', kind: 'des
   capabilities: { requiresRunningApp: true, requiresUnlockedScreen: true, requiresAccessibilityPermission: true },
   conversations: [{ id: 'local_fixture', title: 'Refactor the scheduler', projectName: 'agent-auto-continue', updatedAt: '2026-09-30T11:00:00Z' }] });
 // Automatic continuations run end to end against the fake harness; each turn
-// completes on its own after 300 ms, or when the journey releases it.
+// completes on its own after 300 ms, or when the journey releases it with an outcome.
 let completionMode = 'auto';
 const pendingCompletions = [];
 fake.state.completion = () => new Promise((resolve) => {
-  const finish = () => resolve({ state: 'completed', completedAt: new Date().toISOString() });
+  const finish = (outcome = { state: 'completed' }) => resolve({ ...outcome, completedAt: new Date().toISOString() });
   if (completionMode === 'auto') setTimeout(finish, 300); else pendingCompletions.push(finish);
 });
 // Real timers for near-term work only; far-future schedules (such as 2099 fixtures) never fire.
@@ -213,7 +213,7 @@ async function run() {
   assert.equal(windows.length, 1, 'Every journey stayed in the same window');
   await layoutJourney(js);
   await updateJourney();
-  console.log('Electron production workflow smoke passed: rail and window layouts, update notice and restart prompt, real preload/IPC/renderer, local history, sanitized offline error, keep-awake assertions released, zero T3 sends, and fake-harness continuations (auto-start, turn limit, continuous, stop, tray stop all), agent arrangement and a desktop app compatibility notice.');
+  console.log('Electron production workflow smoke passed: rail and window layouts, update notice and restart prompt, real preload/IPC/renderer, local history, sanitized offline error, keep-awake assertions released, zero T3 sends, and fake-harness continuations (auto-start, turn limit, continuous, stop phrase edits while running and paused, stop, tray stop all), agent arrangement and a desktop app compatibility notice.');
 }
 // Shared DOM helpers. `click` waits for the control; `fill` types through the input event the renderer listens to.
 async function click(js, selector, { optional = false } = {}) {
@@ -722,15 +722,58 @@ async function continuationJourney(js) {
   assert.equal(await js(`Boolean(document.querySelector('.qhead [data-action="stop-all"]'))`), true, 'Stop all is offered while a continuation runs');
   await capture('home-continuous-running');
   const continuous = (await chains()).find(job => job.automation.unlimited);
+  const continuousJob = () => js(`window.autoContinue.getJob(${JSON.stringify(continuous.id)})`);
+  // After the first turn, Edit changes only the stop phrase: every other setting stays locked.
+  const rowEdit = JSON.stringify(`[data-job="${continuous.id}"] [data-action="edit"]`);
+  assert.equal(await js(`document.querySelector(${rowEdit})?.title`), 'Edit stop phrase', 'The running row offers the stop phrase edit');
+  await js(`document.querySelector(${rowEdit}).focus(); document.querySelector('#toast').hidden = true`);
+  await capture('home-continuous-row-actions');
   await click(js, `[data-open="${continuous.id}"]`);
   await waitFor(() => js(`Boolean(document.querySelector('.detail [data-action="stop"]'))`), 'stop control');
+  assert.equal(await js(`document.querySelector('.detail [data-action="edit"]')?.textContent`), 'Edit stop phrase');
   await capture('detail-continuous-running');
+  await click(js, '.detail [data-action="edit"]');
+  await view(js, 'home');
+  await waitFor(() => js(`document.activeElement?.id === 'stop-phrase'`), 'stop phrase focused for editing');
+  const locked = await js(`(() => ({
+    banner: document.querySelector('.editing span').textContent, scope: document.querySelector('#edit-scope').textContent,
+    picker: document.querySelector('#pick').disabled, when: [...document.querySelectorAll('[data-when]')].every(node => node.disabled),
+    far: [...document.querySelectorAll('[data-far]')].every(node => node.disabled), limit: document.querySelector('#turn-limit').disabled,
+    message: Boolean(document.querySelector('[data-action="edit-message"]')), phrase: document.querySelector('#stop-phrase').disabled,
+    plan: document.querySelector('#plan').textContent, button: document.querySelector('#continue').textContent }))()`);
+  assert.deepEqual(locked, { banner: 'Editing a running continuation', scope: 'This continuation has already started, so only its stop phrase can change.', picker: true, when: true, far: true, limit: true, message: false, phrase: false, plan: 'From the next finished turn · until done', button: 'Save changes' });
+  await fill(js, '#stop-phrase', 'ALL DONE');
+  await waitFor(() => js(`document.querySelector('#plan').textContent === 'From the next finished turn · until done, or at “ALL DONE”'`), 'stop phrase plan');
+  await js(`document.querySelector('#toast').hidden = true`);
+  await capture('home-edit-stop-phrase');
+  await js(`document.querySelector('#continue-form').requestSubmit()`);
+  await waitFor(() => js(`document.querySelector('#toast').textContent.includes('Stop phrase updated.')`), 'stop phrase updated toast');
+  const edited = await continuousJob();
+  assert.deepEqual([edited.automation.stopPhrase, edited.automation.state, edited.automation.unlimited, edited.message, edited.trigger, edited.scheduleAt, edited.messageId, edited.turn.state],
+    ['ALL DONE', 'active', true, continuous.message, continuous.trigger, continuous.scheduleAt, continuous.messageId, 'running'], 'Only the stop phrase changed');
+  assert.equal(await js(`Boolean(document.querySelector('.editing')) || document.querySelector('#continue').textContent !== 'Continue'`), false, 'The composer returns to a new message');
+  assert.equal(fake.state.submitted.length, 5, 'Editing the stop phrase sends nothing');
+  // A failed turn pauses the continuation; its stop phrase can still change, and it can be removed.
+  pendingCompletions.shift()({ state: 'failed', error: { code: 'agent_error', message: 'Fixture turn failed.' } });
+  await waitFor(async () => (await continuousJob()).automation.state === 'paused', 'continuation paused after a failed turn');
+  await waitFor(() => js(`Boolean(document.querySelector(${JSON.stringify(`.recent [data-open="${continuous.id}"]`)}))`), 'paused continuation in Recent');
+  await click(js, `.recent [data-open="${continuous.id}"]`);
+  await waitFor(() => js(`document.querySelector('.detail [data-action="edit"]')?.textContent === 'Edit stop phrase' && Boolean(document.querySelector('.detail [data-action="resume"]'))`), 'paused detail offers the stop phrase edit');
+  await capture('detail-continuous-paused');
+  await click(js, '.detail [data-action="edit"]');
+  await waitFor(() => js(`document.querySelector('.editing span')?.textContent === 'Editing a paused continuation' && document.querySelector('#stop-phrase').value === 'ALL DONE'`), 'paused continuation editing');
+  await fill(js, '#stop-phrase', '');
+  await js(`document.querySelector('#continue-form').requestSubmit()`);
+  await waitFor(() => js(`document.querySelector('#toast').textContent.includes('Stop phrase removed.')`), 'stop phrase removed toast');
+  assert.deepEqual([(await continuousJob()).automation.stopPhrase, (await continuousJob()).automation.state], [null, 'paused']);
+  await click(js, `.recent [data-open="${continuous.id}"]`);
+  await waitFor(() => js(`Boolean(document.querySelector('.detail [data-action="stop"]'))`), 'stop control on the paused continuation');
   await click(js, '.detail [data-action="stop"]');
-  await waitFor(() => js(`window.autoContinue.getJob(${JSON.stringify(continuous.id)}).then(job=>job.automation.state==='stopped')`), 'stopped from the detail view');
-  pendingCompletions.shift()();
+  await waitFor(async () => (await continuousJob()).automation.state === 'stopped', 'stopped from the detail view');
   await new Promise(resolve => setTimeout(resolve, 1000));
   assert.equal(fake.state.submitted.length, 5, 'Nothing is sent after Stop');
   await waitFor(() => js(`document.querySelector('.chain-reason')?.textContent.includes('Stopped by you')`), 'stopped detail');
+  assert.equal(await js(`Boolean(document.querySelector('.detail [data-action="edit"]'))`), false, 'An ended continuation offers no edit');
   await capture('detail-continuous-stopped');
   await click(js, '[data-action="back"]');
   // Stop all from the menu-bar tray.

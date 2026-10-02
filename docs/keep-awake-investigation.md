@@ -365,7 +365,7 @@ It evaluates on every source change, power-source change and wake, and on a one-
 
 The UI stays within the existing Paper / Focus style until the new direction from [#6](https://github.com/VelvetAcorn/agent-auto-continue/issues/6) is approved.
 
-- **Settings:** a "Keep awake" card with the opt-in, "Keep the display on too", "Also stay awake while any T3 Code agent turn runs", battery behaviour, battery floor, time limit, a live status line, and a disclosure explaining lids, locking and forced sleep.
+- **Settings:** a "Keep the Mac awake" section with the opt-in, "Keep the display on too", "Also stay awake while any T3 Code agent turn runs", battery behaviour, battery floor, time limit, a live status line, and a disclosure explaining lids, locking and forced sleep.
 - **Status notice:** shown above every view while a session is armed, active, releasing, paused or ended.
   It states why the Mac is awake, the latest stop time, and a disclosure listing each task with its detail and start or expiry time.
   It offers "Let Mac sleep" or "Keep awake again", warns when a task needs the screen unlocked, and reports when macOS slept anyway.

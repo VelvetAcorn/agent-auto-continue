@@ -30,7 +30,7 @@ A `time` schedule that meets a limit at its time fails before sending, as before
 `turnLimit` is the total number of turns the schedule may count, including the first, and defaults to 1.
 It accepts any whole number from 1 up to JavaScript's largest safe integer.
 Zero, negative and fractional values are rejected with an explanation, so 0 never silently means unlimited.
-`continuous: true` removes the limit, and the UI then shows Keep continuing until I stop it instead of a number.
+`continuous: true` removes the limit, and the UI then shows Until done instead of a number.
 Anything other than a single turn requires `canDetectCompletion`, because the next turn is sent only after the previous turn has finished.
 
 A turn counts toward the limit once it is delivered, unless it ends at a usage limit.
@@ -59,7 +59,7 @@ A new turn can therefore never be mistaken for an earlier delivery, and an earli
 The transition from a finished turn to the next pending turn is a single persisted write.
 
 `paused` needs the user, who can resume or stop the chain.
-`stopped` and `finished` are final, and Schedule again prepares a new draft with the same settings.
+`stopped` and `finished` are final, and Continue again prepares a new draft with the same settings.
 
 ## Stop phrase
 
@@ -211,3 +211,4 @@ IPC adds `jobs:stop`, `jobs:stop-all`, `jobs:resume` and `jobs:mark-not-delivere
 `schedule:create` and `jobs:edit` accept `trigger`, `turnLimit`, `continuous` and `stopPhrase`.
 `harnesses:list` adds `automation: { whenAvailable, multipleTurns, stopPhrase }` to each harness, each `{ supported, reason }`, so the UI explains disabled modes in the app's own words.
 The window offers the stop phrase under How far when Up to or Until done is chosen, shows it in the continuation's details, and offers Mark as not delivered, with a confirmation, in the details of an unconfirmed delivery.
+After the first turn of an active or paused continuation, Edit on its queue row and Edit stop phrase in its details open the composer with every other setting locked, and Save changes sends only `stopPhrase`; an ended continuation offers neither.

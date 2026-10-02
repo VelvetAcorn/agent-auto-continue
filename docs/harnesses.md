@@ -225,7 +225,7 @@ Older app versions refuse newer files without changing them, rather than sending
 
 Before sending, the job service inspects the conversation, cancels on archive or newer user activity, and fails without sending when `probeAvailability()` reports a limit whose reset time is still in the future.
 A limit without a reset time blocks only when its `source` is `reported`; an inferred limit without a reset time is sent, and the turn outcome records the limit if it still applies.
-That failure has error code `usage_limited`, `deliveryCertainty: 'not-delivered'`, and `error.details.resetsAt`, so Schedule again remains available.
+That failure has error code `usage_limited`, `deliveryCertainty: 'not-delivered'`, and `error.details.resetsAt`, so Continue again remains available.
 It also fails without sending, as a certain non-delivery the user is notified about, when `awaitingInput` is `true` (error code `awaiting_input`), because only the user can answer the agent.
 When `busy` is `true`, the message waits instead, as described below.
 A `null` value for either never blocks.

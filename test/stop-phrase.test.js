@@ -9,6 +9,7 @@ const { createHarnessRegistry } = require('../lib/harnesses/registry');
 const { createT3Harness, lastAgentMessage, turnOutcomeFor } = require('../lib/harnesses/t3');
 const { MAX_AGENT_MESSAGE_CHARS, turnOutcome } = require('../lib/harnesses/contract');
 const { MIN, serviceFixture } = require('./service-fixture');
+const compose = require('../renderer/compose');
 
 const chain = (h, patch = {}) => h.service.create({ harness: 'fake', threadId: 'conv', message: 'Continue', timeZone: 'UTC', trigger: 'available', turnLimit: 5, stopPhrase: 'TASK COMPLETE', ...patch });
 
@@ -231,4 +232,31 @@ test('a phrase-only edit on a paused continuation can remove the phrase, and is 
   const plain = await chain(blind, { stopPhrase: undefined });
   assert.throws(() => blind.service.edit(plain.id, { stopPhrase: 'DONE' }), /does not report the agent's last message/);
   assert.equal(blind.service.edit(plain.id, { stopPhrase: null }).automation.stopPhrase, null);
+});
+
+test('the window offers exactly the edits the service accepts, and its stop phrase edit changes nothing else', async () => {
+  const h = serviceFixture();
+  const scope = (id) => compose.editScope(h.view(id), { stopPhrase: true });
+  const created = await chain(h, { message: 'Keep going', turnLimit: 4 });
+  assert.equal(scope(created.id), 'all', 'Before the first turn every setting can change');
+  await h.advance(5_000);
+  await h.finish(1, { lastAgentMessage: 'Still working.' });
+  await h.advance(5_000);
+  assert.equal(scope(created.id), 'stopPhrase', 'Turn 2 is running');
+  const before = h.view(created.id);
+  // The full edit the composer would otherwise send is refused once a turn has been sent.
+  assert.throws(() => h.service.edit(created.id, { message: 'Keep going', trigger: 'available', turnLimit: 4, stopPhrase: 'ALL DONE' }), { code: 'invalid_state' });
+  const draft = { far: 'upto', turnLimit: '9', message: 'Changed', when: '5', stopPhrase: ' all   done ', editScope: 'stopPhrase' };
+  const after = h.service.edit(created.id, compose.stopPhraseEdit(draft));
+  assert.equal(after.automation.stopPhrase, 'all done');
+  assert.deepEqual([after.message, after.trigger, after.automation.limit, after.scheduleAt, after.messageId, after.turn.state], [before.message, before.trigger, before.automation.limit, before.scheduleAt, before.messageId, 'running']);
+  const job = h.get(created.id);
+  h.service.patch(job, h.service.chainPatch(job, 'paused', 'turn_failed', 'The last turn failed.'));
+  assert.equal(scope(created.id), 'stopPhrase', 'A paused continuation can still change its phrase');
+  assert.equal(h.service.edit(created.id, compose.stopPhraseEdit({ ...draft, stopPhrase: '' })).automation.stopPhrase, null);
+  h.service.stop(created.id);
+  assert.equal(scope(created.id), null, 'An ended continuation offers no edit');
+  const single = await h.service.create({ harness: 'fake', threadId: 'conv', message: 'Continue', timeZone: 'UTC', trigger: 'available', turnLimit: 1 });
+  await h.advance(5_000);
+  assert.equal(scope(single.id), null, 'A single-turn continuation has no phrase to change');
 });
