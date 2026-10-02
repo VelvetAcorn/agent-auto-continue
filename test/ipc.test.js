@@ -383,3 +383,17 @@ test('a first run opens Settings in the rail so the agents can be set up', () =>
   assert.equal(configured.events.find(([name]) => name === 'app:navigate')[1].view, 'home');
   assert.equal(configured.windows[0].visible, undefined);
 });
+
+test('quitting quits again on a later task, so Electron cannot cancel it while the first quit unwinds', async () => {
+  // When macOS asks the app to quit (SIGTERM, logging out, Squirrel installing an update), Electron runs
+  // microtasks before its own before-quit call returns. A re-quit made from those microtasks is overwritten
+  // by the prevented quit still unwinding, which left the app running with no window instead of quitting.
+  const app = appHarness();
+  const event = { defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } };
+  for (const listener of app.appEvents['before-quit']) listener(event);
+  assert.equal(event.defaultPrevented, true, 'the first quit waits for agent turns to stop');
+  for (let tick = 0; tick < 20; tick++) await Promise.resolve();
+  assert.equal(app.quits, 0, 'no re-quit from inside the handler’s microtasks');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(app.quits, 1, 'the app quits again once the first quit has returned');
+});

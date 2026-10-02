@@ -51,3 +51,39 @@ test('the menu-bar template images are 18px with a 36px Retina representation', 
     assert.deepEqual(pngSize(fs.readFileSync(path.join(root, `assets/${glyph}@2x.png`))), { width: 36, height: 36 });
   }
 });
+
+test('the disk image has a stable name, a signature, and a HiDPI drag-to-Applications background', () => {
+  const { dmg } = build;
+  // https://github.com/VelvetAcorn/agent-auto-continue/releases/latest/download/Agent-Auto-Continue.dmg always serves the newest release.
+  assert.equal(dmg.artifactName, 'Agent-Auto-Continue.${ext}');
+  assert.doesNotMatch(dmg.artifactName, /\s|\$\{version\}/, 'GitHub rewrites spaces, and a version would break the stable link');
+  assert.equal(dmg.sign, true);
+  assert.equal(dmg.background, 'build/background.png');
+  const one = pngSize(fs.readFileSync(path.join(root, 'build/background.png')));
+  const two = pngSize(fs.readFileSync(path.join(root, 'build/background@2x.png')));
+  // electron-builder sizes the window from the 1x background and merges the @2x file into a HiDPI TIFF.
+  assert.deepEqual(one, { width: dmg.window.width, height: dmg.window.height });
+  assert.deepEqual(two, { width: one.width * 2, height: one.height * 2 });
+  // The app on the left, the Applications link on the right, level, with room for each icon and its name.
+  const [file, link] = dmg.contents;
+  assert.equal(file.type, 'file');
+  assert.deepEqual([link.type, link.path], ['link', '/Applications']);
+  assert.ok(file.x < link.x && file.y === link.y);
+  const half = dmg.iconSize / 2;
+  for (const item of dmg.contents) {
+    assert.ok(item.x - half - 20 >= 0 && item.x + half + 20 <= one.width, `${item.type} fits horizontally with its name`);
+    // Finder may take the title bar's height from the bottom of the window, so the names stay well clear of it.
+    assert.ok(item.y - half >= 100 && item.y + half + 30 <= one.height - 60, `${item.type} fits vertically with its name`);
+  }
+});
+
+test('the updater feed is GitHub Releases and only the versioned ZIP carries update information', () => {
+  assert.deepEqual(build.publish, [{ provider: 'github', owner: 'VelvetAcorn', repo: 'agent-auto-continue' }]);
+  assert.equal(build.artifactName, '${name}-${version}-${arch}.${ext}', 'the ZIP stays versioned for the updater');
+  assert.deepEqual(build.mac.target, ['dmg', 'zip']);
+  // Stapling the DMG after the build changes its bytes, so it stays out of latest-mac.yml; macOS updates come from the ZIP.
+  assert.equal(build.dmg.writeUpdateInfo, false);
+  const { dependencies, devDependencies } = require('../package.json');
+  assert.ok(dependencies['electron-updater'], 'electron-updater ships inside the app, so it is a dependency');
+  assert.equal(devDependencies['electron-updater'], undefined);
+});

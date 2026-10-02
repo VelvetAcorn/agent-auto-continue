@@ -2,12 +2,12 @@
 
 const electron = require('electron');
 const { app, BrowserWindow, Menu, Notification, Tray, clipboard, dialog, ipcMain, nativeImage, powerMonitor, powerSaveBlocker, shell } = electron;
-const { execFile } = require('node:child_process');
+const { execFile, spawn } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { clearTimeout, setInterval, setTimeout } = require('node:timers');
+const { clearTimeout, setImmediate, setInterval, setTimeout } = require('node:timers');
 const schedule = require('node-schedule');
 const { arrangeAgents, normaliseConfig, validateAgentsInput, validateLayoutInput, validateSettingsInput } = require('./lib/model');
 const { createApiClient, toErrorInfo } = require('./lib/api-client');
@@ -25,6 +25,8 @@ const { createDiagnosticsLog } = require('./lib/diagnostics');
 const { createCompatibilityMonitor } = require('./lib/compatibility-monitor');
 const { migrateLegacyStorage } = require('./lib/storage-migration');
 const { connectionLabel, conversationMenuItems, createConversationCache } = require('./lib/tray-conversations');
+const { createInstallLocation } = require('./lib/install-location');
+const { createUpdater, restartBlocker } = require('./lib/updater');
 
 const APP_NAME = 'Agent Auto-Continue';
 const DEFAULT_CONFIG = { t3Token: '', httpPort: 3773, bufferSeconds: 5 };
@@ -62,9 +64,41 @@ let railHideTimer;
 // Where the rail was last anchored under the icon; a rail dragged elsewhere is not pulled back on resize.
 let railAnchor;
 const RAIL_BLUR_HIDE_MS = 150;
+// Set once the tray, the scheduler and the window have started; before that only the move-to-Applications question runs.
+let started = false;
+let updater;
+
+// Offered before anything else starts; see lib/install-location.js.
+const installLocation = createInstallLocation({
+  app, dialog, fs, execPath: process.execPath, home: os.homedir(), platform: process.platform, appName: APP_NAME,
+  load: () => readJson(dataPath('install-location.json'), null), save: (value) => writeJson(dataPath('install-location.json'), value),
+  findRunning: runningCopies, terminate: (pid) => process.kill(pid, 'SIGTERM'), isAlive: processAlive, openAfterExit,
+  log: (level, message) => console[level === 'warn' ? 'warn' : 'log'](`[install] ${message}`)
+});
 
 const ownsInstance = app.requestSingleInstanceLock();
-if (!ownsInstance) app.quit();
+// A second copy quits at once, unless it is a packaged download that may replace an older copy running from Applications.
+if (!ownsInstance && !installLocation.applies()) app.quit();
+
+// PIDs of running processes whose executable is exactly `executable`.
+function runningCopies(executable) {
+  return new Promise((resolve) => {
+    execFile('/bin/ps', ['-axo', 'pid=,comm='], { timeout: 5_000, maxBuffer: 4 * 1024 * 1024 }, (error, stdout) => {
+      if (error) return resolve([]);
+      resolve(String(stdout).split('\n').map((line) => /^\s*(\d+)\s+(.+)$/.exec(line)).filter((match) => match && match[2].trim() === executable).map((match) => Number(match[1])));
+    });
+  });
+}
+
+function processAlive(pid) {
+  try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; }
+}
+
+// Opens a bundle once this process has exited, so the copy that opens can take the single-instance lock.
+function openAfterExit(bundle) {
+  const child = spawn('/bin/sh', ['-c', 'while /bin/kill -0 "$1" 2>/dev/null; do /bin/sleep 0.1; done; /usr/bin/open "$2"', 'sh', String(process.pid), bundle], { detached: true, stdio: 'ignore' });
+  child.unref();
+}
 
 function dataPath(file) {
   return path.join(app.getPath('userData'), file);
@@ -436,6 +470,75 @@ function trayJobItem(job) {
   return { label: trayJobLabel(job), submenu: items };
 }
 
+// ---------- Updates ----------
+// Released copies update themselves from GitHub Releases; development, the tests and the smoke fixture do not.
+function createAppUpdater() {
+  const readOnly = installLocation.readOnly();
+  const supported = app.isPackaged === true && process.platform === 'darwin';
+  return createUpdater({
+    enabled: supported && !readOnly, disabledReason: !supported ? 'development' : 'location', currentVersion: app.getVersion?.() || '',
+    // Loaded only when enabled, so nothing else ever touches Squirrel or the network.
+    loadAutoUpdater: () => require('electron-updater').autoUpdater,
+    onChange: publishUpdate,
+    log: (level, message) => console[level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'log'](`[updater] ${message}`)
+  });
+}
+
+function updateSnapshot() {
+  return updater?.snapshot() || { enabled: false, disabledReason: 'development', state: 'disabled', currentVersion: app.getVersion?.() || '', version: null, percent: null, checkedAt: null, error: null };
+}
+
+function publishUpdate(snapshot) {
+  for (const window of BrowserWindow.getAllWindows()) window.webContents.send('update:changed', snapshot);
+  void rebuildMenu();
+}
+
+// The user asked to restart. Queued work that a restart would interrupt is named first, and nothing restarts without a yes.
+async function restartToUpdate() {
+  if (updateSnapshot().state !== 'ready') return { restarting: false };
+  const reason = restartBlocker(service?.activeWork() || [], { now: Date.now() });
+  if (reason) {
+    const { response } = await dialog.showMessageBox({
+      type: 'warning', title: APP_NAME, buttons: ['Later', 'Restart Anyway'], defaultId: 0, cancelId: 0,
+      message: 'Restart to update now?',
+      detail: `${reason} The update also installs by itself the next time you quit ${APP_NAME}.`
+    });
+    if (response !== 1) return { restarting: false, reason };
+  }
+  // The rail hides instead of closing until the app is quitting, which would hold up the install.
+  quitting = true;
+  const restarting = updater.install();
+  if (!restarting) quitting = false;
+  return { restarting };
+}
+
+// "Check for Updates…" in the menu answers with a dialog, since there may be no window open.
+async function checkForUpdatesFromMenu() {
+  const current = updateSnapshot();
+  if (!current.enabled) {
+    // A translocated copy or one on the disk image cannot update itself; offer the move again.
+    if (current.disabledReason === 'location' && (await installLocation.ensure({ ownsInstance: true })) === 'quit') app.quit();
+    return;
+  }
+  if (current.state === 'ready') { await restartToUpdate(); return; }
+  const result = await updater.check();
+  if (result.state === 'ready') { await restartToUpdate(); return; }
+  const version = app.getVersion?.() || '';
+  const message = result.state === 'downloading' ? `Downloading ${APP_NAME} ${result.version}` : result.state === 'error' ? 'Couldn’t check for updates' : 'You’re up to date';
+  const detail = result.state === 'downloading' ? 'It downloads in the background. Choose Restart to Update in this menu when it is ready, or it installs by itself the next time you quit.'
+    : result.state === 'error' ? result.error?.message || 'Try again later.' : `${APP_NAME} ${version} is the newest version.`;
+  await dialog.showMessageBox({ type: result.state === 'error' ? 'warning' : 'info', title: APP_NAME, message, detail, buttons: ['OK'] });
+}
+
+function updateMenuItems() {
+  const current = updateSnapshot();
+  if (current.disabledReason === 'development') return [];
+  if (current.state === 'ready') return [{ label: `Restart to Update to ${current.version}`, click: () => void restartToUpdate() }];
+  if (current.state === 'checking') return [{ label: 'Checking for Updates…', enabled: false }];
+  if (current.state === 'downloading') return [{ label: `Downloading Update…${current.percent ? ` ${current.percent}%` : ''}`, enabled: false }];
+  return [{ label: 'Check for Updates…', click: () => void checkForUpdatesFromMenu() }];
+}
+
 // Builds the tray menu from cached state only, so it never waits for a harness.
 async function rebuildMenu() {
   if (!tray) return;
@@ -467,6 +570,7 @@ async function rebuildMenu() {
     ...(continuing.length ? [{ label: `Stop all continuations (${continuing.length})`, click: () => trayAction(() => service.stopAll(), 'Could not stop') }] : []),
     { type: 'separator' },
     { label: 'Settings…', click: openSettings },
+    ...updateMenuItems(),
     {
       label: 'Launch at login', type: 'checkbox', checked: app.getLoginItemSettings().openAtLogin,
       click: (item) => app.setLoginItemSettings({ openAtLogin: item.checked })
@@ -575,13 +679,37 @@ ipcMain.handle('keep-awake:configure', (_event, incoming) => {
   config = next;
   return controller.configure(config.keepAwake);
 });
+ipcMain.handle('update:get', () => updateSnapshot());
+ipcMain.handle('update:check', async () => {
+  const current = updateSnapshot();
+  // From Settings, a copy that cannot update itself where it runs is offered the move instead.
+  if (current.disabledReason === 'location') {
+    if ((await installLocation.ensure({ ownsInstance: true })) === 'quit') app.quit();
+    return updateSnapshot();
+  }
+  return updater ? updater.check() : current;
+});
+ipcMain.handle('update:restart', () => restartToUpdate());
 ipcMain.handle('keep-awake:stop', () => requireKeepAwake().stop());
 ipcMain.handle('keep-awake:resume', () => requireKeepAwake().resume());
 
-app.on('second-instance', () => openDashboard());
+app.on('second-instance', () => { if (started) openDashboard(); });
+// quitAndInstall closes every window before quitting; the rail must not hide instead.
+app.on('before-quit-for-update', () => { quitting = true; });
 
 app.whenReady().then(() => {
-  if (!ownsInstance) return;
+  // A packaged copy outside Applications first offers to move; it starts only if it stays where it is.
+  if (installLocation.applies()) {
+    void installLocation.ensure({ ownsInstance }).then((outcome) => outcome === 'continue' && ownsInstance ? startApp() : app.quit(), () => ownsInstance ? startApp() : app.quit());
+    return;
+  }
+  if (ownsInstance) startApp();
+});
+
+function startApp() {
+  if (started) return;
+  started = true;
+  updater = createAppUpdater();
   startCompatibility();
   try {
     loadState();
@@ -618,7 +746,9 @@ app.whenReady().then(() => {
     event.preventDefault();
     harnessesStopped = true;
     let timeout;
-    void Promise.race([harnesses.shutdown(), new Promise((resolve) => { timeout = setTimeout(resolve, 6000); })]).finally(() => { clearTimeout(timeout); app.quit(); });
+    // Quit again on a later task, never from this handler's microtasks: with no turn running the race settles
+    // while Electron is still inside the quit this handler just prevented, and that quit would then cancel the new one.
+    void Promise.race([harnesses.shutdown(), new Promise((resolve) => { timeout = setTimeout(resolve, 6000); })]).finally(() => { clearTimeout(timeout); setImmediate(() => app.quit()); });
   });
   powerMonitor.on('suspend', () => keepAwake.handleSuspend());
   powerMonitor.on('resume', () => {
@@ -628,9 +758,10 @@ app.whenReady().then(() => {
   powerMonitor.on('unlock-screen', () => !storageError && void service.retryAfterUnlock().catch(() => notify('Schedule could not be updated', 'Check local disk space and restart the app.')));
   for (const event of ['on-ac', 'on-battery']) powerMonitor.on(event, () => keepAwake.handlePowerSourceChange());
   app.on('activate', () => { openDashboard(); void trayConversations.refresh(); });
-});
+  updater.start();
+}
 
 app.on('before-quit', () => { void remote?.stop(); });
 app.on('window-all-closed', () => { /* Keep the scheduler running in the tray. */ });
 // macOS also releases the assertion if the process crashes or is killed.
-app.on('will-quit', () => keepAwake?.dispose());
+app.on('will-quit', () => { keepAwake?.dispose(); updater?.stop(); });

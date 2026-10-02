@@ -15,12 +15,14 @@ const path = require('node:path');
  * @param {(options: object) => object[]} [options.extraHarnesses] Adapters added to the registry after T3 Code.
  * @param {(registry: object) => object} [options.wrapRegistry] Adjusts the registry main.js receives.
  * @param {Record<string, string>} [options.env] The process environment main.js sees.
+ * @param {Record<string, object>} [options.overrides] Modules main.js requires, replaced by name (for example './lib/updater').
  */
-function appHarness(initialJobs = [], { ownsInstance = true, rawJobs, config, extraFiles = {}, extraHarnesses, wrapRegistry, env = { T3_TOKEN: 'test-secret' } } = {}) {
+function appHarness(initialJobs = [], { ownsInstance = true, rawJobs, config, extraFiles = {}, extraHarnesses, wrapRegistry, env = { T3_TOKEN: 'test-secret' }, overrides = {} } = {}) {
   const handlers = {}, files = new Map(), events = [], windows = [], opened = [], clipboard = [], appEvents = {}, powerEvents = {}, trayEvents = {}, blockers = new Map(), dialogs = [];
   let dialogResponse = 1;
+  let quits = 0;
   let nextBlocker = 0;
-  let trayMenu, trayTooltip, failWrite = false;
+  let trayMenu, trayTooltip, failWrite = false, trays = 0;
   let ready, response = () => new Response('<!doctype html><html>test-secret</html>', { headers: { 'content-type': 'text/html' } });
   files.set('/fixture/jobs.json', rawJobs ?? JSON.stringify(initialJobs));
   if (config) files.set('/fixture/config.json', JSON.stringify(config));
@@ -39,10 +41,10 @@ function appHarness(initialJobs = [], { ownsInstance = true, rawJobs, config, ex
   }
   const electron = {
     // Every listener is kept, because main.js registers more than one for some app events (before-quit).
-    app: { requestSingleInstanceLock: () => ownsInstance, quit() {}, on: (name, fn) => { (appEvents[name] ||= []).push(fn); }, whenReady: () => ({ then: fn => { ready = fn; } }), getPath: () => '/fixture', getLoginItemSettings: () => ({ openAtLogin: false }) },
+    app: { requestSingleInstanceLock: () => ownsInstance, quit() { quits++; }, getVersion: () => '2.1.0', on: (name, fn) => { (appEvents[name] ||= []).push(fn); }, whenReady: () => ({ then: fn => { ready = fn; } }), getPath: () => '/fixture', getLoginItemSettings: () => ({ openAtLogin: false }) },
     ipcMain: { handle: (name, fn) => { handlers[name] = fn; } }, BrowserWindow: Window,
     Menu: { buildFromTemplate: value => { trayMenu = value; return value; } }, Notification: { isSupported: () => false },
-    Tray: class { setToolTip(value) { trayTooltip = value; } setImage() {} on(name, fn) { (trayEvents[name] ||= []).push(fn); } popUpContextMenu() {} },
+    Tray: class { constructor() { trays++; } setToolTip(value) { trayTooltip = value; } setImage() {} on(name, fn) { (trayEvents[name] ||= []).push(fn); } popUpContextMenu() {} },
     nativeImage: { createFromPath: () => ({ setTemplateImage() {} }) },
     powerMonitor: { on: (name, fn) => { powerEvents[name] = fn; }, isOnBatteryPower: () => false },
     powerSaveBlocker: { start: (type) => { blockers.set(nextBlocker, type); return nextBlocker++; }, stop: (id) => blockers.delete(id), isStarted: (id) => blockers.has(id) },
@@ -58,10 +60,11 @@ function appHarness(initialJobs = [], { ownsInstance = true, rawJobs, config, ex
     const registry = extraHarnesses ? harnessModule.createHarnessRegistry([require('../lib/harnesses/t3').createT3Harness({ api: options.api }), ...extraHarnesses(options)]) : harnessModule.createHarnesses(options);
     return wrapRegistry ? wrapRegistry(registry) : registry;
   };
-  const context = { require: name => name === 'electron' ? electron : name === 'node:fs' ? fakeFs : name === 'node-schedule' ? { scheduleJob: () => ({ cancel() {} }) } : name === './lib/api-client' ? { ...apiModule, createApiClient: options => apiModule.createApiClient({ ...options, fetchImpl: (...args) => response(...args) }) } : name === './lib/harnesses' ? { ...harnessModule, createHarnesses } : name.startsWith('./lib/') ? require(path.join(__dirname, '..', name)) : require(name), __dirname: path.join(__dirname, '..'), process: { env, pid: 123 }, console, Buffer };
+  const context = { require: name => Object.hasOwn(overrides, name) ? overrides[name] : name === 'electron' ? electron : name === 'node:fs' ? fakeFs : name === 'node-schedule' ? { scheduleJob: () => ({ cancel() {} }) } : name === './lib/api-client' ? { ...apiModule, createApiClient: options => apiModule.createApiClient({ ...options, fetchImpl: (...args) => response(...args) }) } : name === './lib/harnesses' ? { ...harnessModule, createHarnesses } : name.startsWith('./lib/') ? require(path.join(__dirname, '..', name)) : require(name), __dirname: path.join(__dirname, '..'), process: { env, pid: 123 }, console, Buffer };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8'), context);
   ready();
   return {
+    get quits() { return quits; }, get trays() { return trays; },
     invoke: (name, ...args) => handlers[name]({}, ...args),
     // Calls every listener for an app event with an Electron-like event object.
     emit: (name) => { const event = { defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } }; return Promise.all((appEvents[name] || []).map((fn) => fn(event))); },

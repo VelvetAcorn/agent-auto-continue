@@ -48,7 +48,7 @@ If you are running inside a tool that sets `ELECTRON_RUN_AS_NODE`, prefix the El
 - JavaScript is linted with ESLint using the configuration in `eslint.config.js`. Fix lint errors rather than disabling rules.
 - In Markdown files, put each full sentence on its own line. This keeps diffs readable.
 - Use a plain dash, never an em dash.
-- Do not edit generated files by hand. The app icon and menu bar glyph are regenerated with `npm run icons` from the SVG sources in `assets/`.
+- Do not edit generated files by hand. The app icon and menu bar glyph are regenerated with `npm run icons` from the SVG sources in `assets/`, and the disk image background with `npm run dmg-background`.
 
 ## Commit messages
 

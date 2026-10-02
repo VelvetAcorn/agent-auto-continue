@@ -21,7 +21,7 @@
   const state = {
     layout: 'rail', view: 'home', returnView: 'home',
     harnesses: [], agents: [], settings: null, storageError: null,
-    sources: {}, availability: {}, keepAwake: null, compatibility: [],
+    sources: {}, availability: {}, keepAwake: null, compatibility: [], update: null,
     upcoming: [], history: [], upcomingTotal: 0, historyTotal: 0, unacknowledged: 0, historyLimit: 50, historyFilter: '', search: '',
     draft: null, messageOpen: false, showSettled: false, pickerQuery: '',
     selected: null, selectedJob: null, confirmCancel: false, confirmMark: false,
@@ -176,7 +176,13 @@
     const d = state.draft;
     const source = d ? state.sources[d.harness] : null;
     const offline = d && source?.online === false && isVisible(d.harness) ? `<div class="notice" role="status"><div><strong>${escape(harnessLabel(d.harness))} is unavailable</strong><p>${escape(source.error?.message || `Check that ${harnessLabel(d.harness)} is running. Your queue and history remain available.`)}</p>${technical(source.error)}</div>${source.error?.code === 'permission_required' ? '<button type="button" data-action="open-permission-settings">Open System Settings</button>' : ''}<button type="button" data-action="check" data-harness="${escape(d.harness)}">Check</button></div>` : '';
-    return storage + offline + keepAwakeNotice() + compatibilityNotices();
+    return storage + offline + keepAwakeNotice() + compatibilityNotices() + updateNotice();
+  }
+  // A downloaded update waits quietly for a restart; it also installs on the next quit.
+  function updateNotice() {
+    const u = state.update;
+    if (u?.state !== 'ready') return '';
+    return `<div class="update" role="status"><span><b>Update ready</b> · version ${escape(u.version)}</span><button type="button" class="link" data-action="restart-update" title="${escape(`Restart Agent Auto-Continue to install version ${u.version}. It also installs the next time you quit.`)}">Restart</button></div>`;
   }
   // One notice per desktop app whose installed version changed in a way this version does not understand.
   function compatibilityNotices() {
@@ -341,7 +347,7 @@
   // ---------- Settings ----------
   function settings() {
     if (!state.settings) return '<p class="help">Loading settings…</p>';
-    const sections = [['agents', 'Agents', `${visibleAgents().length} shown`], ['awake', 'Keep the Mac awake', keepAwakeSummary()], ['remote', 'Remote control', remoteSummary()], ['appearance', 'Appearance', { system: 'Follow system', light: 'Light', dark: 'Bone Outline' }[state.theme]], ['advanced', 'Advanced', `${state.settings.bufferSeconds} s safety buffer`], ['support', 'Support the app', 'ko-fi.com/velvetacorn']];
+    const sections = [['agents', 'Agents', `${visibleAgents().length} shown`], ['awake', 'Keep the Mac awake', keepAwakeSummary()], ['remote', 'Remote control', remoteSummary()], ['appearance', 'Appearance', { system: 'Follow system', light: 'Light', dark: 'Bone Outline' }[state.theme]], ['advanced', 'Advanced', `${state.settings.bufferSeconds} s safety buffer`], ['updates', 'Updates', updatesSummary()], ['support', 'Support the app', 'ko-fi.com/velvetacorn']];
     const open = (id) => state.sections.has(id);
     return `<div class="settings">${sections.map(([id, label, summary]) => `<button type="button" class="srow${open(id) ? ' open' : ''}" data-section="${id}" aria-expanded="${open(id)}" aria-controls="section-${id}"><span class="t">${label}<small>${escape(summary)}</small></span><span class="chev" aria-hidden="true">${open(id) ? '▴' : '▾'}</span></button>${open(id) ? `<div class="section" id="section-${id}">${sectionBody(id)}</div>` : ''}`).join('')}</div>`;
   }
@@ -351,6 +357,7 @@
     if (id === 'remote') return '<div id="remote-slot"></div>';
     if (id === 'appearance') return `<div class="setting-row"><label for="theme">Appearance</label><select id="theme">${[['system', 'Follow system'], ['light', 'Light'], ['dark', 'Bone Outline']].map(([value, label]) => `<option value="${value}" ${state.theme === value ? 'selected' : ''}>${label}</option>`).join('')}</select></div><div class="setting-row"><label for="motion">Reduce motion</label><input id="motion" type="checkbox" ${state.reduceMotion ? 'checked' : ''}></div><p class="help">Your system’s reduced-motion preference is always respected.</p>`;
     if (id === 'advanced') return `<form id="advanced-form"><label class="field" for="buffer">Safety buffer · seconds</label><input id="buffer" type="number" min="0" max="300" required value="${escape(state.settingsDraft?.bufferSeconds ?? state.settings.bufferSeconds)}"><p class="help">Added after the chosen time, or after a usage limit resets, before anything is sent. Applies to new messages.</p><p class="error" id="advanced-error" role="alert"></p><div class="actions"><button type="submit" class="primary">Save</button></div></form>`;
+    if (id === 'updates') return updatesSection();
     if (id === 'support') return `<div class="support">${star()}<div><h2>Buy me a coffee</h2><button type="button" data-action="support" aria-describedby="support-note">Support on Ko-fi</button><p id="support-note" class="help">Opens ko-fi.com/velvetacorn in your browser.</p></div></div>`;
     return '';
   }
@@ -393,6 +400,30 @@
     const k = state.keepAwake;
     if (!k) return 'Loading…';
     return k.settings.enabled ? (k.holding ? k.reason : 'On') : 'Off';
+  }
+  function updatesSummary() {
+    const u = state.update;
+    if (!u) return 'Loading…';
+    const suffix = { ready: ' · update ready', downloading: ' · downloading an update', checking: ' · checking' }[u.state] || (u.state === 'idle' && u.checkedAt ? ' · up to date' : '');
+    return `Version ${u.currentVersion}${suffix}`;
+  }
+  function updatesSection() {
+    const u = state.update;
+    if (!u) return '<p class="help">Loading…</p>';
+    if (!u.enabled) {
+      return u.disabledReason === 'location'
+        ? '<p class="help">This copy is running from a temporary location, so it cannot update itself. Move it to the Applications folder to get updates.</p><div class="actions"><button type="button" data-action="check-updates">Move to Applications…</button></div>'
+        : '<p class="help">This copy is not a release build, so it does not update itself.</p>';
+    }
+    const status = {
+      checking: 'Checking for a new version…',
+      downloading: `Downloading version ${u.version}${u.percent ? ` · ${u.percent}%` : ''}. It installs the next time you quit.`,
+      ready: `Version ${u.version} is ready. Restart to install it now, or it installs by itself the next time you quit.`,
+      error: u.error?.message || 'The last check did not finish.'
+    }[u.state] || (u.checkedAt ? `Up to date. Last checked ${relative(u.checkedAt).toLocaleLowerCase()}.` : 'Not checked yet.');
+    const busy = ['checking', 'downloading'].includes(u.state);
+    const button = u.state === 'ready' ? '<button type="button" class="primary" data-action="restart-update">Restart to update</button>' : `<button type="button" data-action="check-updates" ${busy ? 'disabled' : ''}>Check for updates</button>`;
+    return `<p class="help${u.state === 'error' ? ' warning' : ''}" id="update-status">${escape(status)}</p><p class="help">New versions download from GitHub Releases in the background. The app never restarts on its own, so queued messages are not interrupted.</p><div class="actions">${button}</div>`;
   }
   function remoteSummary() { return remote?.summary ? remote.summary() : 'Phone and MCP access'; }
   function keepAwakeSection() {
@@ -668,6 +699,15 @@
     if (name === 'support') { void perform(() => api.openSupport()); return; }
     if (name === 'keep-awake-stop') { void perform(() => api.stopKeepAwake(), { success: (snapshot) => { state.keepAwake = snapshot; toast('Your Mac can sleep now.'); } }); return; }
     if (name === 'keep-awake-resume') { void perform(() => api.resumeKeepAwake(), { success: (snapshot) => { state.keepAwake = snapshot; toast('Keeping your Mac awake again.'); } }); return; }
+    if (name === 'restart-update') { void perform(() => api.restartToUpdate()); return; }
+    if (name === 'check-updates') {
+      void perform(() => api.checkForUpdates(), { success: (snapshot) => {
+        state.update = snapshot || state.update;
+        if (!snapshot?.enabled) return;
+        toast({ ready: 'Update ready. Restart to install it.', downloading: `Downloading version ${snapshot.version}.`, error: snapshot.error?.message || 'Could not check for updates.' }[snapshot.state] || 'You’re up to date.');
+      } });
+      return;
+    }
     if (name === 'copy-diagnostics') { void perform(() => api.copyDiagnostics(), { success: () => toast('Diagnostics copied. Paste them into your bug report.') }); return; }
     if (name === 'recheck-compatibility') { void perform(() => api.checkCompatibility(data.harness), { success: async (list) => { state.compatibility = Array.isArray(list) ? list : []; await refreshJobs(false); const item = state.compatibility.find((entry) => entry.harness === data.harness); toast(item?.ok ? `${item.label} looks supported again.` : `${item?.label || harnessLabel(data.harness)} still needs an update of Agent Auto-Continue.`); } }); return; }
     if (name === 'open-permission-settings') { void perform(() => api.openPermissionSettings()); return; }
@@ -797,6 +837,8 @@
   if (api.onCompatibilityChanged) cleanup.push(api.onCompatibilityChanged(() => void refreshCompatibility()));
   if (api.onSettingsChanged) cleanup.push(api.onSettingsChanged((settings) => { state.settings = settings; state.agents = settings.agents || []; state.storageError = settings.storageError || state.storageError; if (state.draft && !state.draft.editId) state.draft.bufferSeconds = settings.bufferSeconds; if (!state.busy && state.view !== 'settings') updateChrome(); }));
   if (api.onKeepAwakeChanged) cleanup.push(api.onKeepAwakeChanged((snapshot) => { state.keepAwake = snapshot; if (!state.busy) updateChrome(); }));
+  if (api.onUpdateChanged) cleanup.push(api.onUpdateChanged((snapshot) => { state.update = snapshot; if (state.busy) return; if (state.view === 'settings' && !editingText()) render(); else updateChrome(); }));
+  if (api.getUpdate) void api.getUpdate().then((snapshot) => { if (stopped) return; state.update = snapshot; if (!state.busy) updateChrome(); }).catch(() => { /* Update status is advisory. */ });
   if (api.getKeepAwake) void api.getKeepAwake().then((snapshot) => { if (stopped) return; state.keepAwake = snapshot; if (state.view === 'settings' && !state.busy) render(); else updateChrome(); }).catch(() => { /* Keep-awake status is advisory. */ });
   const onFocus = () => { if (Date.now() - lastRefresh > 10000) { void refreshSources(); void refreshJobs(); } };
   window.addEventListener('focus', onFocus);
