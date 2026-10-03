@@ -68,6 +68,7 @@ const dialogs = [];
 const harnessModule = require('../lib/harnesses');
 const { createT3Harness } = require('../lib/harnesses/t3');
 const { createFakeHarness } = require('./fake-harness.cjs');
+const { HarnessError } = require('../lib/harnesses/errors');
 // A second, in-memory harness exercises the picker without touching real agents.
 const fake = createFakeHarness({ label: 'Fake Agent', conversations: [{ id: 'conv-fake', title: 'Fake conversation', projectName: 'Fake repo', updatedAt: '2026-09-30T10:00:00Z' }, { id: 'conv-chain', title: 'Chain fixture session', projectName: 'fake-repo', updatedAt: '2026-09-30T09:00:00Z' }], settings: [{ key: 'port', type: 'port', label: 'Fake agent port', default: 4096, help: 'Fixture setting.' }] });
 // An in-memory desktop app whose installed version can drift, for the compatibility notice.
@@ -178,6 +179,7 @@ async function run() {
   await harnessJourney(js);
   await continuationJourney(js);
   await compatibilityJourney(js);
+  await permissionJourney(js);
   offline = true;
   const history = await js('window.autoContinue.listJobs({view:"history"})');
   assert.ok(history.total >= 1, 'History survives offline API');
@@ -213,7 +215,7 @@ async function run() {
   assert.equal(windows.length, 1, 'Every journey stayed in the same window');
   await layoutJourney(js);
   await updateJourney();
-  console.log('Electron production workflow smoke passed: rail and window layouts, update notice and restart prompt, real preload/IPC/renderer, local history, sanitized offline error, keep-awake assertions released, zero T3 sends, and fake-harness continuations (auto-start, turn limit, continuous, stop phrase edits while running and paused, stop, tray stop all), agent arrangement and a desktop app compatibility notice.');
+  console.log('Electron production workflow smoke passed: rail and window layouts, update notice and restart prompt, real preload/IPC/renderer, local history, sanitized offline error, keep-awake assertions released, zero T3 sends, and fake-harness continuations (auto-start, turn limit, continuous, stop phrase edits while running and paused, stop, tray stop all), agent arrangement, a desktop app compatibility notice and Open System Settings for a missing Accessibility permission.');
 }
 // Shared DOM helpers. `click` waits for the control; `fill` types through the input event the renderer listens to.
 async function click(js, selector, { optional = false } = {}) {
@@ -845,6 +847,65 @@ async function compatibilityJourney(js) {
   await click(js, '.detail [data-action="stop"]');
   await waitFor(() => js(`window.autoContinue.getJob(${JSON.stringify(chain.id)}).then(item=>item.automation.state==='stopped')`), 'desktop continuation stopped');
   await click(js, '[data-action="back"]');
+}
+// Desktop apps list their conversations without Accessibility permission, so a missing permission
+// first shows as a failed send. Its details offer the same Open System Settings button as the notice.
+async function permissionJourney(js) {
+  await goHome(js);
+  const denied = () => new HarnessError('permission_required', 'Allow Agent Auto-Continue in System Settings > Privacy & Security > Accessibility so it can send messages in Claude Desktop.', { permission: 'accessibility', settingsUrl: 'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility' }, false);
+  desk.state.submitError = denied();
+  const job = await js(`window.autoContinue.createSchedule({ harness: 'desk', threadId: 'local_fixture', message: 'Continue', whenISO: new Date(Date.now() + 1500).toISOString(), timeZone: 'UTC' })`);
+  await waitFor(() => js(`window.autoContinue.getJob(${JSON.stringify(job.id)}).then(item=>item.status==='failed'&&item.error?.code==='permission_required')`), 'send refused for a missing permission');
+  await waitFor(() => js(`Boolean(document.querySelector(${JSON.stringify(`.recent [data-open="${job.id}"]`)}))`), 'failed row in Recent');
+  assert.equal(await js(`document.querySelector('#notices').textContent.includes('is unavailable')`), false, 'The conversation list still loads, so no unavailable notice appears');
+  await js(`document.querySelector('#toast').hidden = true`);
+  await capture('home-permission-failed');
+  await click(js, `[data-open="${job.id}"]`);
+  await waitFor(() => js(`Boolean(document.querySelector('.error-detail'))`), 'failure shown in the detail');
+  assert.equal(await js(`document.querySelector('.error-detail [data-action="open-permission-settings"]')?.textContent`), 'Open System Settings');
+  await capture('detail-permission-failed');
+  const opened = externalUrls.length;
+  await click(js, '.error-detail [data-action="open-permission-settings"]');
+  await waitFor(() => externalUrls.length === opened + 1, 'Accessibility settings opened');
+  assert.match(externalUrls.at(-1), /Privacy_Accessibility$/);
+  await click(js, '[data-action="ack"]');
+  await waitFor(() => js(`window.autoContinue.getJob(${JSON.stringify(job.id)}).then(item=>Boolean(item.acknowledgedAt))`), 'permission failure acknowledged');
+  assert.ok(await js(`Boolean(document.querySelector('.error-detail [data-action="open-permission-settings"]'))`), 'The button stays after acknowledging');
+  // Any other failure offers no permission button.
+  await click(js, '[data-action="back"]');
+  await click(js, '[data-action="history"]');
+  await click(js, '[data-open="failure-fixture"]');
+  await waitFor(() => js(`Boolean(document.querySelector('.error-detail'))`), 'another failure in the detail');
+  assert.equal(await js(`Boolean(document.querySelector('[data-action="open-permission-settings"]'))`), false, 'Only a permission failure offers System Settings');
+  await goHome(js);
+  // A continuation pauses on the same failure, and its details offer the button too.
+  desk.state.submitError = denied();
+  const chain = await js(`window.autoContinue.createSchedule({ harness: 'desk', threadId: 'local_fixture', message: 'Keep going', whenISO: new Date(Date.now() + 1500).toISOString(), timeZone: 'UTC', turnLimit: 3 })`);
+  await waitFor(() => js(`window.autoContinue.getJob(${JSON.stringify(chain.id)}).then(item=>item.automation?.state==='paused')`), 'continuation paused for a missing permission');
+  await click(js, `[data-open="${chain.id}"]`);
+  await waitFor(() => js(`Boolean(document.querySelector('.error-detail [data-action="open-permission-settings"]'))`), 'permission button in the continuation detail');
+  await js(`document.querySelector('#toast').hidden = true`);
+  await capture('detail-permission-paused');
+  await click(js, '.detail [data-action="stop"]');
+  await waitFor(() => js(`window.autoContinue.getJob(${JSON.stringify(chain.id)}).then(item=>item.automation.state==='stopped')`), 'paused continuation stopped');
+  await click(js, '[data-action="back"]');
+  desk.state.submitError = null;
+  // Check finds the permission missing; the agent keeps saying so after its conversations load again.
+  desk.state.connectionError = denied();
+  await openSection(js, 'agents');
+  await click(js, '[data-agent="desk"] [data-action="check"]');
+  await waitFor(() => js(`document.querySelector('#toast').textContent.includes('Privacy & Security')`), 'check reports the missing permission');
+  await waitFor(() => js(`document.querySelector('[data-agent="desk"] .agent-head small').textContent.includes('Needs Accessibility permission')`), 'permission kept in Settings');
+  await waitFor(() => js(`Boolean(document.querySelector('.head [data-agent-badge="desk"] .dot.off')) || !document.querySelector('.head [data-agent-badge="desk"]')`), 'permission shown on the agent mark');
+  await js(`document.querySelector('#toast').hidden = true; document.querySelector('[data-agent="desk"]').scrollIntoView({block:'center'})`);
+  await capture('settings-permission-check');
+  const allowed = externalUrls.length;
+  await click(js, '[data-agent="desk"] [data-action="open-permission-settings"]');
+  await waitFor(() => externalUrls.length === allowed + 1, 'Accessibility settings opened from Settings');
+  desk.state.connectionError = null;
+  await click(js, '[data-agent="desk"] [data-action="check"]');
+  await waitFor(() => js(`document.querySelector('[data-agent="desk"] .agent-head small').textContent.includes('Claude Desktop is open') && !document.querySelector('[data-agent="desk"] [data-action="open-permission-settings"]')`), 'a passing check clears the permission');
+  await goHome(js);
 }
 // Expanding to a window rebuilds the BrowserWindow with a frame; the renderer reports the window layout.
 async function layoutJourney(js) {

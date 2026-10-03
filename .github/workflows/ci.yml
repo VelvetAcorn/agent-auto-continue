@@ -12,6 +12,8 @@ jobs:
   test:
     name: Lint, tests and JavaScript syntax
     runs-on: ubuntu-latest
+    # A whole run takes about a minute; a hang should fail fast instead of holding a runner for hours.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7

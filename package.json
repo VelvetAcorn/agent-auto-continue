@@ -17,7 +17,7 @@
     "build": "electron-builder --mac zip --publish never",
     "build:dmg": "electron-builder --mac dmg --publish never",
     "build:all": "electron-builder --publish never",
-    "test": "node --test",
+    "test": "node --test --test-timeout=60000 --test-force-exit",
     "check:syntax": "node tools/check-syntax.cjs",
     "test:electron": "env -u ELECTRON_RUN_AS_NODE ApplePersistenceIgnoreState=YES electron tools/electron-smoke.cjs && node tools/keep-awake-e2e.cjs",
     "icons": "env -u ELECTRON_RUN_AS_NODE ApplePersistenceIgnoreState=YES electron tools/build-icons.cjs",

@@ -111,11 +111,17 @@ test('stopping a process also stops the helpers it started', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'group-'));
   const pidFile = path.join(dir, 'grandchild.pid');
   const handle = spawnJsonLines('/bin/sh', ['-c', 'sleep 30 & echo $! > "$0"; wait', pidFile], { onMessage: () => {} });
-  for (let i = 0; i < 100 && !fs.existsSync(pidFile); i++) await new Promise((resolve) => setTimeout(resolve, 20));
-  const grandchild = Number(fs.readFileSync(pidFile, 'utf8'));
+  // The shell creates the file before it writes the pid, so wait for a whole pid: an empty read
+  // would give 0, and process.kill(0, 0) signals this test's own group instead of the grandchild.
+  const readPid = () => { try { return Number(fs.readFileSync(pidFile, 'utf8').trim()) || 0; } catch { return 0; } };
+  let grandchild = 0;
+  for (let i = 0; i < 250 && !(grandchild = readPid()); i++) await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.ok(grandchild > 0, 'The shell reported its helper');
   handle.terminate(500);
   await handle.exited;
-  await new Promise((resolve) => setTimeout(resolve, 200));
+  // SIGTERM is delivered asynchronously, so give a busy machine a few seconds before calling it a failure.
+  const alive = () => { try { process.kill(grandchild, 0); return true; } catch (error) { return error.code !== 'ESRCH'; } };
+  for (let i = 0; i < 150 && alive(); i++) await new Promise((resolve) => setTimeout(resolve, 20));
   assert.throws(() => process.kill(grandchild, 0), { code: 'ESRCH' }, 'The grandchild was stopped with its group');
   fs.rmSync(dir, { recursive: true });
 });
