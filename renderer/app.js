@@ -15,6 +15,12 @@
   const escape = (value) => String(value ?? '').replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]));
   const localZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
   function preference(key, fallback) { try { return localStorage.getItem(key) || fallback; } catch { return fallback; } }
+  // How strongly the painting shows behind the controls, in percent. Above the cap, text over it stops being readable.
+  const PAINTING_MAX = 60;
+  function paintingStrength(value) { const number = Number(value); return Number.isFinite(number) ? Math.min(PAINTING_MAX, Math.max(0, Math.round(number))) : 30; }
+  const CORNERS = ['tl', 'tr', 'bl', 'br'].map((corner) => `<svg class="corner ${corner}" aria-hidden="true"><use href="#o-corner"/></svg>`).join('');
+  const RULE = '<div class="rule" aria-hidden="true"><i></i><svg><use href="#o-rule"/></svg><i></i></div>';
+  const THEMES = [['light', 'Day', 'i-sun'], ['dark', 'Night', 'i-moon'], ['system', 'Follow system', 'i-auto']];
   const RECENT_ROWS = 5;
   const RAIL_MIN_HEIGHT = 360;
   const RAIL_MAX_HEIGHT = 760;
@@ -26,7 +32,7 @@
     draft: null, messageOpen: false, showSettled: false, pickerQuery: '',
     selected: null, selectedJob: null, confirmCancel: false, confirmMark: false,
     sections: new Set(['agents']), settingsDraft: null, harnessDraft: null, keepAwakeDraft: null, tipOpen: false,
-    theme: preference('scheduler-theme', 'system'), reduceMotion: preference('scheduler-motion', 'system') === 'reduce',
+    theme: preference('scheduler-theme', 'light'), painting: paintingStrength(preference('scheduler-painting', '30')), reduceMotion: preference('scheduler-motion', 'system') === 'reduce',
     loading: true, busy: false, actionError: '', jobsError: ''
   };
   let jobRequest = 0, timer, toastTimer, lastRefresh = 0, stopped = false, failuresKnown = false, lastHeight = 0;
@@ -157,7 +163,7 @@
       return `<header class="head sub"><button type="button" class="ghost back" data-action="back">← Back</button><span class="title">${escape(titles[state.view])}</span><span class="spacer"></span></header>`;
     }
     const agents = visibleAgents().map((item) => badge(item.id)).join('');
-    return `<header class="head"><span class="brand">Auto-Continue</span><div class="tools"><div class="agents" aria-label="Agents">${agents}</div><span class="sep"></span>${awakeToggle()}${state.layout === 'rail'
+    return `<header class="head"><span class="brand"><img class="logo" src="assets/logo.webp" alt="" width="22" height="22">Auto-Continue</span><div class="tools"><div class="agents" aria-label="Agents">${agents}</div><span class="sep"></span>${awakeToggle()}${state.layout === 'rail'
       ? '<button type="button" class="icon-btn" data-action="layout" data-layout="window" title="Open as a window" aria-label="Open as a window"><svg aria-hidden="true"><use href="#i-expand"/></svg></button>'
       : '<button type="button" class="icon-btn" data-action="layout" data-layout="rail" title="Back to the menu bar" aria-label="Back to the menu bar"><svg aria-hidden="true"><use href="#i-collapse"/></svg></button>'}<button type="button" class="icon-btn" data-action="settings" title="Settings" aria-label="Settings"><svg aria-hidden="true"><use href="#i-gear"/></svg></button></div></header>`;
   }
@@ -272,7 +278,7 @@
     const rows = state.upcoming.length ? state.upcoming.map((job) => jobRow(job)).join('') : state.loading ? '<div class="empty"><small>Loading…</small></div>' : '<div class="empty"><b>Nothing queued</b><small>Pick a conversation above and press Continue.</small></div>';
     const recent = state.history.slice(0, RECENT_ROWS);
     const attention = state.unacknowledged ? `<small>${state.unacknowledged} ${state.unacknowledged === 1 ? 'needs' : 'need'} a look</small>` : '';
-    return `<section class="queue" aria-label="Queued">${state.jobsError ? `<div class="notice"><div><strong>Could not read the queue</strong><p>${escape(state.jobsError)}</p></div><button type="button" data-action="refresh">Try again</button></div>` : ''}<div class="qhead"><span class="overline">Queued${state.upcomingTotal ? ` · ${state.upcomingTotal}` : ''}</span>${stopAll}</div>${rows}${recent.length ? `<details class="recent" open><summary><span class="overline">Recent</span>${attention}</summary>${recent.map((job) => jobRow(job, { history: true })).join('')}<button type="button" class="link more" data-action="history">All history</button></details>` : ''}</section>`;
+    return `<section class="queue" aria-label="Queued">${RULE}${state.jobsError ? `<div class="notice"><div><strong>Could not read the queue</strong><p>${escape(state.jobsError)}</p></div><button type="button" data-action="refresh">Try again</button></div>` : ''}<div class="qhead"><span class="overline">Queued${state.upcomingTotal ? ` · ${state.upcomingTotal}` : ''}</span>${stopAll}</div>${rows}${recent.length ? `<details class="recent" open><summary><span class="overline">Recent</span>${attention}</summary>${recent.map((job) => jobRow(job, { history: true })).join('')}<button type="button" class="link more" data-action="history">All history</button></details>` : ''}</section>`;
   }
 
   // ---------- Picker ----------
@@ -351,7 +357,7 @@
   // ---------- Settings ----------
   function settings() {
     if (!state.settings) return '<p class="help">Loading settings…</p>';
-    const sections = [['agents', 'Agents', `${visibleAgents().length} shown`], ['awake', 'Keep the Mac awake', keepAwakeSummary()], ['remote', 'Remote control', remoteSummary()], ['appearance', 'Appearance', { system: 'Follow system', light: 'Light', dark: 'Bone Outline' }[state.theme]], ['advanced', 'Advanced', `${state.settings.bufferSeconds} s safety buffer`], ['updates', 'Updates', updatesSummary()], ['support', 'Support the app', 'ko-fi.com/velvetacorn']];
+    const sections = [['agents', 'Agents', `${visibleAgents().length} shown`], ['awake', 'Keep the Mac awake', keepAwakeSummary()], ['remote', 'Remote control', remoteSummary()], ['appearance', 'Appearance', { system: 'Follows system', light: 'Day', dark: 'Night' }[state.theme]], ['advanced', 'Advanced', `${state.settings.bufferSeconds} s safety buffer`], ['updates', 'Updates', updatesSummary()], ['support', 'Support the app', 'ko-fi.com/velvetacorn']];
     const open = (id) => state.sections.has(id);
     return `<div class="settings">${sections.map(([id, label, summary]) => `<button type="button" class="srow${open(id) ? ' open' : ''}" data-section="${id}" aria-expanded="${open(id)}" aria-controls="section-${id}"><span class="t">${label}<small>${escape(summary)}</small></span><span class="chev" aria-hidden="true">${open(id) ? '▴' : '▾'}</span></button>${open(id) ? `<div class="section" id="section-${id}">${sectionBody(id)}</div>` : ''}`).join('')}</div>`;
   }
@@ -359,7 +365,7 @@
     if (id === 'agents') return agentsSection();
     if (id === 'awake') return keepAwakeSection();
     if (id === 'remote') return '<div id="remote-slot"></div>';
-    if (id === 'appearance') return `<div class="setting-row"><label for="theme">Appearance</label><select id="theme">${[['system', 'Follow system'], ['light', 'Light'], ['dark', 'Bone Outline']].map(([value, label]) => `<option value="${value}" ${state.theme === value ? 'selected' : ''}>${label}</option>`).join('')}</select></div><div class="setting-row"><label for="motion">Reduce motion</label><input id="motion" type="checkbox" ${state.reduceMotion ? 'checked' : ''}></div><p class="help">Your system’s reduced-motion preference is always respected.</p>`;
+    if (id === 'appearance') return `<div class="themes" id="theme" role="radiogroup" aria-label="Appearance">${THEMES.map(([value, label, icon]) => `<button type="button" role="radio" data-theme="${value}" aria-checked="${state.theme === value}" aria-label="${label}" title="${label}"><svg aria-hidden="true"><use href="#${icon}"/></svg></button>`).join('')}</div><div class="setting-row"><label for="painting">Painting</label><span class="range"><input id="painting" type="range" min="0" max="${PAINTING_MAX}" step="5" value="${state.painting}"><output for="painting">${state.painting}%</output></span></div><div class="setting-row"><label for="motion">Reduce motion</label><input id="motion" type="checkbox" ${state.reduceMotion ? 'checked' : ''}></div><p class="help">Your system’s reduced-motion preference is always respected.</p>`;
     if (id === 'advanced') return `<form id="advanced-form"><label class="field" for="buffer">Safety buffer · seconds</label><input id="buffer" type="number" min="0" max="300" required value="${escape(state.settingsDraft?.bufferSeconds ?? state.settings.bufferSeconds)}"><p class="help">Added after the chosen time, or after a usage limit resets, before anything is sent. Applies to new messages.</p><p class="error" id="advanced-error" role="alert"></p><div class="actions"><button type="submit" class="primary">Save</button></div></form>`;
     if (id === 'updates') return updatesSection();
     if (id === 'support') return `<div class="support">${star()}<div><h2>Buy me a coffee</h2><button type="button" data-action="support" aria-describedby="support-note">Support on Ko-fi</button><p id="support-note" class="help">Opens ko-fi.com/velvetacorn in your browser.</p></div></div>`;
@@ -494,7 +500,8 @@
     const selection = active && typeof active.selectionStart === 'number' ? [active.selectionStart, active.selectionEnd] : null;
     document.body.className = `${state.theme === 'dark' || (state.theme === 'system' && mediaTheme.matches) ? 'dark' : ''} ${state.reduceMotion ? 'motion-off' : ''} layout-${state.layout} view-${state.view}`;
     const body = state.view === 'picker' ? picker() : state.view === 'settings' ? settings() : state.view === 'detail' ? detail() : state.view === 'history' ? history() : composeBlock() + queue();
-    app.innerHTML = `${header()}<main id="main" class="main"><div id="notices">${state.view === 'home' || state.view === 'detail' ? notices() : ''}</div>${state.actionError ? `<p class="error" role="alert">${escape(state.actionError)}</p>` : ''}${body}</main>`;
+    applyPainting();
+    app.innerHTML = `${header()}<main id="main" class="main">${CORNERS}<div id="notices">${state.view === 'home' || state.view === 'detail' ? notices() : ''}</div>${state.actionError ? `<p class="error" role="alert">${escape(state.actionError)}</p>` : ''}${body}</main>`;
     bind();
     if (state.busy) app.querySelectorAll('button, input, textarea, select').forEach((control) => { control.disabled = true; });
     if (focusSelector) $(focusSelector)?.focus();
@@ -504,6 +511,11 @@
     } else if (activeData) app.querySelector('[data-' + activeData[0].replace(/[A-Z]/g, (c) => '-' + c.toLowerCase()) + '="' + CSS.escape(activeData[1]) + '"]')?.focus();
     syncStar();
     fitWindow();
+  }
+  function applyPainting() {
+    document.documentElement.style.setProperty('--art', (state.painting / 100).toFixed(2));
+    const slider = $('#painting');
+    if (slider) { slider.style.setProperty('--pct', `${(state.painting / PAINTING_MAX) * 100}%`); slider.nextElementSibling.textContent = `${state.painting}%`; }
   }
   // The rail grows and shrinks with its content, within a sensible range, so it never shows empty space.
   function fitWindow() {
@@ -628,13 +640,14 @@
     const keepAwakeFields = { 'ka-enabled': ['enabled', 'checked'], 'ka-display': ['keepDisplayOn', 'checked'], 'ka-agents': ['includeRunningAgents', 'checked'], 'ka-power': ['powerSource', 'value'], 'ka-floor': ['batteryFloorPercent', 'value'], 'ka-hours': ['maxHours', 'value'] };
     Object.entries(keepAwakeFields).forEach(([id, [key, property]]) => { if ($('#' + id)) $('#' + id)[property === 'checked' || id === 'ka-power' ? 'onchange' : 'oninput'] = (event) => { state.keepAwakeDraft[key] = property === 'checked' ? event.target.checked : id === 'ka-power' ? event.target.value : Number(event.target.value); if (id === 'ka-power') $('#ka-floor').disabled = event.target.value === 'ac-only'; if ($('#keep-awake-error')) $('#keep-awake-error').textContent = ''; }; });
     if ($('#keep-awake-form')) $('#keep-awake-form').onsubmit = (event) => { event.preventDefault(); void perform(() => api.configureKeepAwake({ ...state.keepAwakeDraft }), { errorTarget: '#keep-awake-error', success: (snapshot) => { state.keepAwake = snapshot; state.keepAwakeDraft = null; toast(snapshot.enabled ? 'Keep-awake is on.' : 'Keep-awake is off.'); } }); };
-    if ($('#theme')) $('#theme').onchange = (event) => { state.theme = event.target.value; savePreferences(); render('#theme'); };
+    app.querySelectorAll('[data-theme]').forEach((button) => { button.onclick = () => { state.theme = button.dataset.theme; savePreferences(); render(`[data-theme="${state.theme}"]`); }; });
+    if ($('#painting')) { applyPainting(); $('#painting').oninput = (event) => { state.painting = paintingStrength(event.target.value); savePreferences(); applyPainting(); }; }
     if ($('#motion')) $('#motion').onchange = (event) => { state.reduceMotion = event.target.checked; savePreferences(); render('#motion'); };
     const starButton = $('#support-star');
     if (starButton) { starButton.onpointerdown = (event) => { if (event.isPrimary && event.button === 0) holdStar(); }; starButton.onkeydown = (event) => { if (event.key === 'Enter' && event.repeat) event.preventDefault(); if (event.key === ' ' && !event.repeat) holdStar(); }; starButton.onclick = spinStar; }
     remote?.bind(remoteContext());
   }
-  function savePreferences() { try { localStorage.setItem('scheduler-theme', state.theme); localStorage.setItem('scheduler-motion', state.reduceMotion ? 'reduce' : 'system'); } catch { /* Cosmetic preferences can remain session-only. */ } }
+  function savePreferences() { try { localStorage.setItem('scheduler-theme', state.theme); localStorage.setItem('scheduler-painting', String(state.painting)); localStorage.setItem('scheduler-motion', state.reduceMotion ? 'reduce' : 'system'); } catch { /* Cosmetic preferences can remain session-only. */ } }
   function clearPlanError() { if ($('#plan-error')) $('#plan-error').textContent = ''; }
   function updatePlan() {
     clearPlanError();

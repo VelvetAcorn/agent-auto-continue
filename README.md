@@ -129,7 +129,7 @@ The laptop toggle in the header turns keep-awake on and off; its tooltip explain
 The expand control opens the same screen as a resizable window, and the window's collapse control returns to the menu bar; the choice is remembered.
 Only one copy may run at a time.
 
-Settings offers light, Bone Outline dark and system appearance with reduced-motion support.
+Settings offers Day (the default), Night and follow-system appearance, a slider for how strongly the painting shows behind the controls, and reduced-motion support.
 The rotating Support sticker shows a random phrase each time you open Settings; click it (or press Enter or Space) for a spin and another phrase.
 Its text stays upright, wraps and shrinks to fit, and the phrases live in `STICKER_PHRASES` in `renderer/support-star.js`.
 With reduced motion the sticker stays still but still changes phrase.
@@ -168,8 +168,9 @@ The default build produces an unsigned ZIP for the current architecture in `dist
 See [docs/releasing.md](docs/releasing.md) for the release process, the secrets it needs, and what signing and notarization mean for users.
 The menu includes **Launch at login** after the app has been installed.
 
-The app icon (`assets/icon.icns`) and menu-bar glyphs (`assets/trayTemplate.png` and, while keep-awake holds the Mac awake, `assets/trayAwakeTemplate.png`, each with an `@2x` file) are generated from the SVG sources in `assets/` and committed.
-After editing `assets/icon.svg`, `assets/trayTemplate.svg` or `assets/trayAwakeTemplate.svg`, run `npm run icons` on macOS and commit the regenerated files.
+The app icon (`assets/icon.icns`) and menu-bar glyphs (`assets/trayTemplate.png` and, while keep-awake holds the Mac awake, `assets/trayAwakeTemplate.png`, each with an `@2x` file) are generated from the sources in `assets/` and committed, along with `assets/logo.webp`, the small mark beside the name in the header.
+The icon's 1024 px master, `assets/icon.png`, is a crescent moon cut from Altdorfer's 1529 *Battle of Alexander at Issus* with a gold-leaf play head, built by `design/logo-ideas/round4/generate.py`.
+After editing `assets/icon.png`, `assets/trayTemplate.svg` or `assets/trayAwakeTemplate.svg`, run `npm run icons` on macOS and commit the regenerated files.
 The disk image window background (`build/background.png` and `build/background@2x.png`) is drawn by `tools/build-dmg-background.cjs`; after changing it or the icon positions in `build.dmg` in `package.json`, run `npm run dmg-background` and commit the regenerated files.
 
 ## Keep awake
@@ -225,6 +226,7 @@ Acknowledgment clears an attention badge without deleting history or sending any
 The renderer uses queue/history, edit/cancel, acknowledgment, reconciliation and job-change APIs.
 Corrupt, unreadable, or unsupported local schedule files are preserved; the app pauses scheduling and shows a storage error instead of overwriting them.
 See [the roadmap](docs/roadmap.md) for feature status and [the UI review](docs/ui-review.md) for open design decisions.
+See [the design document](docs/design.md) for the visual language: the paintings, palette, type, ornament and logo.
 
 ## Verify the source
 

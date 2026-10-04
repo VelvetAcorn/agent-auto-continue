@@ -98,6 +98,9 @@
       "dashboard.html",
       "styles.css",
       "assets/tray*Template*.png",
+      "assets/logo.webp",
+      "assets/fonts/*",
+      "assets/art/*.webp",
       "lib/**/*.js",
       "renderer/**/*.js",
       "package.json"

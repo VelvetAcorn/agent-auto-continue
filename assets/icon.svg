@@ -1,5 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 256 256">
-  <!-- Moon and Play: a lavender crescent cradling an ink play head, on a transparent canvas. Source draft: design/logo-ideas/round2/d-moon-play.svg -->
-  <path d="M 150 30 A 100 100 0 1 0 150 226 A 78 78 0 1 1 150 30 Z" fill="#796B98" stroke="#34303A" stroke-width="8" stroke-linejoin="round"/>
-  <polygon points="119.76,92 191.76,128 119.76,164" fill="#34303A"/>
-</svg>
