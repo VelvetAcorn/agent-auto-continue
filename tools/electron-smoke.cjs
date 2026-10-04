@@ -408,6 +408,9 @@ async function supportStarJourney(js, reducedMotion) {
   for (const [text, result] of Object.entries(fit)) assert.ok(result.worst < 0.355 && result.size >= 10 && !result.rotated, `${text}: ${JSON.stringify(result)}`);
   // A click bursts and eases back without the angle ever jumping or reversing, even across a re-render.
   await openSection(js, 'appearance');
+  // The theme change just before this repaints the whole painted window, which takes a few seconds on a runner
+  // with no GPU. Let frames flow again first: this judges the animation's continuity, not that one repaint.
+  await waitFor(() => js(`new Promise(resolve => requestAnimationFrame(first => requestAnimationFrame(() => requestAnimationFrame(third => resolve(third - first < 150)))))`), 'frames flowing after the theme change');
   const motion = await js(`new Promise(resolve => {
     const angle = () => parseFloat(document.querySelector('#support-star polygon').style.transform.slice(7));
     const samples = [], start = performance.now(), before = document.querySelector('#star-phrase').textContent;
