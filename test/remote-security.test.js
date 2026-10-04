@@ -181,6 +181,7 @@ test('a saved local-network listener from an earlier version is dropped at launc
     assert.deepEqual([state.audit[0].action, state.audit[0].target, state.audit[0].transport], ['lan_bind_removed', lan, 'desktop']);
     assert.equal(notified.length, 1);
     assert.ok(!state.interfaces.some((item) => item.address === lan), 'the old address is not offered again');
+    assert.deepEqual(state.interfaces.map((item) => item.kind), ['tailscale'], 'Network access offers Tailscale only, so the window has no local-network option to warn about');
     // A second launch from the saved file changes nothing more.
     const again = new RemoteControl(options(() => saved, () => { throw new Error('must not save'); }, () => { throw new Error('must not notify'); }));
     assert.equal(again.getState().bindAddress, null);
@@ -190,6 +191,7 @@ test('a saved local-network listener from an earlier version is dropped at launc
   let writes = 0;
   const kept = new RemoteControl(options(() => ({ version: 1, enabled: true, port: 3799, bindAddress: '100.90.1.1', allowedOrigins: [], tokens: [] }), () => { writes++; }));
   assert.equal(kept.getState().bindAddress, '100.90.1.1');
+  assert.deepEqual(kept.getState().interfaces.map((item) => [item.address, item.kind, item.unavailable === true]), [['100.100.1.2', 'tailscale', false], ['100.90.1.1', 'tailscale', true]]);
   assert.equal(writes, 0);
   assert.deepEqual(kept.getState().notices, []);
 });

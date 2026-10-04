@@ -27,7 +27,7 @@
   const state = {
     layout: 'rail', view: 'home', returnView: 'home',
     harnesses: [], agents: [], settings: null, storageError: null,
-    sources: {}, availability: {}, keepAwake: null, compatibility: [], update: null,
+    sources: {}, permissions: {}, availability: {}, keepAwake: null, compatibility: [], update: null,
     upcoming: [], history: [], upcomingTotal: 0, historyTotal: 0, unacknowledged: 0, historyLimit: 50, historyFilter: '', search: '',
     draft: null, messageOpen: false, showSettled: false, pickerQuery: '',
     selected: null, selectedJob: null, confirmCancel: false, confirmMark: false,
@@ -78,11 +78,13 @@
     const value = entry?.availability;
     return value ? { ...value, resetsAtLabel: value.resetsAt ? display(value.resetsAt, localZone, 'time') : '' } : null;
   }
+  // Desktop apps list their conversations without Accessibility permission, so a Check that found it
+  // missing is kept until a later Check passes, rather than lost when the list loads again.
   function agentStatus(id) {
     const source = state.sources[id];
     return compose.agentStatus({
       info: harnessInfo(id), hidden: arrangedAgents().find((item) => item.id === id)?.hidden === true,
-      online: source?.online ?? null, connectionError: source?.error || null, availability: availabilityFor(id),
+      online: source?.online ?? null, connectionError: source?.error || state.permissions[id] || null, availability: availabilityFor(id),
       compatibility: state.compatibility.find((item) => item.harness === id) || null
     });
   }
@@ -124,6 +126,8 @@
     const appText = details.appVersion ? `${details.app || 'App'} ${details.appVersion}${details.verifiedVersion && details.verifiedVersion !== details.appVersion ? ` (verified with ${details.verifiedVersion})` : ''}` : '';
     return `<details><summary>Technical details</summary><p>${[info.code, details.status ? 'HTTP ' + details.status : '', details.endpoint, details.contentType, appText, details.contactPoint && contactPointName(details.contactPoint), details.hint].filter(Boolean).map(escape).join(' · ')}</p></details>`;
   }
+  // A missing macOS permission is fixed in System Settings, so wherever one is reported the window offers the way there.
+  const permissionButton = (info) => info?.code === 'permission_required' ? '<button type="button" data-action="open-permission-settings">Open System Settings</button>' : '';
 
   // ---------- Draft ----------
   function newDraft(harness = visibleAgents()[0]?.id || state.harnesses[0]?.id || 't3', threadId = '', message = 'Continue', zone = localZone) {
@@ -182,7 +186,7 @@
     const storage = state.storageError ? `<div class="notice" role="alert"><div><strong>Local schedule storage needs attention</strong><p>${escape(state.storageError.message)}</p></div></div>` : '';
     const d = state.draft;
     const source = d ? state.sources[d.harness] : null;
-    const offline = d && source?.online === false && isVisible(d.harness) ? `<div class="notice" role="status"><div><strong>${escape(harnessLabel(d.harness))} is unavailable</strong><p>${escape(source.error?.message || `Check that ${harnessLabel(d.harness)} is running. Your queue and history remain available.`)}</p>${technical(source.error)}</div>${source.error?.code === 'permission_required' ? '<button type="button" data-action="open-permission-settings">Open System Settings</button>' : ''}<button type="button" data-action="check" data-harness="${escape(d.harness)}">Check</button></div>` : '';
+    const offline = d && source?.online === false && isVisible(d.harness) ? `<div class="notice" role="status"><div><strong>${escape(harnessLabel(d.harness))} is unavailable</strong><p>${escape(source.error?.message || `Check that ${harnessLabel(d.harness)} is running. Your queue and history remain available.`)}</p>${technical(source.error)}</div>${permissionButton(source.error)}<button type="button" data-action="check" data-harness="${escape(d.harness)}">Check</button></div>` : '';
     return storage + offline + keepAwakeNotice() + compatibilityNotices() + updateNotice();
   }
   // A downloaded update waits quietly for a restart; it also installs on the next quit.
@@ -304,7 +308,7 @@
     const label = job.harnessLabel || harnessLabel(job.harness || 't3');
     const timed = !auto || auto.trigger !== 'available' || auto.currentTurn > 1;
     const mark = status === 'unconfirmed' && job.canMarkNotDelivered ? (state.confirmMark ? `<div class="confirm" role="group" aria-label="Confirm not delivered"><p>Only after checking the ${escape(noun(job.harness))} yourself. The app checks once more and confirms the delivery instead if it finds the message. After marking, a continuation sends the same message again on Resume, so if it did arrive the agent would receive it twice.</p><button type="button" class="danger" data-action="confirm-mark">Mark as not delivered</button> <button type="button" class="ghost" data-action="keep-mark">Keep</button></div>` : '<button type="button" class="ghost danger" data-action="mark-not-delivered">Mark as not delivered…</button>') : '';
-    const problem = ['failed', 'unconfirmed'].includes(status) ? `<div class="error-detail"><h3>${status === 'unconfirmed' ? 'Check delivery before trying again' : 'This message could not be delivered'}</h3><p>${escape(job.error?.message || job.note)}</p>${technical(job.error)}${job.lastReconciledAt ? `<p>Last checked ${escape(display(job.lastReconciledAt, zone))}. ${status === 'unconfirmed' ? 'Delivery is still unconfirmed. No resend was attempted.' : ''}</p>` : ''}<div class="actions"><button type="button" data-action="ack" ${job.acknowledgedAt ? 'disabled' : ''}>${job.acknowledgedAt ? 'Acknowledged ✓' : 'Acknowledge'}</button>${mark}</div></div>` : '';
+    const problem = ['failed', 'unconfirmed'].includes(status) ? `<div class="error-detail"><h3>${status === 'unconfirmed' ? 'Check delivery before trying again' : 'This message could not be delivered'}</h3><p>${escape(job.error?.message || job.note)}</p>${technical(job.error)}${job.lastReconciledAt ? `<p>Last checked ${escape(display(job.lastReconciledAt, zone))}. ${status === 'unconfirmed' ? 'Delivery is still unconfirmed. No resend was attempted.' : ''}</p>` : ''}<div class="actions">${permissionButton(job.error)}<button type="button" data-action="ack" ${job.acknowledgedAt ? 'disabled' : ''}>${job.acknowledgedAt ? 'Acknowledged ✓' : 'Acknowledge'}</button>${mark}</div></div>` : '';
     const info = problem || (auto ? (['waiting', 'pending'].includes(job.displayStatus) && job.note ? `<p class="help">${escape(job.note)}</p>` : '') : status === 'sent' ? `<p class="help">${escape(label)} accepted the message.${job.turn ? '' : ' This does not confirm that the agent completed its work.'}</p>` : job.note ? `<p class="help">${escape(job.note)}</p>` : '');
     const risky = Boolean(job.risk) && (status === 'pending' || auto?.state === 'active');
     const risk = risky ? `<div class="risk-detail"><h3>${auto ? 'The next turn may not be sent' : 'This message may not be sent'}</h3><p>${escape(job.risk.message)}</p><p>${auto ? 'The continuation keeps going. If the problem remains when its next turn is due, nothing is sent and it pauses.' : 'It stays scheduled. If the problem remains when it is due, it fails without sending anything.'}</p></div>` : '';
@@ -400,9 +404,9 @@
           const placeholder = setting.type === 'secret' ? (saved.usingEnvironment ? `Using ${setting.env} from the environment` : saved.hasStoredValue ? 'Saved. Leave blank to keep it' : 'Optional') : setting.type === 'port' ? String(setting.default ?? '') : 'Found automatically';
           return `<label>${escape(setting.label.replace(/^.*\b(port|password|executable)\b.*$/i, (_, word) => word.replace(/^./, (c) => c.toUpperCase())))}<input id="${escape(id)}" data-harness-key="${escape(item.id + ':' + setting.key)}" ${setting.type === 'port' ? 'type="number" min="1" max="65535"' : setting.type === 'secret' ? 'type="password" autocomplete="off"' : 'type="text"'} spellcheck="false" value="${escape(value)}" placeholder="${escape(placeholder)}" title="${escape(setting.help || '')}"></label>`;
         }).join('');
-      const permission = status.action === 'permission' ? '<button type="button" class="mini" data-action="open-permission-settings">Allow</button>' : '';
+      const permission = status.action === 'permission' ? '<small><button type="button" class="link" data-action="open-permission-settings">Open System Settings</button></small>' : '';
       const check = entry.hidden ? '' : `<button type="button" class="mini" data-action="check" data-harness="${escape(item.id)}">Check</button>`;
-      return `<div class="agent${entry.hidden ? ' hidden-agent' : ''}" data-agent="${escape(item.id)}"><div class="agent-head">${badge(item.id, { title: item.label })}<span class="t"><b>${escape(item.label)}</b><small><span class="dot ${escape(status.tone)}"></span> ${escape(status.text)}</small>${compatibilityLine(item)}</span><span class="agent-tools">${permission}${check}<button type="button" class="info" data-tip="${escape(`${item.description} ${capabilities(item)}`)}" aria-label="About ${escape(item.label)}" title="${escape(`${item.description}\n${capabilities(item)}`)}">ⓘ</button><button type="button" class="mini" data-agent-move="${escape(item.id)}" data-direction="-1" ${index === 0 ? 'disabled' : ''} aria-label="Move ${escape(item.label)} up">▲</button><button type="button" class="mini" data-agent-move="${escape(item.id)}" data-direction="1" ${index === arranged.length - 1 ? 'disabled' : ''} aria-label="Move ${escape(item.label)} down">▼</button><label class="show"><input type="checkbox" data-agent-show="${escape(item.id)}" ${entry.hidden ? '' : 'checked'}> Show</label></span></div>${fields ? `<div class="fields">${fields}</div>` : ''}</div>`;
+      return `<div class="agent${entry.hidden ? ' hidden-agent' : ''}" data-agent="${escape(item.id)}"><div class="agent-head">${badge(item.id, { title: item.label })}<span class="t"><b>${escape(item.label)}</b><small><span class="dot ${escape(status.tone)}"></span> ${escape(status.text)}</small>${permission}${compatibilityLine(item)}</span><span class="agent-tools">${check}<button type="button" class="info" data-tip="${escape(`${item.description} ${capabilities(item)}`)}" aria-label="About ${escape(item.label)}" title="${escape(`${item.description}\n${capabilities(item)}`)}">ⓘ</button><button type="button" class="mini" data-agent-move="${escape(item.id)}" data-direction="-1" ${index === 0 ? 'disabled' : ''} aria-label="Move ${escape(item.label)} up">▲</button><button type="button" class="mini" data-agent-move="${escape(item.id)}" data-direction="1" ${index === arranged.length - 1 ? 'disabled' : ''} aria-label="Move ${escape(item.label)} down">▼</button><label class="show"><input type="checkbox" data-agent-show="${escape(item.id)}" ${entry.hidden ? '' : 'checked'}> Show</label></span></div>${fields ? `<div class="fields">${fields}</div>` : ''}</div>`;
     }).join('');
     return `<form id="agents-form"><p class="help">Shown agents appear in the header and the conversation picker, in this order. Hidden agents are not checked.</p>${rows}<p class="error" id="agents-error" role="alert"></p><div class="actions"><button type="submit" class="primary">Save</button></div></form>`;
   }
@@ -733,7 +737,7 @@
     if (name === 'copy-diagnostics') { void perform(() => api.copyDiagnostics(), { success: () => toast('Diagnostics copied. Paste them into your bug report.') }); return; }
     if (name === 'recheck-compatibility') { void perform(() => api.checkCompatibility(data.harness), { success: async (list) => { state.compatibility = Array.isArray(list) ? list : []; await refreshJobs(false); const item = state.compatibility.find((entry) => entry.harness === data.harness); toast(item?.ok ? `${item.label} looks supported again.` : `${item?.label || harnessLabel(data.harness)} still needs an update of Agent Auto-Continue.`); } }); return; }
     if (name === 'open-permission-settings') { void perform(() => api.openPermissionSettings()); return; }
-    if (name === 'check') { const harness = data.harness || draft().harness; void perform(() => api.checkConnection(harness), { success: async (result) => { if (result.online) toast(`Connected to ${harnessLabel(harness)}.`); else { const error = result.errorInfo || (typeof result.error === 'object' ? result.error : { message: result.error }); state.sources[harness] = { ...(state.sources[harness] || { threads: [] }), online: false, error }; toast(`${harnessLabel(harness)}: ${error?.message || 'not reachable'}`); } await refreshSources(false, [harness]); } }); return; }
+    if (name === 'check') { const harness = data.harness || draft().harness; void perform(() => api.checkConnection(harness), { success: async (result) => { state.permissions[harness] = null; if (result.online) toast(`Connected to ${harnessLabel(harness)}.`); else { const error = result.errorInfo || (typeof result.error === 'object' ? result.error : { message: result.error }); if (error?.code === 'permission_required') state.permissions[harness] = error; state.sources[harness] = { ...(state.sources[harness] || { threads: [] }), online: false, error }; toast(`${harnessLabel(harness)}: ${error?.message || 'not reachable'}`); } await refreshSources(false, [harness]); } }); return; }
     if (name === 'check-availability') { void refreshAvailability(draft().harness, true); return; }
     if (name === 'refresh') { void refreshJobs(); void refreshSources(); return; }
     if (name === 'stop-all') { void perform(() => api.stopAllContinuations(), { success: async (result) => { await refreshJobs(false); toast(`Stopped ${result.stopped.length} ${result.stopped.length === 1 ? 'continuation' : 'continuations'}. Nothing more will be sent.`); } }); return; }

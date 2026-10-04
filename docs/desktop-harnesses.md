@@ -22,7 +22,9 @@ Everything else, including discovery, activity, delivery evidence, completion an
 - The Mac must be unlocked, with this user on the console.
 - Keep-awake cannot help with a locked screen: desktop-app schedules need the Mac left unlocked, and the display may sleep only if sleeping does not lock it.
 - Agent Auto-Continue needs Accessibility permission in System Settings > Privacy & Security > Accessibility.
-- A missing permission fails with error code `permission_required`, whose `details.settingsUrl` opens that pane; the dashboard shows an Open System Settings button for it.
+- A missing permission fails with error code `permission_required`, whose `details.settingsUrl` opens that pane.
+- Conversations still load without the permission, so it usually shows first as a failed message, and that message's details offer an Open System Settings button.
+- A Check under Settings > Agents that finds the permission missing marks the agent "Needs Accessibility permission", with the same button, until a later Check passes.
 - The app never shows the system permission prompt by itself, so an unattended schedule never pops a dialog.
 - macOS attributes the permission to the app that starts the automation, so the packaged app needs the grant; during development with `npm start`, the terminal running Electron needs it instead.
 - No Automation (Apple Events) permission is needed, because the harnesses call the Accessibility API directly and never script System Events or the target apps.
