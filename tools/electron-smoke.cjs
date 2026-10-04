@@ -224,7 +224,6 @@ async function click(js, selector, { optional = false } = {}) {
   await js(`document.querySelector(${JSON.stringify(selector)}).click()`);
 }
 const fill = (js, selector, value) => js(`(() => { const input=document.querySelector(${JSON.stringify(selector)}); input.value=${JSON.stringify(value)}; input.dispatchEvent(new Event('input',{bubbles:true})); })()`);
-const choose = (js, selector, value) => js(`(() => { const select=document.querySelector(${JSON.stringify(selector)}); select.value=${JSON.stringify(value)}; select.dispatchEvent(new Event('change',{bubbles:true})); })()`);
 const view = (js, name) => waitFor(() => js(`document.body.classList.contains(${JSON.stringify('view-' + name)})`), `view ${name}`);
 // Opens Settings, makes sure a section is open, and leaves the view where the caller wants it.
 async function openSection(js, section) {
@@ -241,7 +240,7 @@ async function goHome(js) {
 async function setTheme(js, value) {
   const wasHome = await js(`document.body.classList.contains('view-home')`);
   await openSection(js, 'appearance');
-  await choose(js, '#theme', value);
+  await click(js, `[data-theme="${value}"]`);
   await waitFor(() => js(`document.body.classList.contains('dark') === ${JSON.stringify(value === 'dark')}`), `${value} theme`);
   if (wasHome) await goHome(js);
 }
@@ -358,8 +357,13 @@ async function rendererJourney(js, reducedMotion) {
   await js(`document.querySelector('#advanced-form').requestSubmit()`);
   await waitFor(() => js(`window.autoContinue.getSettings().then(settings=>settings.bufferSeconds===12)`), 'settings saved');
   await waitFor(() => js(`!document.querySelector('#buffer').disabled`), 'settings operation finished');
-  await choose(js, '#theme', 'dark');
+  assert.equal(await js(`document.body.classList.contains('dark')`), false, 'Day is the default appearance');
+  await click(js, '[data-theme="dark"]');
   assert.equal(await js(`document.body.classList.contains('dark')`), true);
+  assert.equal(await js(`document.querySelector('.themes').textContent.trim()`), '', 'The appearance switch is pictures only');
+  await fill(js, '#painting', '45');
+  assert.equal(await js(`getComputedStyle(document.documentElement).getPropertyValue('--art').trim()`), '0.45', 'The painting slider sets how strongly the painting shows');
+  await fill(js, '#painting', '30');
   assert.equal(await js(`Boolean(document.querySelector('.star svg'))`), true);
   await capture('settings-bone-outline');
   await js(`document.querySelector('.support').scrollIntoView({block:'center'})`);
@@ -404,6 +408,9 @@ async function supportStarJourney(js, reducedMotion) {
   for (const [text, result] of Object.entries(fit)) assert.ok(result.worst < 0.355 && result.size >= 10 && !result.rotated, `${text}: ${JSON.stringify(result)}`);
   // A click bursts and eases back without the angle ever jumping or reversing, even across a re-render.
   await openSection(js, 'appearance');
+  // The theme change just before this repaints the whole painted window, which takes a few seconds on a runner
+  // with no GPU. Let frames flow again first: this judges the animation's continuity, not that one repaint.
+  await waitFor(() => js(`new Promise(resolve => requestAnimationFrame(first => requestAnimationFrame(() => requestAnimationFrame(third => resolve(third - first < 150)))))`), 'frames flowing after the theme change');
   const motion = await js(`new Promise(resolve => {
     const angle = () => parseFloat(document.querySelector('#support-star polygon').style.transform.slice(7));
     const samples = [], start = performance.now(), before = document.querySelector('#star-phrase').textContent;

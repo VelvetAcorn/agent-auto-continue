@@ -17,3 +17,14 @@ Render `contact-sheet.html` in a browser to compare the concepts side by side.
 
 The `-tray.svg` files are 18px monochrome drafts intended as macOS template images.
 The wordmarks use Fraunces when installed and fall back to Georgia.
+
+## Round 3 and round 4: the painted crescent
+
+Round 3 (`round3/`) tried seven play marks on a crescent cut from a real painting.
+Option A, a gold-leaf play head on a rounded square of night sky with a thin gilt rim, was chosen.
+Its moon came from an auction house photograph that cannot be published, so its outputs are not committed.
+
+Round 4 (`round4/`) rebuilds option A on the crescent from Albrecht Altdorfer's *The Battle of Alexander at Issus* (1529), a public domain scan.
+Its `icon-1024.png` is the master copied to `assets/icon.png`.
+Regenerate it with `python design/logo-ideas/round4/generate.py` (Pillow, numpy, scipy and scikit-image) after placing the scan in `design/sources/`, then run `npm run icons`.
+See [the design document](../../docs/design.md) for how the logo is used.

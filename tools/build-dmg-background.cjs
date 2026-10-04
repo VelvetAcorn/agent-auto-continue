@@ -17,13 +17,13 @@ const { app, BrowserWindow } = require('electron');
 const WIDTH = 640;
 const HEIGHT = 400;
 const out = path.resolve(__dirname, '..', 'build');
-// Paper / Focus tokens from styles.css.
-const INK = '#34303A';
-const MUTED = '#6C6773';
-const PAPER = '#ECE8E1';
-const RAISED = '#F1EEE7';
-const ACCENT = '#796B98';
-const SELECTED = '#CFC4E2';
+// Day tokens from styles.css: plaster ground, umber ink and gilt.
+const INK = '#2C2118';
+const MUTED = '#5F5142';
+const PAPER = '#EFE7D6';
+const RAISED = '#FBF6EA';
+const ACCENT = '#8A6A2A';
+const SELECTED = '#C9A652';
 
 // A gentle arc from the app icon towards the drop slot, ending in an open arrowhead along its tangent.
 function arrow({ from, control1, control2, to, head = 17, spread = 30 }) {
@@ -38,7 +38,7 @@ function svg() {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${WIDTH}" height="${HEIGHT}" viewBox="0 0 ${WIDTH} ${HEIGHT}">
   <rect width="${WIDTH}" height="${HEIGHT}" fill="${PAPER}"/>
   <text x="320" y="74" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-weight="700" font-size="25" letter-spacing="-0.4" fill="${INK}">Drag into Applications</text>
-  <text x="320" y="100" text-anchor="middle" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="13" fill="${MUTED}">Then open it from there. It keeps itself up to date.</text>
+  <text x="320" y="100" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-style="italic" font-size="14" fill="${MUTED}">Then open it from there. It keeps itself up to date.</text>
   <rect x="394" y="130" width="152" height="170" rx="24" fill="${RAISED}" stroke="${ACCENT}" stroke-width="2.5" stroke-dasharray="9 7"/>
   <path d="${stroke}" transform="translate(3.5 3.5)" fill="none" stroke="${SELECTED}" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
   <path d="${stroke}" fill="none" stroke="${INK}" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>

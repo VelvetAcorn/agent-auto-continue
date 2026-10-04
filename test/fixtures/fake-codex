@@ -10,7 +10,8 @@ const statePath = process.env.FAKE_CODEX_STATE;
 const mode = process.env.FAKE_CODEX_MODE || 'complete';
 const proxy = process.argv[3] === 'proxy';
 const load = () => JSON.parse(fs.readFileSync(statePath, 'utf8'));
-const save = (state) => fs.writeFileSync(statePath, JSON.stringify(state));
+// Written to a sibling file and renamed, so a second fake started mid-write never reads half a file.
+const save = (state) => { const partial = `${statePath}.${process.pid}.tmp`; fs.writeFileSync(partial, JSON.stringify(state)); fs.renameSync(partial, statePath); };
 const log = (entry) => { if (process.env.FAKE_CODEX_LOG) fs.appendFileSync(process.env.FAKE_CODEX_LOG, `${JSON.stringify(entry)}\n`); };
 if (process.argv[2] !== 'app-server') { process.stderr.write('unsupported command\n'); process.exit(2); }
 log({ start: true, proxy, cwd: process.cwd(), env: Object.keys(process.env), pid: process.pid });
