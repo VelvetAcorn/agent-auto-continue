@@ -123,7 +123,8 @@ Fallbacks are Georgia and Times New Roman.
 - **The frame** is a single gilt hairline inset 4 px from the edge of the content, with a rocaille corner at each of its four corners (`#o-corner` in `renderer/icons.js`).
 - **The rule** between the compose block and the queue is two hairlines fading outward from a small diamond between two scrolls (`#o-rule`).
 - **Rows** in the queue and settings have no fill; they sit on the painting, separated by hairlines, and take the veil on hover.
-- **The header** is the ground colour at about 93% with a blur behind it and a gilt line beneath.
+- **The header** is the ground colour, almost opaque, with a gilt line beneath.
+- **No blend modes or backdrop blur.** Both make the whole window repaint on every animation frame, which is slow on machines without a GPU.
 
 Do not add drop shadows with blur, glows, gradients other than gilt, or rounded pill buttons.
 Do not put ornament inside controls.

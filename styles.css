@@ -9,7 +9,7 @@
 @font-face{font-family:Cinzel;src:url(assets/fonts/Cinzel.woff2) format('woff2');font-weight:400 900;font-style:normal;font-display:block}
 :root{color-scheme:light;--art:.3;--art-gain:1;--art-size:cover;--art-x:23%;--art-y:0%;
   --bg:#EFE7D6;--surface:#FBF6EA;--raised:#F1E8D3;--line:rgba(110,78,30,.3);--ink:#2C2118;--muted:#5F5142;--accent:#27466E;--selected:#BCD0DE;--green:#44664C;--amber:#96481A;--red:#A4371C;--outline:#8A6A2A;--shadow:#4A3523;
-  --gilt-a:#C9A652;--gilt-b:#8A6A2A;--gilt-c:#6A4C1C;--head:rgba(239,231,214,.93);--veil:rgba(239,231,214,.5);--weave:.26;--weave-blend:multiply;--painting:url(assets/art/day.webp);
+  --gilt-a:#C9A652;--gilt-b:#8A6A2A;--gilt-c:#6A4C1C;--head:rgba(239,231,214,.97);--veil:rgba(239,231,214,.5);--weave:.26;--painting:url(assets/art/day.webp);
   --gilt:linear-gradient(135deg,var(--gilt-a) 0%,var(--gilt-b) 30%,var(--gilt-c) 52%,var(--gilt-a) 76%,var(--gilt-c) 100%);
   font-family:'EB Garamond',Georgia,'Times New Roman',serif;font-size:14px}
 *{box-sizing:border-box}
@@ -17,13 +17,14 @@
 .sprite{position:absolute;width:0;height:0;overflow:hidden}
 html,body{margin:0}
 body{background:var(--bg);color:var(--ink)}
-/* The painting, then a warm vignette, lie behind everything; the canvas weave lies over everything. */
+/* The painting lies behind everything and the canvas weave over everything. The weave is plain alpha, with no
+   blend mode, and the header has no backdrop blur: both forced a full repaint on every animation frame. */
 body:before{content:'';position:fixed;inset:0;z-index:-2;pointer-events:none;opacity:min(1,calc(var(--art)*var(--art-gain)));background:var(--painting) var(--art-x) var(--art-y)/var(--art-size) no-repeat}
-body:after{content:'';position:fixed;inset:0;z-index:30;pointer-events:none;opacity:var(--weave);mix-blend-mode:var(--weave-blend);background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='a'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9 .05' numOctaves='2' seed='3'/%3E%3CfeColorMatrix values='0 0 0 0 .35 0 0 0 0 .25 0 0 0 0 .15 0 0 0 .5 -.12'/%3E%3C/filter%3E%3Cfilter id='b'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.05 .9' numOctaves='2' seed='9'/%3E%3CfeColorMatrix values='0 0 0 0 .35 0 0 0 0 .25 0 0 0 0 .15 0 0 0 .5 -.12'/%3E%3C/filter%3E%3Crect width='240' height='240' filter='url(%23a)'/%3E%3Crect width='240' height='240' filter='url(%23b)'/%3E%3C/svg%3E")}
+body:after{content:'';position:fixed;inset:0;z-index:30;pointer-events:none;opacity:var(--weave);background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='a'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9 .05' numOctaves='2' seed='3'/%3E%3CfeColorMatrix values='0 0 0 0 .35 0 0 0 0 .25 0 0 0 0 .15 0 0 0 .5 -.12'/%3E%3C/filter%3E%3Cfilter id='b'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.05 .9' numOctaves='2' seed='9'/%3E%3CfeColorMatrix values='0 0 0 0 .35 0 0 0 0 .25 0 0 0 0 .15 0 0 0 .5 -.12'/%3E%3C/filter%3E%3Crect width='240' height='240' filter='url(%23a)'/%3E%3Crect width='240' height='240' filter='url(%23b)'/%3E%3C/svg%3E")}
 #app{position:relative;isolation:isolate}
 body.dark{color-scheme:dark;--art-x:34%;--art-gain:1.7;
   --bg:#141312;--surface:#24201D;--raised:#302A25;--line:rgba(214,180,112,.22);--ink:#F0E7D3;--muted:#C2B59D;--accent:#DDBD78;--selected:#27405F;--green:#8FB394;--amber:#E39A5C;--red:#DE876C;--outline:#B08A3C;--shadow:#070403;
-  --gilt-a:#F3DFA0;--gilt-b:#B08A3C;--gilt-c:#7D5D24;--head:rgba(20,19,18,.92);--veil:rgba(20,19,18,.42);--weave:.7;--weave-blend:soft-light;--painting:url(assets/art/night.webp)}
+  --gilt-a:#F3DFA0;--gilt-b:#B08A3C;--gilt-c:#7D5D24;--head:rgba(20,19,18,.96);--veil:rgba(20,19,18,.42);--weave:.3;--painting:url(assets/art/night.webp)}
 body.layout-rail{overflow-x:hidden;-webkit-app-region:no-drag}
 body.layout-window{--art-x:50%;--art-y:12%}
 /* Wider than the window by day, so the eclipse clears the compose column and sits over the queue. */
@@ -89,7 +90,7 @@ details[open]>summary::marker{content:'\25BC\00A0\00A0';}
 .pick .badge.round,.agent>.badge.round,.detail-header .badge.round{border-radius:50%}
 
 /* ---------- Header ---------- */
-.head{display:flex;align-items:center;justify-content:space-between;gap:10px;height:47px;padding:0 12px 0 13px;border-bottom:1px solid;border-image:var(--gilt) 1;background:var(--head);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);position:sticky;top:0;z-index:4}
+.head{display:flex;align-items:center;justify-content:space-between;gap:10px;height:47px;padding:0 12px 0 13px;border-bottom:1px solid;border-image:var(--gilt) 1;background:var(--head);position:sticky;top:0;z-index:4}
 body.layout-rail .head{-webkit-app-region:drag}
 body.layout-rail .head button,body.layout-rail .head .agents{-webkit-app-region:no-drag}
 .head .brand{font-family:'Cormorant Garamond',Georgia,serif;font-style:italic;font-weight:700;font-size:19px;letter-spacing:.1px;white-space:nowrap;display:flex;align-items:center;gap:7px}
