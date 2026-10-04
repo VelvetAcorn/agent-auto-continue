@@ -17,10 +17,11 @@
 .sprite{position:absolute;width:0;height:0;overflow:hidden}
 html,body{margin:0}
 body{background:var(--bg);color:var(--ink)}
-/* The painting lies behind everything and the canvas weave over everything. The weave is plain alpha, with no
-   blend mode, and the header has no backdrop blur: both forced a full repaint on every animation frame. */
-body:before{content:'';position:fixed;inset:0;z-index:-2;pointer-events:none;opacity:min(1,calc(var(--art)*var(--art-gain)));background:var(--painting) var(--art-x) var(--art-y)/var(--art-size) no-repeat}
-body:after{content:'';position:fixed;inset:0;z-index:30;pointer-events:none;opacity:var(--weave);background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='a'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9 .05' numOctaves='2' seed='3'/%3E%3CfeColorMatrix values='0 0 0 0 .35 0 0 0 0 .25 0 0 0 0 .15 0 0 0 .5 -.12'/%3E%3C/filter%3E%3Cfilter id='b'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.05 .9' numOctaves='2' seed='9'/%3E%3CfeColorMatrix values='0 0 0 0 .35 0 0 0 0 .25 0 0 0 0 .15 0 0 0 .5 -.12'/%3E%3C/filter%3E%3Crect width='240' height='240' filter='url(%23a)'/%3E%3Crect width='240' height='240' filter='url(%23b)'/%3E%3C/svg%3E")}
+/* The painting lies behind everything and the canvas weave over everything, each on its own compositor layer so
+   neither is redrawn when something animates. The weave is a pre-rendered tile with plain alpha: a live SVG noise
+   filter, a blend mode or a backdrop blur each forced a full repaint on every animation frame. */
+body:before{content:'';position:fixed;inset:0;z-index:-2;pointer-events:none;opacity:min(1,calc(var(--art)*var(--art-gain)));background:var(--painting) var(--art-x) var(--art-y)/var(--art-size) no-repeat;will-change:transform}
+body:after{content:'';position:fixed;inset:0;z-index:30;pointer-events:none;opacity:var(--weave);background:url(assets/art/weave.webp) 0 0/240px 240px;will-change:transform}
 #app{position:relative;isolation:isolate}
 body.dark{color-scheme:dark;--art-x:34%;--art-gain:1.7;
   --bg:#141312;--surface:#24201D;--raised:#302A25;--line:rgba(214,180,112,.22);--ink:#F0E7D3;--muted:#C2B59D;--accent:#DDBD78;--selected:#27405F;--green:#8FB394;--amber:#E39A5C;--red:#DE876C;--outline:#B08A3C;--shadow:#070403;
@@ -134,7 +135,7 @@ body.layout-window.view-home .rule{display:none}
 #notices{padding:0}
 #notices:empty{display:none}
 body.layout-window .main{max-width:1040px;margin:0 auto}
-body.layout-window.view-home .main{display:grid;grid-template-columns:360px 1fr;min-height:calc(100vh - 47px)}
+body.layout-window.view-home .main{display:grid;grid-template-columns:360px minmax(0,1fr);min-height:calc(100vh - 47px)}
 body.layout-window.view-home #notices{grid-column:1 / -1}
 body.layout-window.view-home .compose{border-right:1px solid;border-image:var(--gilt) 1;background:var(--veil)}
 body.layout-window.view-home .queue{border-top:0}

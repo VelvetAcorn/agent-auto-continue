@@ -2,6 +2,7 @@
 // Regenerates the committed icon assets from their sources:
 //   assets/icon.png         -> assets/icon.icns (16px to 1024px, including @2x sizes) and assets/logo.webp (the header mark)
 //                              The 1024px master is the painted crescent built by design/logo-ideas/round4/generate.py.
+//   (drawn below)           -> assets/art/weave.webp, the linen weave tile laid over the window
 //   assets/trayTemplate.svg -> assets/trayTemplate.png (18px) and assets/trayTemplate@2x.png (36px)
 //   assets/trayAwakeTemplate.svg -> assets/trayAwakeTemplate.png (18px) and @2x (36px), shown while keep-awake holds
 // Run with `npm run icons` on macOS. The sources are rasterised by Electron's offscreen
@@ -21,21 +22,32 @@ const TRAY_GLYPHS = ['trayTemplate', 'trayAwakeTemplate'];
 
 // The header shows the mark at 22pt; 88px covers Retina with room to spare.
 const LOGO_PIXELS = 88;
+// The linen weave laid over the whole window: two crossed bands of stretched noise, rendered once to a tile.
+const WEAVE_PIXELS = 480;
+const WEAVE_MATRIX = '0 0 0 0 .35 0 0 0 0 .25 0 0 0 0 .15 0 0 0 .5 -.12';
+const WEAVE_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="240" height="240">
+  <filter id="warp"><feTurbulence type="fractalNoise" baseFrequency=".9 .05" numOctaves="2" seed="3" stitchTiles="stitch"/><feColorMatrix values="${WEAVE_MATRIX}"/></filter>
+  <filter id="weft"><feTurbulence type="fractalNoise" baseFrequency=".05 .9" numOctaves="2" seed="9" stitchTiles="stitch"/><feColorMatrix values="${WEAVE_MATRIX}"/></filter>
+  <rect width="240" height="240" filter="url(#warp)"/><rect width="240" height="240" filter="url(#weft)"/>
+</svg>`;
 
+// `sourceFile` names a file in assets/, or is SVG markup itself.
 async function rasterise(window, sourceFile, pixels, type = 'image/png', quality) {
-  const source = fs.readFileSync(path.join(assets, sourceFile));
-  const url = `data:${sourceFile.endsWith('.svg') ? 'image/svg+xml' : 'image/png'};base64,${source.toString('base64')}`;
+  const inline = sourceFile.startsWith('<svg');
+  const source = inline ? Buffer.from(sourceFile) : fs.readFileSync(path.join(assets, sourceFile));
+  const vector = inline || sourceFile.endsWith('.svg');
+  const url = `data:${vector ? 'image/svg+xml' : 'image/png'};base64,${source.toString('base64')}`;
   const dataUrl = await window.webContents.executeJavaScript(`new Promise((resolve, reject) => {
     const image = new Image();
     image.onload = () => {
       const canvas = document.createElement('canvas');
       canvas.width = canvas.height = ${pixels};
       const context = canvas.getContext('2d');
-      if (${JSON.stringify(!sourceFile.endsWith('.svg'))}) context.imageSmoothingQuality = 'high';
+      if (${JSON.stringify(!vector)}) context.imageSmoothingQuality = 'high';
       context.drawImage(image, 0, 0, ${pixels}, ${pixels});
       resolve(canvas.toDataURL(${JSON.stringify(type)}, ${JSON.stringify(quality)}));
     };
-    image.onerror = () => reject(new Error('Could not decode ${sourceFile}'));
+    image.onerror = () => reject(new Error(${JSON.stringify(`Could not decode ${inline ? 'the inline SVG' : sourceFile}`)}));
     image.src = ${JSON.stringify(url)};
   })`);
   return Buffer.from(dataUrl.slice(dataUrl.indexOf(',') + 1), 'base64');
@@ -61,6 +73,8 @@ async function run() {
   }
 
   fs.writeFileSync(path.join(assets, 'logo.webp'), await rasterise(window, 'icon.png', LOGO_PIXELS, 'image/webp', 0.92));
+
+  fs.writeFileSync(path.join(assets, 'art', 'weave.webp'), await rasterise(window, WEAVE_SVG, WEAVE_PIXELS, 'image/webp', 0.9));
 
   for (const glyph of TRAY_GLYPHS) {
     fs.writeFileSync(path.join(assets, `${glyph}.png`), await rasterise(window, `${glyph}.svg`, TRAY_POINT_SIZE));

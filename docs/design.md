@@ -64,7 +64,7 @@ Good open sources are the Getty, the National Gallery of Art in Washington, the 
 - Its strength is the `--art` variable, 30% by default.
 - The user can set it from 0% to 60% in Settings, Appearance. Above 60% text over the painting stops being readable.
 - Night multiplies the strength by 1.7 (`--art-gain`), because the night painting is itself dark.
-- A linen weave lies over everything, controls included, and a soft vignette lies under the controls.
+- A linen weave lies over everything, controls included. It is a pre-rendered tile, `assets/art/weave.webp`, built by `npm run icons`.
 - Position is set per layout with `--art-x`, `--art-y` and `--art-size`, so the moon or the eclipse lands in open space rather than under a control.
 
 On the website the painting can be shown at full strength where there is no text over it, such as a hero image.
