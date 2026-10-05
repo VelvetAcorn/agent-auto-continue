@@ -25,6 +25,7 @@ Option A, a gold-leaf play head on a rounded square of night sky with a thin gil
 Its moon came from an auction house photograph that cannot be published, so its outputs are not committed.
 
 Round 4 (`round4/`) rebuilds option A on the crescent from Albrecht Altdorfer's *The Battle of Alexander at Issus* (1529), a public domain scan.
+Its sky and moon are regraded to green by default (`--tone blue` keeps Altdorfer's own colour); the gilt rim and play head are unchanged.
 Its `icon-1024.png` is the master copied to `assets/icon.png`.
 Regenerate it with `python design/logo-ideas/round4/generate.py` (Pillow, numpy, scipy and scikit-image) after placing the scan in `design/sources/`, then run `npm run icons`.
 See [the design document](../../docs/design.md) for how the logo is used.

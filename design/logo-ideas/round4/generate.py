@@ -145,11 +145,31 @@ def join_overlay(src, center, radius, target_dir=180.0):
     return 1 - ndi.map_coordinates(src.valid, [qy, qx], order=1, mode='constant', cval=0)
 
 
-def build(src, outdir, texture_amount):
+# Altdorfer's sky is Prussian blue. 'green' regrades the painted moon and sky to the deep green of the chosen
+# round 3 design by mapping each pixel's lightness onto a green ramp, so the brushwork and grain are kept and only
+# the hue moves. The gilt rim and play head are laid on afterwards and are not affected.
+GREEN_RAMP = np.array([
+    # lightness, then the colour it becomes
+    [0.00, 0.020, 0.060, 0.050],
+    [0.12, 0.050, 0.140, 0.118],
+    [0.26, 0.105, 0.235, 0.195],
+    [0.38, 0.430, 0.560, 0.450],
+    [0.50, 0.760, 0.830, 0.690],
+    [0.62, 0.880, 0.920, 0.800],
+    [1.00, 0.960, 0.975, 0.900],
+])
+
+
+def green(rgb):
+    luma = rgb[..., 0] * 0.2126 + rgb[..., 1] * 0.7152 + rgb[..., 2] * 0.0722
+    return np.stack([np.interp(luma, GREEN_RAMP[:, 0], GREEN_RAMP[:, i]) for i in (1, 2, 3)], axis=-1)
+
+
+def build(src, outdir, texture_amount, tone=green):
     tex = r3.Texture()
 
     def plate(cx, cy, r):
-        return tex.apply(src.plate((cx, cy), r), (cx, cy, r), texture_amount)
+        return tone(tex.apply(src.plate((cx, cy), r), (cx, cy, r), texture_amount))
 
     # moon.png: geometry of assets/icon.svg (outer circle centre 130,128 r 100 of 256), as round 3
     MC, MR = (520.0, 512.0), 400.0
@@ -234,10 +254,12 @@ def main():
     ap.add_argument('--texture', type=float, default=0.75,
                     help='strength of round 3 paint texture (1 = round 3; the scan has real grain of its own)')
     ap.add_argument('--out', default=HERE)
+    ap.add_argument('--tone', choices=('green', 'blue'), default='green',
+                    help="'green' regrades the sky and moon (the shipped icon); 'blue' keeps Altdorfer's own colour")
     ap.add_argument('--debug', action='store_true', help='also write the extended sky and join map')
     args = ap.parse_args()
     src = ExtendedSource(args.source, MOON_CX, MOON_CY, MOON_R, MOON_LIMB)
-    frac, syn = build(src, args.out, args.texture)
+    frac, syn = build(src, args.out, args.texture, tone=green if args.tone == 'green' else (lambda rgb: rgb))
     if args.debug:
         src.raw_extended.save(os.path.join(args.out, 'debug-extended-sky.png'))
         Image.fromarray((syn * 255).astype(np.uint8)).save(os.path.join(args.out, 'debug-join.png'))
