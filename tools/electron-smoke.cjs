@@ -363,7 +363,7 @@ async function rendererJourney(js, reducedMotion) {
   assert.equal(await js(`document.querySelector('.themes').textContent.trim()`), '', 'The appearance switch is pictures only');
   await fill(js, '#painting', '45');
   assert.equal(await js(`getComputedStyle(document.documentElement).getPropertyValue('--art').trim()`), '0.45', 'The painting slider sets how strongly the painting shows');
-  await fill(js, '#painting', '30');
+  await fill(js, '#painting', '15');
   assert.equal(await js(`Boolean(document.querySelector('.star svg'))`), true);
   await capture('settings-bone-outline');
   await js(`document.querySelector('.support').scrollIntoView({block:'center'})`);

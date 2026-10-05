@@ -165,7 +165,7 @@ def green(rgb):
     return np.stack([np.interp(luma, GREEN_RAMP[:, 0], GREEN_RAMP[:, i]) for i in (1, 2, 3)], axis=-1)
 
 
-def build(src, outdir, texture_amount, tone=green):
+def build(src, outdir, texture_amount, tone=green, rim=False):
     tex = r3.Texture()
 
     def plate(cx, cy, r):
@@ -180,15 +180,19 @@ def build(src, outdir, texture_amount, tone=green):
     m = (512.0, 512.0, 330.0)
     rgb = plate(*m)
     a = r3.cover(squircle)
-    rgb = rgb * r3.sight_shadow(squircle + 22)[..., None]
-    rc, ra = r3.gilt_moulding(squircle, 22, seed=2)
-    rgb, a = r3.over(rgb, a, rc, ra)
+    if rim:
+        rgb = rgb * r3.sight_shadow(squircle + 22)[..., None]
+        rc, ra = r3.gilt_moulding(squircle, 22, seed=2)
+        rgb, a = r3.over(rgb, a, rc, ra)
+    else:
+        # No frame: the sky runs to the edge, darkening a little towards it as round 3's full-bleed tiles did.
+        rgb = rgb * r3.sight_shadow(squircle, depth=0.35, blur=26, off=0)[..., None]
     rgb, a = r3.put_mark(rgb, a, r3.mark_gilt_leaf(r3.play_triangle(*m)), (7, 9, 0.6))
     r3.compose('icon-1024', *r3.finish(rgb, a), outdir)
 
     # how much of the visible sky is synthesised (inside the rim's sight edge)
     syn = join_overlay(src, m[:2], m[2])
-    sight = r3.cover(squircle + 22)
+    sight = r3.cover(squircle + (22 if rim else 0))
     frac = float((syn * sight).sum() / sight.sum())
     return frac, syn
 
@@ -254,12 +258,13 @@ def main():
     ap.add_argument('--texture', type=float, default=0.75,
                     help='strength of round 3 paint texture (1 = round 3; the scan has real grain of its own)')
     ap.add_argument('--out', default=HERE)
+    ap.add_argument('--rim', action='store_true', help='add the thin gilt rim of the first version; the shipped icon has none')
     ap.add_argument('--tone', choices=('green', 'blue'), default='green',
                     help="'green' regrades the sky and moon (the shipped icon); 'blue' keeps Altdorfer's own colour")
     ap.add_argument('--debug', action='store_true', help='also write the extended sky and join map')
     args = ap.parse_args()
     src = ExtendedSource(args.source, MOON_CX, MOON_CY, MOON_R, MOON_LIMB)
-    frac, syn = build(src, args.out, args.texture, tone=green if args.tone == 'green' else (lambda rgb: rgb))
+    frac, syn = build(src, args.out, args.texture, tone=green if args.tone == 'green' else (lambda rgb: rgb), rim=args.rim)
     if args.debug:
         src.raw_extended.save(os.path.join(args.out, 'debug-extended-sky.png'))
         Image.fromarray((syn * 255).astype(np.uint8)).save(os.path.join(args.out, 'debug-join.png'))

@@ -17,8 +17,7 @@
   function preference(key, fallback) { try { return localStorage.getItem(key) || fallback; } catch { return fallback; } }
   // How strongly the painting shows behind the controls, in percent. Above the cap, text over it stops being readable.
   const PAINTING_MAX = 60;
-  function paintingStrength(value) { const number = Number(value); return Number.isFinite(number) ? Math.min(PAINTING_MAX, Math.max(0, Math.round(number))) : 30; }
-  const CORNERS = ['tl', 'tr', 'bl', 'br'].map((corner) => `<svg class="corner ${corner}" aria-hidden="true"><use href="#o-corner"/></svg>`).join('');
+  function paintingStrength(value) { const number = Number(value); return Number.isFinite(number) ? Math.min(PAINTING_MAX, Math.max(0, Math.round(number))) : 15; }
   const RULE = '<div class="rule" aria-hidden="true"><i></i><svg><use href="#o-rule"/></svg><i></i></div>';
   const THEMES = [['light', 'Day', 'i-sun'], ['dark', 'Night', 'i-moon'], ['system', 'Follow system', 'i-auto']];
   const RECENT_ROWS = 5;
@@ -32,7 +31,7 @@
     draft: null, messageOpen: false, showSettled: false, pickerQuery: '',
     selected: null, selectedJob: null, confirmCancel: false, confirmMark: false,
     sections: new Set(['agents']), settingsDraft: null, harnessDraft: null, keepAwakeDraft: null, tipOpen: false,
-    theme: preference('scheduler-theme', 'light'), painting: paintingStrength(preference('scheduler-painting', '30')), reduceMotion: preference('scheduler-motion', 'system') === 'reduce',
+    theme: preference('scheduler-theme', 'light'), painting: paintingStrength(preference('scheduler-painting', '15')), reduceMotion: preference('scheduler-motion', 'system') === 'reduce',
     loading: true, busy: false, actionError: '', jobsError: ''
   };
   let jobRequest = 0, timer, toastTimer, lastRefresh = 0, stopped = false, failuresKnown = false, lastHeight = 0;
@@ -505,7 +504,7 @@
     document.body.className = `${state.theme === 'dark' || (state.theme === 'system' && mediaTheme.matches) ? 'dark' : ''} ${state.reduceMotion ? 'motion-off' : ''} layout-${state.layout} view-${state.view}`;
     const body = state.view === 'picker' ? picker() : state.view === 'settings' ? settings() : state.view === 'detail' ? detail() : state.view === 'history' ? history() : composeBlock() + queue();
     applyPainting();
-    app.innerHTML = `${header()}<main id="main" class="main">${CORNERS}<div id="notices">${state.view === 'home' || state.view === 'detail' ? notices() : ''}</div>${state.actionError ? `<p class="error" role="alert">${escape(state.actionError)}</p>` : ''}${body}</main>`;
+    app.innerHTML = `${header()}<main id="main" class="main"><div id="notices">${state.view === 'home' || state.view === 'detail' ? notices() : ''}</div>${state.actionError ? `<p class="error" role="alert">${escape(state.actionError)}</p>` : ''}${body}</main>`;
     bind();
     if (state.busy) app.querySelectorAll('button, input, textarea, select').forEach((control) => { control.disabled = true; });
     if (focusSelector) $(focusSelector)?.focus();
