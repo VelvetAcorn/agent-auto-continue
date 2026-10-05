@@ -7,13 +7,13 @@
 @font-face{font-family:'Cormorant Garamond';src:url(assets/fonts/CormorantGaramond.woff2) format('woff2');font-weight:300 700;font-style:normal;font-display:block}
 @font-face{font-family:'Cormorant Garamond';src:url(assets/fonts/CormorantGaramond-Italic.woff2) format('woff2');font-weight:300 700;font-style:italic;font-display:block}
 @font-face{font-family:Cinzel;src:url(assets/fonts/Cinzel.woff2) format('woff2');font-weight:400 900;font-style:normal;font-display:block}
-:root{color-scheme:light;--art:.3;--art-gain:1;--art-size:cover;--art-x:23%;--art-y:0%;
+:root{color-scheme:light;--art:.15;--art-gain:1;--art-size:cover;--art-x:23%;--art-y:0%;
   --bg:#EFE7D6;--surface:#FBF6EA;--raised:#F1E8D3;--line:rgba(110,78,30,.3);--ink:#2C2118;--muted:#5F5142;--accent:#27466E;--selected:#BCD0DE;--green:#44664C;--amber:#96481A;--red:#A4371C;--outline:#8A6A2A;--shadow:#4A3523;
   --gilt-a:#C9A652;--gilt-b:#8A6A2A;--gilt-c:#6A4C1C;--head:rgba(239,231,214,.97);--veil:rgba(239,231,214,.5);--weave:.26;--painting:url(assets/art/day.webp);
   --gilt:linear-gradient(135deg,var(--gilt-a) 0%,var(--gilt-b) 30%,var(--gilt-c) 52%,var(--gilt-a) 76%,var(--gilt-c) 100%);
   font-family:'EB Garamond',Georgia,'Times New Roman',serif;font-size:14px}
 *{box-sizing:border-box}
-/* Zero-sized, not display:none: the frame ornament's gradient lives in the sprite and must stay paintable. */
+/* Zero-sized, not display:none: the rule ornament's gradient lives in the sprite and must stay paintable. */
 .sprite{position:absolute;width:0;height:0;overflow:hidden}
 html,body{margin:0}
 body{background:var(--bg);color:var(--ink)}
@@ -119,11 +119,6 @@ body.layout-rail .head button,body.layout-rail .head .agents{-webkit-app-region:
 /* ---------- Layout ---------- */
 .main{position:relative;padding:9px}
 .main:before{content:'';position:absolute;inset:4px;border:1px solid;border-image:var(--gilt) 1;pointer-events:none;opacity:.8}
-.corner{position:absolute;width:34px;height:34px;pointer-events:none;z-index:3}
-.corner.tl{left:0;top:0}
-.corner.tr{right:0;top:0;transform:scaleX(-1)}
-.corner.bl{left:0;bottom:0;transform:scaleY(-1)}
-.corner.br{right:0;bottom:0;transform:scale(-1)}
 .gilt-a{stop-color:var(--gilt-a)}
 .gilt-b{stop-color:var(--gilt-b)}
 .gilt-c{stop-color:var(--gilt-c)}

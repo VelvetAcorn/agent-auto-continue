@@ -16,7 +16,7 @@ Three rules follow from that.
 
 - **Real paint only.** The moon, the sun and the sky are photographs of real 16th and 17th century paintings, never drawings or generated images.
 - **The painting is a backdrop, not a banner.** It lies behind the whole surface at low strength and the controls sit straight on it.
-- **Ornament frames, it does not decorate.** Gilt appears on edges, rules and corners. Nothing is ornamented for its own sake.
+- **Ornament frames, it does not decorate.** Gilt appears on edges and rules. Nothing is ornamented for its own sake.
 
 ## Themes
 
@@ -61,14 +61,14 @@ Good open sources are the Getty, the National Gallery of Art in Washington, the 
 ### How the painting is shown
 
 - It covers the whole surface, fixed in place, and content scrolls over it.
-- Its strength is the `--art` variable, 30% by default.
+- Its strength is the `--art` variable, 15% by default.
 - The user can set it from 0% to 60% in Settings, Appearance. Above 60% text over the painting stops being readable.
 - Night multiplies the strength by 1.7 (`--art-gain`), because the night painting is itself dark.
 - A linen weave lies over everything, controls included. It is a pre-rendered tile, `assets/art/weave.webp`, built by `npm run icons`.
 - Position is set per layout with `--art-x`, `--art-y` and `--art-size`, so the moon or the eclipse lands in open space rather than under a control.
 
 On the website the painting can be shown at full strength where there is no text over it, such as a hero image.
-Wherever text sits on it, keep to the same 30% to 60% range or put the text on a solid ground.
+Wherever text sits on it, keep to the same 15% to 60% range or put the text on a solid ground.
 
 ## Colour
 
@@ -120,7 +120,7 @@ Fallbacks are Georgia and Times New Roman.
 
 - **Controls** keep the Paper / Focus shapes: 9 px corner radius, a 1.5 px rim, and a hard 2 px offset shadow with no blur. Buttons lift one pixel on hover and press flat when clicked.
 - **The rim** is the gilt gradient, drawn as a border around a solid fill.
-- **The frame** is a single gilt hairline inset 4 px from the edge of the content, with a rocaille corner at each of its four corners (`#o-corner` in `renderer/icons.js`).
+- **The frame** is a single gilt hairline inset 4 px from the edge of the content. Its corners are plain; there are no corner ornaments.
 - **The rule** between the compose block and the queue is two hairlines fading outward from a small diamond between two scrolls (`#o-rule`).
 - **Rows** in the queue and settings have no fill; they sit on the painting, separated by hairlines, and take the veil on hover.
 - **The header** is the ground colour, almost opaque, with a gilt line beneath.
@@ -133,10 +133,11 @@ Do not put ornament inside controls.
 
 The logo is a painted crescent moon holding a gold-leaf play head.
 The crescent sits on the left and opens to the right, and the play head sits in its hollow.
-The moon is cut from Altdorfer's 1529 painting; the play head and the thin gilt rim are drawn.
+The moon is cut from Altdorfer's 1529 painting; the play head is drawn.
+The icon has no border: gold appears only in the play head.
 The outer shape is the macOS rounded square filled with the painting's own night sky.
 The moon and sky are regraded from Altdorfer's Prussian blue to a deep green with a pale green-white crescent: each pixel's lightness is mapped onto a green ramp, so the brushwork is kept and only the hue changes.
-The gold of the play head and rim is not regraded.
+The gold of the play head is not regraded.
 
 | File | What it is |
 |---|---|
