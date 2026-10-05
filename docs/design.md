@@ -135,6 +135,8 @@ The logo is a painted crescent moon holding a gold-leaf play head.
 The crescent sits on the left and opens to the right, and the play head sits in its hollow.
 The moon is cut from Altdorfer's 1529 painting; the play head and the thin gilt rim are drawn.
 The outer shape is the macOS rounded square filled with the painting's own night sky.
+The moon and sky are regraded from Altdorfer's Prussian blue to a deep green with a pale green-white crescent: each pixel's lightness is mapped onto a green ramp, so the brushwork is kept and only the hue changes.
+The gold of the play head and rim is not regraded.
 
 | File | What it is |
 |---|---|
@@ -147,7 +149,7 @@ The outer shape is the macOS rounded square filled with the painting's own night
 Rules for using it:
 
 - Keep the crescent on the left. Never mirror or rotate it.
-- Do not recolour the moon or redraw it as a flat shape, except for the one-colour menu bar glyph.
+- Do not recolour the moon beyond the green grade above, or redraw it as a flat shape, except for the one-colour menu bar glyph.
 - Leave clear space around it equal to a quarter of its width.
 - Below 32 px, prefer the one-colour glyph.
 - Beside the name, set the name in Cormorant Garamond bold italic.
