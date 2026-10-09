@@ -27,7 +27,7 @@
     "build:release:local": "sh tools/release-local.sh"
   },
   "dependencies": {
-    "@modelcontextprotocol/server": "^2.2.0",
+    "@modelcontextprotocol/server": "^2.3.1",
     "electron-updater": "^6.8.9",
     "node-schedule": "^2.1.1",
     "qrcode-generator": "^2.0.4",
